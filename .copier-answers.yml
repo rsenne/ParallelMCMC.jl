@@ -1,0 +1,42 @@
+# Changes here will be overwritten by Copier
+AddAllcontributors: true
+AddCitationCFF: true
+AddCodeOfConduct: true
+AddCompatHelperCI: false
+AddContributionDocs: true
+AddCopierCI: false
+AddDependabot: true
+AddDocs: true
+AddDocsCI: true
+AddFormatterAndLinterConfigFiles: true
+AddGitHubPRTemplate: false
+AddGitHubTemplates: false
+AddLintCI: false
+AddLychee: true
+AddMacToCI: false
+AddPrecommit: true
+AddPrecommitUpdateCI: true
+AddTagBotCI: true
+AddTestCI: true
+AddWinToCI: false
+Authors: Ryan Senne <rsenne@bu.edu>
+CheckExplicitImports: true
+CodeOfConductContact: rsenne@bu.edu
+ConfigIndentation: 2
+ExplicitImportsChecklist: exclude_all_qualified_accesses_are_public
+JuliaIndentation: 4
+JuliaMinCIVersion: lts
+JuliaMinVersion: '1.10'
+License: GPL-3.0
+LicenseCopyrightHolders: Ryan Senne
+MarkdownIndentation: 2
+PackageName: ParallelMCMC
+PackageOwner: rsenne
+PackageUUID: 1a970f40-4406-51c9-a967-cb3143c111e8
+RunJuliaNightlyOnCI: false
+StrategyConfirmIncluded: true
+StrategyLevel: 2
+StrategyReviewExcluded: false
+TestingStrategy: basic_auto_discover
+UseCirrusCI: false
+_src_path: C:\Users\senne\.julia\packages\BestieTemplate\53KEa
