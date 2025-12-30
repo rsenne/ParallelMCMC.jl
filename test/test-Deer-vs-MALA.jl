@@ -26,8 +26,16 @@ gradlogp_stdnormal(x) = -x
     @test length(xs_seq) == T + 1
 
     tape = [(ξ = ξs[t], u = us[t]) for t in 1:T]
-    step = (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
-    rec = DEER.TapedRecursion(step, tape)
+    step_fwd = (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
+
+    # Surrogate used ONLY for Jacobians; `a` is passed in as a DI.Constant from consts(...)
+    step_lin = (x, tt, a) -> MALA.mala_step_surrogate(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, a)
+
+    # Compute accept indicator at the linearization point x, and freeze it for AD
+    consts = (x, tt) -> (MALA.mala_accept_indicator(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u),)
+
+    rec = DEER.TapedRecursion(step_fwd, step_lin, tape; consts=consts, const_example=(0.0,))
+
 
     S_deer, info = DEER.solve(
         rec,
@@ -62,8 +70,12 @@ end
     xs_seq = MALA.run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
 
     tape = [(ξ = ξs[t], u = us[t]) for t in 1:T]
-    step = (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
-    rec = DEER.TapedRecursion(step, tape)
+    
+    step_fwd = (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
+    step_lin = (x, tt, a) -> MALA.mala_step_surrogate(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, a)
+    consts = (x, tt) -> (MALA.mala_accept_indicator(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u),)
+    rec = DEER.TapedRecursion(step_fwd, step_lin, tape; consts=consts, const_example=(0.0,))
+
 
     S_deer, info = DEER.solve(
         rec,

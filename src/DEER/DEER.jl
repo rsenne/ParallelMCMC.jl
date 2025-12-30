@@ -8,30 +8,60 @@ import Mooncake: Mooncake
 const DI = DifferentiationInterface
 backend = DI.AutoMooncake(; config=nothing)
 
-struct TapedRecursion{F,Tt}
-    step::F
+
+"""
+Deterministic recursion driven by a pre-generated tape.
+
+- `step_fwd(x, tape_t)`: exact forward transition (may include MH accept/reject).
+- `step_lin(x, tape_t, c...)`: surrogate used only for Jacobians.
+- `consts(x, tape_t) -> Tuple`: returns constants `c...` passed into `step_lin` as DI.Constant.
+- `const_example`: example tuple of constants, used in `prepare`.
+"""
+struct TapedRecursion{Ff,Fl,Fc,Tt,Ce}
+    step_fwd::Ff
+    step_lin::Fl
+    consts::Fc
     tape::Vector{Tt}
+    const_example::Ce
 end
 
-# Stable callable for DI
+"Backward-compatible constructor: uses the same step for forward + Jacobian, and no extra constants."
+TapedRecursion(step, tape::Vector) = TapedRecursion(step, step, (_x,_tt)->(), tape, ())
+
+"Main constructor."
+function TapedRecursion(step_fwd, step_lin, tape::Vector; consts = (_x,_tt)->(), const_example = ())
+    return TapedRecursion(step_fwd, step_lin, consts, tape, const_example)
+end
+
+# Stable callable for DI (Jacobian always taken w.r.t. step_lin)
 struct StepWithTape{R}
     rec::R
 end
-(s::StepWithTape)(x, tape) = s.rec.step(x, tape)
+(s::StepWithTape)(x, tape, cs...) = s.rec.step_lin(x, tape, cs...)
 
-"Prepare Jacobian for this recursion (reusable across t as long as tape element type is stable)."
+"Prepare Jacobian for the surrogate step (reusable across t as long as tape element type is stable)."
 function prepare(rec::TapedRecursion, x0::AbstractVector)
     f = StepWithTape(rec)
-    return DI.prepare_jacobian(f, backend, x0, DI.Constant(rec.tape[1]))
+    cs = rec.const_example
+    return DI.prepare_jacobian(
+        f, backend, x0,
+        DI.Constant(rec.tape[1]),
+        (DI.Constant(c) for c in cs)...,
+    )
 end
 
-"Full Jacobian of step(x, tape_t) w.r.t. x."
+"Full Jacobian of surrogate step_lin(x, tape_t, consts...) w.r.t. x."
 function jac_full(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     f = StepWithTape(rec)
-    return DI.jacobian(f, prep, backend, x, DI.Constant(rec.tape[t]))
+    cs = rec.consts(x, rec.tape[t])
+    return DI.jacobian(
+        f, prep, backend, x,
+        DI.Constant(rec.tape[t]),
+        (DI.Constant(c) for c in cs)...,
+    )
 end
 
-"Diagonal Jacobian: currently computed via full Jacobian then diag."
+"Diagonal of the surrogate Jacobian (debug/correctness mode; not scalable if it computes full J)."
 function jac_diag(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     return diag(jac_full(rec, prep, x, t))
 end
@@ -129,7 +159,7 @@ function deer_update(
             end
 
             jt = jac_diag(rec, prep, xbar, t)
-            ft = rec.step(xbar, rec.tape[t])
+            ft = rec.step_fwd(xbar, rec.tape[t])
 
             @inbounds for i in 1:D
                 A[i, t] = jt[i]
@@ -167,11 +197,12 @@ function deer_update(
             end
 
             Jt = jac_full(rec, prep, xbar, t)
-            ft = rec.step(xbar, rec.tape[t])
-
             A[t] = Jt
+            
+            ft = rec.step_fwd(xbar, rec.tape[t])
+            tmp = Jt * xbar
             @inbounds for i in 1:D
-                b[i, t] = ft[i] - (Jt * xbar)[i]   # see note below
+                b[i, t] = ft[i] - tmp[i]
             end
         end
 

@@ -88,4 +88,41 @@ function run_mala_sequential_taped(
     return xs
 end
 
+"Compute the MALA proposal map y = x + ϵ∇logp(x) + sqrt(2ϵ) ξ."
+function mala_proposal(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector)
+    @assert length(x) == length(ξ)
+    g_x = gradlogp(x)
+    return x .+ ϵ .* g_x .+ sqrt(2ϵ) .* ξ
+end
+
+"Compute log acceptance ratio logα(x→y) for MALA."
+function mala_logα(logp, gradlogp, x::AbstractVector, y::AbstractVector, ϵ::Real)
+    g_x = gradlogp(x)
+    g_y = gradlogp(y)
+    logp_x = logp(x)
+    logp_y = logp(y)
+    logq_y_given_x = logq_mala(y, x, g_x, ϵ)
+    logq_x_given_y = logq_mala(x, y, g_y, ϵ)
+    return (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
+end
+
+"""
+Primal accept indicator for a taped MALA step.
+Returns Float64 in {0.0, 1.0} so it can be used as a constant gate.
+"""
+function mala_accept_indicator(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real)
+    y = mala_proposal(logp, gradlogp, x, ϵ, ξ)
+    logα = mala_logα(logp, gradlogp, x, y, ϵ)
+    return (log(u) < logα) ? 1.0 : 0.0
+end
+
+"""
+Stop-gradient surrogate step used for Jacobians.
+`a` (0.0 or 1.0) must be provided as a constant by the DEER machinery.
+"""
+function mala_step_surrogate(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, a::Real)
+    y = mala_proposal(logp, gradlogp, x, ϵ, ξ)
+    return (a .* y) .+ ((1 - a) .* x)
+end
+
 end # module
