@@ -1,11 +1,13 @@
 module ParallelMCMC
 
-"""
-    hi = hello_world()
-A simple function to return "Hello, World!"
-"""
-function hello_world()
-    return "Hello, World!"
-end
+# imports
+using Distributions
+using LinearAlgebra
+using LogExpFunctions
+using MCMCChains
+
+# inclusions
+include("MALA/MALA.jl")
+include("DEER/DEER.jl")
 
 end
