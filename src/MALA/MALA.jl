@@ -7,7 +7,9 @@ Compute the log of the MALA proposal density q(y | x).
 We use the Gaussian:
   y ~ Normal(x + ϵ∇logp(x), 2ϵ I)
 """
-function logq_mala(y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real)
+function logq_mala(
+    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
+)
     μ = x .+ ϵ .* gradlogp_x
     # log N(y; μ, 2ϵ I) up to constant:
     # -0.5 * ||y-μ||^2 / (2ϵ) - (d/2) log(4πϵ)
@@ -30,7 +32,9 @@ Inputs:
 Returns:
 - x_next
 """
-function mala_step_taped(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real)
+function mala_step_taped(
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real
+)
     @assert length(x) == length(ξ)
     @assert 0.0 < u < 1.0
     g_x = gradlogp(x)
@@ -64,8 +68,14 @@ Inputs:
 Returns:
 - xs: Vector of states length T+1, xs[1]=x0, xs[t+1]=x_t
 """
-function run_mala_sequential_taped(logp, gradlogp, x0::AbstractVector, ϵ::Real,
-                                  ξs::Vector{<:AbstractVector}, us::AbstractVector)
+function run_mala_sequential_taped(
+    logp,
+    gradlogp,
+    x0::AbstractVector,
+    ϵ::Real,
+    ξs::Vector{<:AbstractVector},
+    us::AbstractVector,
+)
     T = length(us)
     @assert length(ξs) == T
     xs = Vector{typeof(x0)}(undef, T + 1)
@@ -73,7 +83,7 @@ function run_mala_sequential_taped(logp, gradlogp, x0::AbstractVector, ϵ::Real,
     x = copy(x0)
     for t in 1:T
         x = mala_step_taped(logp, gradlogp, x, ϵ, ξs[t], us[t])
-        xs[t+1] = copy(x)
+        xs[t + 1] = copy(x)
     end
     return xs
 end

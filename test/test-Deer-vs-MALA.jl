@@ -24,37 +24,27 @@ gradlogp_stdnormal(x) = -x
 
     # Ground truth: sequential taped MALA
     xs_seq = MALA.run_mala_sequential_taped(
-        logp_stdnormal,
-        gradlogp_stdnormal,
-        x0,
-        ϵ,
-        ξs,
-        us,
+        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
     )
     @test length(xs_seq) == T + 1
 
     # Build the taped recursion for DEER
-    tape = [(ξ = ξs[t], u = us[t]) for t in 1:T]
-    step = (x, tt) -> MALA.mala_step_taped(
-        logp_stdnormal,
-        gradlogp_stdnormal,
-        x,
-        ϵ,
-        tt.ξ,
-        tt.u,
-    )
+    tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
+    step =
+        (x, tt) ->
+            MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
     rec = DEER.TapedRecursion(step, tape)
 
     # Solve with quasi-DEER (diagonal Jacobian)
     s_deer, info = DEER.solve(
         rec,
         x0;
-        jacobian = :diag,
-        damping = 0.5,        # damping helps robustness
-        tol_abs = 1e-10,
-        tol_rel = 1e-8,
-        maxiter = 200,
-        return_info = true,
+        jacobian=:diag,
+        damping=0.5,        # damping helps robustness
+        tol_abs=1e-10,
+        tol_rel=1e-8,
+        maxiter=200,
+        return_info=true,
     )
 
     @test info.converged
@@ -62,7 +52,7 @@ gradlogp_stdnormal(x) = -x
 
     # Compare DEER states to sequential states (xs_seq[2:end])
     for t in 1:T
-        @test isapprox(s_deer[t], xs_seq[t+1]; rtol = 1e-6, atol = 1e-8)
+        @test isapprox(s_deer[t], xs_seq[t + 1]; rtol=1e-6, atol=1e-8)
     end
 end
 
@@ -78,40 +68,30 @@ end
     us = rand(rng, T)
 
     xs_seq = MALA.run_mala_sequential_taped(
-        logp_stdnormal,
-        gradlogp_stdnormal,
-        x0,
-        ϵ,
-        ξs,
-        us,
+        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
     )
 
-    tape = [(ξ = ξs[t], u = us[t]) for t in 1:T]
-    step = (x, tt) -> MALA.mala_step_taped(
-        logp_stdnormal,
-        gradlogp_stdnormal,
-        x,
-        ϵ,
-        tt.ξ,
-        tt.u,
-    )
+    tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
+    step =
+        (x, tt) ->
+            MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
     rec = DEER.TapedRecursion(step, tape)
 
     s_deer, info = DEER.solve(
         rec,
         x0;
-        jacobian = :full,
-        damping = 0.7,
-        tol_abs = 1e-10,
-        tol_rel = 1e-8,
-        maxiter = 200,
-        return_info = true,
+        jacobian=:full,
+        damping=0.7,
+        tol_abs=1e-10,
+        tol_rel=1e-8,
+        maxiter=200,
+        return_info=true,
     )
 
     @test info.converged
     @test length(s_deer) == T
 
     for t in 1:T
-        @test isapprox(s_deer[t], xs_seq[t+1]; rtol = 1e-6, atol = 1e-8)
+        @test isapprox(s_deer[t], xs_seq[t + 1]; rtol=1e-6, atol=1e-8)
     end
 end

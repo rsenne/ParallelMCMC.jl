@@ -1,8 +1,9 @@
 module DEER
 
+using Base.Threads: @threads
 using LinearAlgebra
 using DifferentiationInterface
-import Mooncake
+using Mooncake: Mooncake
 
 const DI = DifferentiationInterface
 backend = DI.AutoMooncake(; config=nothing)
@@ -36,16 +37,90 @@ function jac_diag(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     return diag(J)
 end
 
+"""
+Solve s_t = a_t .* s_{t-1} + b_t using an associative inclusive scan
+over the affine operators (a_t, b_t).
+
+Inputs:
+- a :: Vector{<:AbstractVector} length T, each a[t] length D
+- b :: Vector{<:AbstractVector} length T, each b[t] length D
+- s0 :: AbstractVector length D
+
+Returns:
+- s :: Vector{Vector} length T, s[t] is state at time t
+"""
+function solve_affine_scan_diag(
+    a::Vector{<:AbstractVector}, b::Vector{<:AbstractVector}, s0::AbstractVector
+)::Vector{Vector}
+    T = length(a)
+    T == length(b) || throw(ArgumentError("length(a) must match length(b)"))
+    D = length(s0)
+    D > 0 || throw(ArgumentError("state dimension must be positive"))
+    for t in 1:T
+        length(a[t]) == D || throw(ArgumentError("a[$t] has wrong length"))
+        length(b[t]) == D || throw(ArgumentError("b[$t] has wrong length"))
+    end
+
+    # Working copies of prefix operators (α, β)
+    α = [Vector{Float64}(a[t]) for t in 1:T]
+    β = [Vector{Float64}(b[t]) for t in 1:T]
+
+    # Temporary buffers for the scan stages
+    αnew = [similar(α[t]) for t in 1:T]
+    βnew = [similar(β[t]) for t in 1:T]
+
+    # Hillis–Steele inclusive scan:
+    # after each stage with offset, (α[t],β[t]) becomes composition with (α[t-offset],β[t-offset])
+    offset = 1
+    while offset < T
+        @threads for t in 1:T
+            if t > offset
+                at = α[t]
+                bt = β[t]
+                ap = α[t - offset]
+                bp = β[t - offset]
+                αt = αnew[t]
+                βt = βnew[t]
+                @inbounds for i in 1:D
+                    ai = at[i]
+                    αt[i] = ai * ap[i]
+                    βt[i] = ai * bp[i] + bt[i]
+                end
+            else
+                copyto!(αnew[t], α[t])
+                copyto!(βnew[t], β[t])
+            end
+        end
+        α, αnew = αnew, α
+        β, βnew = βnew, β
+        offset <<= 1
+    end
+
+    # Apply prefix operators to s0: s[t] = α[t].*s0 + β[t]
+    s = [similar(s0, Float64) for _ in 1:T]
+    @threads for t in 1:T
+        st = s[t]
+        at = α[t]
+        bt = β[t]
+        for i in 1:D
+            st[i] = at[i] * s0[i] + bt[i]
+        end
+    end
+
+    return s
+end
+
 function deer_update(
     rec::TapedRecursion,
     s0::AbstractVector,
     s_guess::Vector,
     prep;
-    jacobian::Symbol = :diag,
-    damping::Real = 1.0,
+    jacobian::Symbol=:diag,
+    damping::Real=1.0,
 )
     T = length(s_guess)
-    T == length(rec.tape) || throw(ArgumentError("length(s_guess) must match length(rec.tape)"))
+    T == length(rec.tape) ||
+        throw(ArgumentError("length(s_guess) must match length(rec.tape)"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0, 1]"))
 
     ref_prev = s0
@@ -91,12 +166,7 @@ function deer_update(
             ref_prev = s_guess[t]
         end
 
-        s_new = Vector{Vector}(undef, T)
-        s_prev = copy(s0)
-        for t in 1:T
-            s_prev = a[t] .* s_prev .+ b[t]
-            s_new[t] = copy(s_prev)
-        end
+        s_new = solve_affine_scan_diag(a, b, s0)
 
         if damping != 1.0
             for t in 1:T
@@ -113,13 +183,13 @@ end
 function solve(
     rec::TapedRecursion,
     s0_in;
-    init = nothing,
-    tol_abs::Real = 1e-4,
-    tol_rel::Real = 1e-3,
-    maxiter::Int = 200,
-    jacobian::Symbol = :diag,
-    damping::Real = 1.0,
-    return_info::Bool = false,
+    init=nothing,
+    tol_abs::Real=1e-4,
+    tol_rel::Real=1e-3,
+    maxiter::Int=200,
+    jacobian::Symbol=:diag,
+    damping::Real=1.0,
+    return_info::Bool=false,
 )
     # Force 1D vector active argument (avoids Matrix corner cases)
     s0 = vec(s0_in)
@@ -159,10 +229,17 @@ function solve(
     end
 
     if return_info
-        return s, (converged=converged, iters=iters, metric=last_metric, jacobian=jacobian, damping=damping)
+        return s,
+        (
+            converged=converged,
+            iters=iters,
+            metric=last_metric,
+            jacobian=jacobian,
+            damping=damping,
+        )
     else
         return s
     end
 end
 
-end # module
+end # module DEER
