@@ -110,7 +110,9 @@ end
 Primal accept indicator for a taped MALA step.
 Returns Float64 in {0.0, 1.0} so it can be used as a constant gate.
 """
-function mala_accept_indicator(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real)
+function mala_accept_indicator(
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real
+)
     y = mala_proposal(logp, gradlogp, x, ϵ, ξ)
     logα = mala_logα(logp, gradlogp, x, y, ϵ)
     return (log(u) < logα) ? 1.0 : 0.0
@@ -120,7 +122,9 @@ end
 Stop-gradient surrogate step used for Jacobians.
 `a` (0.0 or 1.0) must be provided as a constant by the DEER machinery.
 """
-function mala_step_surrogate(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, a::Real)
+function mala_step_surrogate(
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, a::Real
+)
     y = mala_proposal(logp, gradlogp, x, ϵ, ξ)
     return (a .* y) .+ ((1 - a) .* x)
 end

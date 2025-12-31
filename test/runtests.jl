@@ -1,7 +1,6 @@
 using ParallelMCMC
 using Test
 
-
 @testset verbose=true "ParallelMCMC" begin
     #=
     Don't add your tests to runtests.jl. Instead, create files named

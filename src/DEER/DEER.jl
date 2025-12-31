@@ -1,13 +1,13 @@
 module DEER
 
-using Base.Threads: @threads, nthreads, threadid
+using Base.Threads: @threads, threadid
 using LinearAlgebra
 using DifferentiationInterface
 import Mooncake: Mooncake
+using Random
 
 const DI = DifferentiationInterface
 backend = DI.AutoMooncake(; config=nothing)
-
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -26,10 +26,12 @@ struct TapedRecursion{Ff,Fl,Fc,Tt,Ce}
 end
 
 "Backward-compatible constructor: uses the same step for forward + Jacobian, and no extra constants."
-TapedRecursion(step, tape::Vector) = TapedRecursion(step, step, (_x,_tt)->(), tape, ())
+TapedRecursion(step, tape::Vector) = TapedRecursion(step, step, (_x, _tt)->(), tape, ())
 
 "Main constructor."
-function TapedRecursion(step_fwd, step_lin, tape::Vector; consts = (_x,_tt)->(), const_example = ())
+function TapedRecursion(
+    step_fwd, step_lin, tape::Vector; consts=(_x, _tt)->(), const_example=()
+)
     return TapedRecursion(step_fwd, step_lin, consts, tape, const_example)
 end
 
@@ -44,9 +46,18 @@ function prepare(rec::TapedRecursion, x0::AbstractVector)
     f = StepWithTape(rec)
     cs = rec.const_example
     return DI.prepare_jacobian(
-        f, backend, x0,
-        DI.Constant(rec.tape[1]),
-        (DI.Constant(c) for c in cs)...,
+        f, backend, x0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
+    )
+end
+
+"Prepare pushforward (JVP) for the surrogate step_lin."
+function prepare_pushforward(rec::TapedRecursion, x0::AbstractVector)
+    f = StepWithTape(rec)
+    cs = rec.const_example
+    # tx is a tuple of tangents; we supply an example tangent
+    tx0 = (zero(x0),)
+    return DI.prepare_pushforward(
+        f, backend, x0, tx0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
     )
 end
 
@@ -55,15 +66,84 @@ function jac_full(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     f = StepWithTape(rec)
     cs = rec.consts(x, rec.tape[t])
     return DI.jacobian(
-        f, prep, backend, x,
-        DI.Constant(rec.tape[t]),
-        (DI.Constant(c) for c in cs)...,
+        f, prep, backend, x, DI.Constant(rec.tape[t]), (DI.Constant(c) for c in cs)...
     )
 end
 
 "Diagonal of the surrogate Jacobian (debug/correctness mode; not scalable if it computes full J)."
 function jac_diag(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     return diag(jac_full(rec, prep, x, t))
+end
+
+@inline function _rademacher!(z::AbstractVector, rng::AbstractRNG)
+    for i in eachindex(z)
+        z[i] = rand(rng, Bool) ? 1.0 : -1.0
+    end
+    return z
+end
+
+function _jvp_step_lin(
+    rec::TapedRecursion, prep_pf, x::AbstractVector, t::Int, v::AbstractVector
+)
+    f = StepWithTape(rec)
+    cs = rec.consts(x, rec.tape[t])
+
+    # pushforward expects tx as a tuple of tangents
+    tx = (v,)
+
+    res = DI.pushforward(
+        f,
+        prep_pf,
+        backend,
+        x,
+        tx,
+        DI.Constant(rec.tape[t]),
+        (DI.Constant(c) for c in cs)...,
+    )
+
+    return res isa Tuple ? res[end] : res
+end
+
+"""
+Stochastic (Hutchinson/Rademacher) estimator of diag(J), where J is the Jacobian of step_lin.
+
+diag(J) ≈ (1/K) * Σ_k  z^(k) ⊙ (J z^(k)),   z_i ∈ {±1}
+
+Keywords:
+- probes: number of random probe vectors K (typical 1–4)
+- rng: RNG for probes
+- zbuf, jbuf: optional preallocated buffers (length D) to avoid allocations
+"""
+function jac_diag_stoch(
+    rec::TapedRecursion,
+    prep_pf,
+    x::AbstractVector,
+    t::Int;
+    probes::Int=1,
+    rng::AbstractRNG=Random.default_rng(),
+    zbuf::Union{Nothing,AbstractVector}=nothing,
+)
+    D = length(x)
+    probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
+
+    z = zbuf === nothing ? Vector{Float64}(undef, D) : zbuf
+    length(z) == D || throw(ArgumentError("zbuf must have length D"))
+
+    d = zeros(Float64, D)
+
+    @inbounds for k in 1:probes
+        _rademacher!(z, rng)
+        jv = _jvp_step_lin(rec, prep_pf, x, t, z)   # J*z
+        for i in 1:D
+            d[i] += z[i] * jv[i]
+        end
+    end
+
+    invK = 1.0 / probes
+    @inbounds for i in 1:D
+        d[i] *= invK
+    end
+    return d
 end
 
 """
@@ -130,35 +210,60 @@ function deer_update(
     s0_in::AbstractVector,
     S::AbstractMatrix,
     prep;
-    jacobian::Symbol = :diag,
-    damping::Real = 1.0,
+    jacobian::Symbol=:diag,
+    damping::Real=1.0,
+    probes::Int=1,
+    rng::AbstractRNG=Random.default_rng(),
 )
     s0 = vec(s0_in)
     D, T = size(S)
     length(s0) == D || throw(ArgumentError("S must be D×T with D=length(s0)"))
     T == length(rec.tape) || throw(ArgumentError("size(S,2) must match length(rec.tape)"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
+    probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
 
-    if jacobian === :diag
+    if jacobian === :diag || jacobian === :stoch_diag
         A = Matrix{Float64}(undef, D, T)
         B = Matrix{Float64}(undef, D, T)
 
-        # scratch vector per thread
-        xbufs = [zeros(Float64, D) for _ in 1:Base.Threads.maxthreadid()]
+        nt = Base.Threads.maxthreadid()
 
-        # Build A,B in parallel across time using x̄_{t-1} = (t==1 ? s0 : S[:,t-1])
+        # scratch vector per thread for xbar
+        xbufs = [zeros(Float64, D) for _ in 1:nt]
+
+        # scratch per thread for stochastic diag probes
+        zbufs = jacobian === :stoch_diag ? [zeros(Float64, D) for _ in 1:nt] : nothing
+
+        # per-thread RNGs for reproducibility + thread safety
+        rngs = if jacobian === :stoch_diag
+            # Seed thread RNGs from the provided rng on the main thread (deterministic given rng).
+            seeds = rand(rng, UInt, nt)
+            [MersenneTwister(seeds[i]) for i in 1:nt]
+        else
+            nothing
+        end
+
         @threads for t in 1:T
+            tid = threadid()
+
             xbar = if t == 1
                 s0
             else
-                xb = xbufs[threadid()]
+                xb = xbufs[tid]
                 @inbounds for i in 1:D
                     xb[i] = S[i, t - 1]
                 end
                 xb
             end
 
-            jt = jac_diag(rec, prep, xbar, t)
+            jt = if jacobian === :diag
+                jac_diag(rec, prep, xbar, t)
+            else
+                jac_diag_stoch(
+                    rec, prep, xbar, t; probes=probes, rng=rngs[tid], zbuf=zbufs[tid]
+                )
+            end
+
             ft = rec.step_fwd(xbar, rec.tape[t])
 
             @inbounds for i in 1:D
@@ -170,9 +275,8 @@ function deer_update(
         S_new = solve_affine_scan_diag(A, B, s0)
 
         if damping != 1.0
-            # S_new = (1-d)*S + d*S_new
             @threads for t in 1:T
-                for i in 1:D
+                @inbounds for i in 1:D
                     S_new[i, t] = (1 - damping) * S[i, t] + damping * S_new[i, t]
                 end
             end
@@ -184,21 +288,21 @@ function deer_update(
         A = Vector{Matrix{Float64}}(undef, T)
         b = Matrix{Float64}(undef, D, T)
 
-        xbuf = zeros(Float64, D)  # single scratch vector (sequential, will add parallel scan alter)
+        xbuf = zeros(Float64, D)  # sequential scratch
 
         for t in 1:T
-            if t == 1
-                xbar = s0
+            xbar = if t == 1
+                s0
             else
                 @inbounds for i in 1:D
                     xbuf[i] = S[i, t - 1]
                 end
-                xbar = xbuf
+                xbuf
             end
 
             Jt = jac_full(rec, prep, xbar, t)
             A[t] = Jt
-            
+
             ft = rec.step_fwd(xbar, rec.tape[t])
             tmp = Jt * xbar
             @inbounds for i in 1:D
@@ -219,8 +323,26 @@ function deer_update(
 
         return S_new
     else
-        throw(ArgumentError("jacobian must be :diag or :full"))
+        throw(ArgumentError("jacobian must be :diag, :stoch_diag, or :full"))
     end
+end
+
+@inline function _maxabs(x)
+    m = 0.0
+    @inbounds for i in eachindex(x)
+        v = abs(x[i])
+        m = ifelse(v > m, v, m)
+    end
+    return m
+end
+
+@inline function _maxabsdiff(x, y)
+    m = 0.0
+    @inbounds for i in eachindex(x, y)
+        v = abs(x[i] - y[i])
+        m = ifelse(v > m, v, m)
+    end
+    return m
 end
 
 """
@@ -240,13 +362,15 @@ Keywords:
 function solve(
     rec::TapedRecursion,
     s0_in::AbstractVector;
-    init = nothing,
-    tol_abs::Real = 1e-4,
-    tol_rel::Real = 1e-3,
-    maxiter::Int = 200,
-    jacobian::Symbol = :diag,
-    damping::Real = 1.0,
-    return_info::Bool = false,
+    init=nothing,
+    tol_abs::Real=1e-4,
+    tol_rel::Real=1e-3,
+    maxiter::Int=200,
+    jacobian::Symbol=:diag,
+    damping::Real=1.0,
+    probes::Int=1,
+    rng::AbstractRNG=Random.default_rng(),
+    return_info::Bool=false,
 )
     s0 = vec(s0_in)
     D = length(s0)
@@ -269,7 +393,11 @@ function solve(
         Matrix{Float64}(init)
     end
 
-    prep = prepare(rec, s0)
+    prep = if jacobian === :stoch_diag
+        prepare_pushforward(rec, s0)
+    else
+        prepare(rec, s0)
+    end
 
     converged = false
     last_metric = Inf
@@ -277,12 +405,16 @@ function solve(
 
     for iter in 1:maxiter
         iters = iter
-        S_new = deer_update(rec, s0, S, prep; jacobian=jacobian, damping=damping)
+        S_new = deer_update(
+            rec, s0, S, prep; jacobian=jacobian, damping=damping, probes=probes, rng=rng
+        )
 
         metric = 0.0
-        for t in 1:T
-            Δ = maximum(abs.(view(S_new, :, t) .- view(S, :, t)))
-            scale = tol_abs + tol_rel * maximum(abs.(view(S_new, :, t)))
+        @inbounds for t in 1:T
+            xnew = view(S_new, :, t)
+            xold = view(S, :, t)
+            Δ = _maxabsdiff(xnew, xold)
+            scale = tol_abs + tol_rel * _maxabs(xnew)
             metric = max(metric, Δ / scale)
         end
 
@@ -296,7 +428,15 @@ function solve(
     end
 
     if return_info
-        return S, (converged=converged, iters=iters, metric=last_metric, jacobian=jacobian, damping=damping)
+        return S,
+        (
+            converged=converged,
+            iters=iters,
+            metric=last_metric,
+            jacobian=jacobian,
+            damping=damping,
+            probes=probes,
+        )
     else
         return S
     end
