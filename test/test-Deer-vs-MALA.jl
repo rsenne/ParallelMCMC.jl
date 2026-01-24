@@ -195,42 +195,53 @@ end
     us = rand(rng, T)
 
     # Ground truth: sequential taped MALA
-    xs_seq = MALA.run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
+    xs_seq = MALA.run_mala_sequential_taped(
+        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+    )
     @test length(xs_seq) == T + 1
 
     # Ensure at least one rejection occurred (so gating is exercised)
-    n_reject = count(t -> xs_seq[t+1] == xs_seq[t], 1:T)
+    n_reject = count(t -> xs_seq[t + 1] == xs_seq[t], 1:T)
     @test n_reject > 0
 
-    tape = [(ξ = ξs[t], u = us[t]) for t in 1:T]
-    step_fwd = (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
-    step_lin = (x, tt, a) -> MALA.mala_step_surrogate(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, a)
-    consts = (x, tt) -> (MALA.mala_accept_indicator(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u),)
+    tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
+    step_fwd =
+        (x, tt) ->
+            MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u)
+    step_lin =
+        (x, tt, a) ->
+            MALA.mala_step_surrogate(logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, a)
+    consts =
+        (x, tt) -> (
+            MALA.mala_accept_indicator(
+                logp_stdnormal, gradlogp_stdnormal, x, ϵ, tt.ξ, tt.u
+            ),
+        )
 
     rec = DEER.TapedRecursion(step_fwd, step_lin, tape; consts=consts, const_example=(0.0,))
 
     S_deer, info = DEER.solve(
         rec,
         x0;
-        jacobian = :stoch_diag,
-        probes   = 2,
-        rng      = MersenneTwister(42),  # deterministic probes
-        damping  = 0.5,
-        tol_abs  = 1e-9,
-        tol_rel  = 1e-7,
-        maxiter  = 400,
-        return_info = true,
+        jacobian=:stoch_diag,
+        probes=2,
+        rng=MersenneTwister(42),  # deterministic probes
+        damping=0.5,
+        tol_abs=1e-9,
+        tol_rel=1e-7,
+        maxiter=400,
+        return_info=true,
     )
 
     @test info.converged
     @test size(S_deer) == (D, T)
 
     for t in 1:T
-        @test isapprox(view(S_deer, :, t), xs_seq[t + 1]; rtol = 1e-5, atol = 1e-7)
+        @test isapprox(view(S_deer, :, t), xs_seq[t + 1]; rtol=1e-5, atol=1e-7)
     end
 
     # Prepare both preps explicitly
-    prepJ  = DEER.prepare(rec, x0)
+    prepJ = DEER.prepare(rec, x0)
     prepPF = DEER.prepare_pushforward(rec, x0)
 
     tcheck = 5
@@ -239,10 +250,7 @@ end
     diag_exact = DEER.jac_diag(rec, prepJ, xbar, tcheck)
 
     diag_est = DEER.jac_diag_stoch(
-        rec, prepPF, xbar, tcheck;
-        probes = 200,
-        rng    = MersenneTwister(123),
-        zbuf   = zeros(D),
+        rec, prepPF, xbar, tcheck; probes=200, rng=MersenneTwister(123), zbuf=zeros(D)
     )
 
     # The estimator is Monte Carlo; allow a modest tolerance.

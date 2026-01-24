@@ -131,7 +131,7 @@ function jac_diag_stoch(
 
     d = zeros(Float64, D)
 
-    @inbounds for k in 1:probes
+    for k in 1:probes
         _rademacher!(z, rng)
         jv = _jvp_step_lin(rec, prep_pf, x, t, z)   # J*z
         for i in 1:D
@@ -140,7 +140,7 @@ function jac_diag_stoch(
     end
 
     invK = 1.0 / probes
-    @inbounds for i in 1:D
+    for i in 1:D
         d[i] *= invK
     end
     return d
@@ -171,13 +171,13 @@ function solve_affine_scan_diag(A::AbstractMatrix, B::AbstractMatrix, s0::Abstra
     while offset < T
         @threads for t in 1:T
             if t > offset
-                @inbounds for i in 1:D
+                for i in 1:D
                     ai = α[i, t]
                     αnew[i, t] = ai * α[i, t - offset]
                     βnew[i, t] = ai * β[i, t - offset] + β[i, t]
                 end
             else
-                @inbounds for i in 1:D
+                for i in 1:D
                     αnew[i, t] = α[i, t]
                     βnew[i, t] = β[i, t]
                 end
@@ -190,7 +190,7 @@ function solve_affine_scan_diag(A::AbstractMatrix, B::AbstractMatrix, s0::Abstra
 
     S = Matrix{Float64}(undef, D, T)
     @threads for t in 1:T
-        @inbounds for i in 1:D
+        for i in 1:D
             S[i, t] = α[i, t] * s0[i] + β[i, t]
         end
     end
@@ -250,7 +250,7 @@ function deer_update(
                 s0
             else
                 xb = xbufs[tid]
-                @inbounds for i in 1:D
+                for i in 1:D
                     xb[i] = S[i, t - 1]
                 end
                 xb
@@ -266,7 +266,7 @@ function deer_update(
 
             ft = rec.step_fwd(xbar, rec.tape[t])
 
-            @inbounds for i in 1:D
+            for i in 1:D
                 A[i, t] = jt[i]
                 B[i, t] = ft[i] - jt[i] * xbar[i]
             end
@@ -276,7 +276,7 @@ function deer_update(
 
         if damping != 1.0
             @threads for t in 1:T
-                @inbounds for i in 1:D
+                for i in 1:D
                     S_new[i, t] = (1 - damping) * S[i, t] + damping * S_new[i, t]
                 end
             end
@@ -294,7 +294,7 @@ function deer_update(
             xbar = if t == 1
                 s0
             else
-                @inbounds for i in 1:D
+                for i in 1:D
                     xbuf[i] = S[i, t - 1]
                 end
                 xbuf
@@ -305,7 +305,7 @@ function deer_update(
 
             ft = rec.step_fwd(xbar, rec.tape[t])
             tmp = Jt * xbar
-            @inbounds for i in 1:D
+            for i in 1:D
                 b[i, t] = ft[i] - tmp[i]
             end
         end
@@ -314,11 +314,11 @@ function deer_update(
         s_prev = copy(s0)
         for t in 1:T
             s_prev = A[t] * s_prev .+ view(b, :, t)
-            @inbounds S_new[:, t] .= s_prev
+            S_new[:, t] .= s_prev
         end
 
         if damping != 1.0
-            @inbounds S_new .= (1 - damping) .* S .+ damping .* S_new
+            S_new .= (1 - damping) .* S .+ damping .* S_new
         end
 
         return S_new
@@ -329,7 +329,7 @@ end
 
 @inline function _maxabs(x)
     m = 0.0
-    @inbounds for i in eachindex(x)
+    for i in eachindex(x)
         v = abs(x[i])
         m = ifelse(v > m, v, m)
     end
@@ -338,7 +338,7 @@ end
 
 @inline function _maxabsdiff(x, y)
     m = 0.0
-    @inbounds for i in eachindex(x, y)
+    for i in eachindex(x, y)
         v = abs(x[i] - y[i])
         m = ifelse(v > m, v, m)
     end
@@ -385,7 +385,7 @@ function solve(
         # repeat s0 across time
         M = Matrix{Float64}(undef, D, T)
         @threads for t in 1:T
-            @inbounds M[:, t] .= s0
+            M[:, t] .= s0
         end
         M
     else
@@ -410,7 +410,7 @@ function solve(
         )
 
         metric = 0.0
-        @inbounds for t in 1:T
+        for t in 1:T
             xnew = view(S_new, :, t)
             xold = view(S, :, t)
             Δ = _maxabsdiff(xnew, xold)

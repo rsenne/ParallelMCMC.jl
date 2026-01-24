@@ -5,7 +5,7 @@ using LinearAlgebra
 using ParallelMCMC
 using ParallelMCMCBenchmarks
 const BayesLinReg = ParallelMCMCBenchmarks.BayesLinReg
-const MALARunner  = ParallelMCMCBenchmarks.MALARunner
+const MALARunner = ParallelMCMCBenchmarks.MALARunner
 
 rng = MersenneTwister(20251231)
 
@@ -24,3 +24,4 @@ x0 = zeros(Float64, p)
 ξs, us = MALARunner.make_tape(rng, p, T)
 
 @btime MALARunner.run_taped_mala_with_accepts($logpost, $gradlogpost, $x0, $ϵ, $ξs, $us);
+@profview_allocs MALARunner.run_taped_mala_with_accepts(logpost, gradlogpost, x0, ϵ, ξs, us);

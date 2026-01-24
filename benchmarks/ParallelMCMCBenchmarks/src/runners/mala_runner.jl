@@ -25,12 +25,13 @@ Very simple step-size adaptation for MALA (Robbins–Monro on log ϵ).
 This is not a full NUTS-style adaptation; it is a lightweight, effective baseline.
 """
 function tune_stepsize_mala(
-    logp, gradlogp,
+    logp,
+    gradlogp,
     x0::Vector{Float64},
     ϵ0::Float64;
-    Twarm::Int = 2_000,
-    target_accept::Float64 = 0.57,
-    rng::AbstractRNG = Random.default_rng(),
+    Twarm::Int=2_000,
+    target_accept::Float64=0.57,
+    rng::AbstractRNG=Random.default_rng(),
 )
     D = length(x0)
 
@@ -63,8 +64,14 @@ Returns:
   xs::Vector{Vector{Float64}}  length T+1 (includes x0)
   accepts::Vector{Float64}     length T, entries 0.0 or 1.0
 """
-function run_taped_mala_with_accepts(logp, gradlogp, x0::Vector{Float64}, ϵ::Float64,
-                                    ξs::Vector{Vector{Float64}}, us::Vector{Float64})
+function run_taped_mala_with_accepts(
+    logp,
+    gradlogp,
+    x0::Vector{Float64},
+    ϵ::Float64,
+    ξs::Vector{Vector{Float64}},
+    us::Vector{Float64},
+)
     T = length(us)
     @assert length(ξs) == T
 
@@ -77,7 +84,7 @@ function run_taped_mala_with_accepts(logp, gradlogp, x0::Vector{Float64}, ϵ::Fl
         a = MALA.mala_accept_indicator(logp, gradlogp, x, ϵ, ξs[t], us[t])
         accepts[t] = a
         x = MALA.mala_step_taped(logp, gradlogp, x, ϵ, ξs[t], us[t])
-        xs[t+1] = x
+        xs[t + 1] = x
     end
 
     return xs, accepts

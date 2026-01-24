@@ -12,7 +12,9 @@ gradlogp_stdnormal_B(x) = -x
 
 # Reference log q(y|x) for MALA:
 # y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
-function logq_mala_ref_B(y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real)
+function logq_mala_ref_B(
+    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
+)
     μ = x .+ ϵ .* gradlogp_x
     d = length(x)
     r = y .- μ
@@ -83,11 +85,11 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
             return mean(mses)
         end
 
-        mse1  = mse_for_probes(1;  nrep=25)
-        mse8  = mse_for_probes(8;  nrep=25)
+        mse1 = mse_for_probes(1; nrep=25)
+        mse8 = mse_for_probes(8; nrep=25)
         mse64 = mse_for_probes(64; nrep=25)
 
-        @test mse8  < mse1
+        @test mse8 < mse1
         @test mse64 < mse8
     end
 
@@ -124,11 +126,24 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         tt_acc = (ξ=ξ, u=u_acc)
         tt_rej = (ξ=ξ, u=u_rej)
 
-        step_fwd = (x, tt) -> MALA.mala_step_taped(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u)
-        step_lin = (x, tt, a) -> MALA.mala_step_surrogate(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, a)
+        step_fwd =
+            (x, tt) -> MALA.mala_step_taped(
+                logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u
+            )
+        step_lin =
+            (x, tt, a) -> MALA.mala_step_surrogate(
+                logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, a
+            )
 
-        consts = (x, tt) -> (MALA.mala_accept_indicator(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u),)
-        rec = DEER.TapedRecursion(step_fwd, step_lin, [tt_acc, tt_rej]; consts=consts, const_example=(0.0,))
+        consts =
+            (x, tt) -> (
+                MALA.mala_accept_indicator(
+                    logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u
+                ),
+            )
+        rec = DEER.TapedRecursion(
+            step_fwd, step_lin, [tt_acc, tt_rej]; consts=consts, const_example=(0.0,)
+        )
 
         # consts must match forward accept decision
         a_acc = only(consts(x, tt_acc))
@@ -145,7 +160,6 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         @test step_fwd(x, tt_rej) == x
     end
 
-
     @testset "DEER solution satisfies recursion defects (MALA taped)" begin
         rng = MersenneTwister(20251231)
         D, T = 6, 80
@@ -156,11 +170,24 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         us = rand(rng, T)
         tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
 
-        step_fwd = (x, tt) -> MALA.mala_step_taped(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u)
-        step_lin = (x, tt, a) -> MALA.mala_step_surrogate(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, a)
-        consts = (x, tt) -> (MALA.mala_accept_indicator(logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u),)
+        step_fwd =
+            (x, tt) -> MALA.mala_step_taped(
+                logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u
+            )
+        step_lin =
+            (x, tt, a) -> MALA.mala_step_surrogate(
+                logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, a
+            )
+        consts =
+            (x, tt) -> (
+                MALA.mala_accept_indicator(
+                    logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u
+                ),
+            )
 
-        rec = DEER.TapedRecursion(step_fwd, step_lin, tape; consts=consts, const_example=(0.0,))
+        rec = DEER.TapedRecursion(
+            step_fwd, step_lin, tape; consts=consts, const_example=(0.0,)
+        )
 
         S, info = DEER.solve(
             rec,

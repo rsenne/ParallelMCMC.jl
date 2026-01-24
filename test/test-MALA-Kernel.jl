@@ -11,7 +11,9 @@ gradlogp_stdnormal_kernel(x) = -x
 
 # Reference implementation of log q(y|x) for MALA proposal:
 # y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
-function logq_mala_ref(y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real)
+function logq_mala_ref(
+    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
+)
     μ = x .+ ϵ .* gradlogp_x
     d = length(x)
     r = y .- μ
@@ -35,8 +37,12 @@ end
         # Fixed tape
         ξs, us = make_tape(rng, D, T)
 
-        xs1 = MALA.run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
-        xs2 = MALA.run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
+        xs1 = MALA.run_mala_sequential_taped(
+            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+        )
+        xs2 = MALA.run_mala_sequential_taped(
+            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+        )
 
         @test length(xs1) == T + 1
         @test length(xs2) == T + 1
@@ -47,8 +53,12 @@ end
         # Also test step-by-step determinism explicitly
         x = copy(x0)
         for t in 1:T
-            x_next_1 = MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t])
-            x_next_2 = MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t])
+            x_next_1 = MALA.mala_step_taped(
+                logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t]
+            )
+            x_next_2 = MALA.mala_step_taped(
+                logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t]
+            )
             @test x_next_1 == x_next_2
             x = x_next_1
         end
@@ -66,7 +76,9 @@ end
         x0 = randn(rng, D)
         ξs, us = make_tape(rng, D, T)
 
-        xs = MALA.run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
+        xs = MALA.run_mala_sequential_taped(
+            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+        )
 
         # Collect post-burn samples
         X = reduce(hcat, xs[(burn + 1):end])  # D × (T-burn+1)
@@ -99,7 +111,9 @@ end
         tries = 0
         while !(logα < -1e-8) && tries < 2_000
             ξ = randn(rng, D)
-            y = MALA.mala_proposal(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ)
+            y = MALA.mala_proposal(
+                logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ
+            )
             logα = MALA.mala_logα(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, y, ϵ)
             tries += 1
         end
@@ -112,19 +126,27 @@ end
         u_accept = τ / 2
         u_accept = max(u_accept, nextfloat(0.0))  # strictly > 0
         @test 0.0 < u_accept < τ
-        x_acc = MALA.mala_step_taped(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_accept)
+        x_acc = MALA.mala_step_taped(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_accept
+        )
         @test x_acc == y
 
         # Force REJECT: choose u > τ (but still < 1)
         u_reject = (τ + 1.0) / 2.0
         u_reject = min(u_reject, prevfloat(1.0))
         @test τ < u_reject < 1.0
-        x_rej = MALA.mala_step_taped(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_reject)
+        x_rej = MALA.mala_step_taped(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_reject
+        )
         @test x_rej == x
 
         # Also sanity-check the accept indicator
-        a_acc = MALA.mala_accept_indicator(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_accept)
-        a_rej = MALA.mala_accept_indicator(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_reject)
+        a_acc = MALA.mala_accept_indicator(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_accept
+        )
+        a_rej = MALA.mala_accept_indicator(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_reject
+        )
         @test a_acc == 1.0
         @test a_rej == 0.0
     end
@@ -148,7 +170,8 @@ end
         logq_y_given_x = logq_mala_ref(y, x, gx, ϵ)
         logq_x_given_y = logq_mala_ref(x, y, gy, ϵ)
 
-        logα_ref = (logp_stdnormal(y) + logq_x_given_y) - (logp_stdnormal(x) + logq_y_given_x)
+        logα_ref =
+            (logp_stdnormal(y) + logq_x_given_y) - (logp_stdnormal(x) + logq_y_given_x)
 
         @test isfinite(logα_impl)
         @test isfinite(logα_ref)
