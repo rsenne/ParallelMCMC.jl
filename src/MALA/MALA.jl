@@ -35,8 +35,8 @@ Returns:
 function mala_step_taped(
     logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real
 )
-    @assert length(x) == length(ξ)
-    @assert 0.0 < u < 1.0
+    length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
+    0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
     g_x = gradlogp(x)
 
     # Proposal
@@ -77,7 +77,7 @@ function run_mala_sequential_taped(
     us::AbstractVector,
 )
     T = length(us)
-    @assert length(ξs) == T
+    length(ξs) == T || throw(DimensionMismatch("ξs and us must have the same length"))
     xs = Vector{typeof(x0)}(undef, T + 1)
     xs[1] = copy(x0)
     x = copy(x0)
@@ -90,7 +90,7 @@ end
 
 "Compute the MALA proposal map y = x + ϵ∇logp(x) + sqrt(2ϵ) ξ."
 function mala_proposal(logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector)
-    @assert length(x) == length(ξ)
+    length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     g_x = gradlogp(x)
     return x .+ ϵ .* g_x .+ sqrt(2ϵ) .* ξ
 end

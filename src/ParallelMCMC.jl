@@ -1,13 +1,16 @@
 module ParallelMCMC
 
-# imports
-using Distributions
-using LinearAlgebra
-using LogExpFunctions
+using AbstractMCMC
 using MCMCChains
+using LinearAlgebra
+using Random
+using Statistics
 
-# inclusions
 include("MALA/MALA.jl")
 include("DEER/DEER.jl")
+include("interface.jl")
+
+export DensityModel, MALASampler, MALATransition, MALAState
+export MALA, DEER
 
 end

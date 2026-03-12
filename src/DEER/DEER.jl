@@ -3,11 +3,12 @@ module DEER
 using Base.Threads: @threads, threadid
 using LinearAlgebra
 using DifferentiationInterface
+using ADTypes: ADTypes, AbstractADType
 import Mooncake: Mooncake
 using Random
 
 const DI = DifferentiationInterface
-backend = DI.AutoMooncake(; config=nothing)
+const DEFAULT_BACKEND = DI.AutoMooncake(; config=nothing)
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -16,23 +17,28 @@ Deterministic recursion driven by a pre-generated tape.
 - `step_lin(x, tape_t, c...)`: surrogate used only for Jacobians.
 - `consts(x, tape_t) -> Tuple`: returns constants `c...` passed into `step_lin` as DI.Constant.
 - `const_example`: example tuple of constants, used in `prepare`.
+- `backend`: AD backend (any `ADTypes.AbstractADType`); defaults to `AutoMooncake`.
 """
-struct TapedRecursion{Ff,Fl,Fc,Tt,Ce}
+struct TapedRecursion{Ff,Fl,Fc,Tt,Ce,AD<:AbstractADType}
     step_fwd::Ff
     step_lin::Fl
     consts::Fc
     tape::Vector{Tt}
     const_example::Ce
+    backend::AD
 end
 
 "Backward-compatible constructor: uses the same step for forward + Jacobian, and no extra constants."
-TapedRecursion(step, tape::Vector) = TapedRecursion(step, step, (_x, _tt)->(), tape, ())
+function TapedRecursion(step, tape::Vector)
+    return TapedRecursion(step, step, (_x, _tt) -> (), tape, (), DEFAULT_BACKEND)
+end
 
 "Main constructor."
 function TapedRecursion(
-    step_fwd, step_lin, tape::Vector; consts=(_x, _tt)->(), const_example=()
+    step_fwd, step_lin, tape::Vector;
+    consts=(_x, _tt) -> (), const_example=(), backend::AbstractADType=DEFAULT_BACKEND,
 )
-    return TapedRecursion(step_fwd, step_lin, consts, tape, const_example)
+    return TapedRecursion(step_fwd, step_lin, consts, tape, const_example, backend)
 end
 
 # Stable callable for DI (Jacobian always taken w.r.t. step_lin)
@@ -46,7 +52,7 @@ function prepare(rec::TapedRecursion, x0::AbstractVector)
     f = StepWithTape(rec)
     cs = rec.const_example
     return DI.prepare_jacobian(
-        f, backend, x0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
+        f, rec.backend, x0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
     )
 end
 
@@ -54,10 +60,9 @@ end
 function prepare_pushforward(rec::TapedRecursion, x0::AbstractVector)
     f = StepWithTape(rec)
     cs = rec.const_example
-    # tx is a tuple of tangents; we supply an example tangent
     tx0 = (zero(x0),)
     return DI.prepare_pushforward(
-        f, backend, x0, tx0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
+        f, rec.backend, x0, tx0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
     )
 end
 
@@ -66,7 +71,7 @@ function jac_full(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     f = StepWithTape(rec)
     cs = rec.consts(x, rec.tape[t])
     return DI.jacobian(
-        f, prep, backend, x, DI.Constant(rec.tape[t]), (DI.Constant(c) for c in cs)...
+        f, prep, rec.backend, x, DI.Constant(rec.tape[t]), (DI.Constant(c) for c in cs)...
     )
 end
 
@@ -94,7 +99,7 @@ function _jvp_step_lin(
     res = DI.pushforward(
         f,
         prep_pf,
-        backend,
+        rec.backend,
         x,
         tx,
         DI.Constant(rec.tape[t]),

@@ -173,7 +173,7 @@ end
     s_prev = copy(s0)
     for t in 1:T
         s_prev = view(A, :, t) .* s_prev .+ view(B, :, t)
-        @inbounds S_ref[:, t] .= s_prev
+        S_ref[:, t] .= s_prev
     end
 
     # Scan
