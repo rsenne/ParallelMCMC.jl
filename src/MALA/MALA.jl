@@ -15,7 +15,7 @@ function _quad_Minv(r, cholM::Cholesky)
     return dot(w, w)
 end
 
-_logdet_M(::Nothing) = 0.0
+_logdet_M(::Nothing) = false  # Bool promotes to any numeric type without widening
 _logdet_M(cholM::Cholesky) = logdet(cholM)
 
 """
@@ -30,10 +30,11 @@ function logq_mala(
     y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real;
     cholM=nothing,
 )
+    T = typeof(ϵ)
     μ = x .+ ϵ .* _apply_M(gradlogp_x, cholM)
     d = length(x)
     r = y .- μ
-    return -0.5 * _quad_Minv(r, cholM) / (2ϵ) - (d / 2) * log(4π * ϵ) - 0.5 * _logdet_M(cholM)
+    return -T(0.5) * _quad_Minv(r, cholM) / (2ϵ) - (T(d) / 2) * log(T(4π) * ϵ) - T(0.5) * _logdet_M(cholM)
 end
 
 """
@@ -187,7 +188,7 @@ function mala_step_with_logα(
     logα           = (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
 
     accepted = log(u) < logα
-    x_next   = accepted ? y : x
+    x_next = accepted ? y : x
     return x_next, accepted, logα
 end
 
@@ -201,6 +202,107 @@ function mala_step_surrogate(
 )
     y = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
     return (a .* y) .+ ((1 - a) .* x)
+end
+
+# Apply mass matrix to a D×N matrix of gradient columns (same math as scalar,
+# matrix multiply broadcasts naturally).
+_apply_M_batched(G::AbstractMatrix, ::Nothing) = G
+_apply_M_batched(G::AbstractMatrix, cholM::Cholesky) = cholM.L * (cholM.L' * G)
+
+_apply_L_batched(Ξ::AbstractMatrix, ::Nothing) = Ξ
+_apply_L_batched(Ξ::AbstractMatrix, cholM::Cholesky) = cholM.L * Ξ
+
+"""
+Compute column-wise M⁻¹-norm squared: `[||R[:,n]||²_{M⁻¹}]_n`.
+`R` is D×N; returns a length-N vector.
+GPU-compatible (uses `sum(abs2, …; dims=1)` which works on CuArrays).
+Note: `cholM` must be `nothing` when using GPU arrays; the triangular solve
+`cholM.L \\ R` pulls device arrays to CPU.
+"""
+function _quad_Minv_batched(R::AbstractMatrix, ::Nothing)
+    return vec(sum(abs2, R; dims=1))
+end
+
+function _quad_Minv_batched(R::AbstractMatrix, cholM::Cholesky)
+    W = cholM.L \ R
+    return vec(sum(abs2, W; dims=1))
+end
+
+"""
+    logq_mala_batched(Y, X, gradlogp_X, ε; cholM=nothing)
+
+Compute `log q(Y[:,n] | X[:,n])` for all N chains simultaneously.
+`Y`, `X`, `gradlogp_X` are D×N; returns a length-N vector.
+"""
+function logq_mala_batched(
+    Y::AbstractMatrix,
+    X::AbstractMatrix,
+    gradlogp_X::AbstractMatrix,
+    ε::Real;
+    cholM=nothing,
+)
+    T = typeof(ε)
+    D = size(X, 1)
+    μ = X .+ ε .* _apply_M_batched(gradlogp_X, cholM)
+    R = Y .- μ
+    q = _quad_Minv_batched(R, cholM)
+    ldet = _logdet_M(cholM)
+    return @. -T(0.5) * q / (2ε) - (T(D) / 2) * log(T(4π) * ε) - T(0.5) * ldet
+end
+
+"""
+    mala_step_batched(logp_batch, gradlogp_batch, X, ε, Ξ, u; cholM=nothing)
+
+Run one MALA step for N chains simultaneously.
+
+- `X` :: D×N — current states (one chain per column).
+- `Ξ` :: D×N — N(0,I) noise.
+- `u` :: length-N — Uniform(0,1) draws.
+- `logp_batch(X)` → length-N log-densities.
+- `gradlogp_batch(X)` → D×N gradient matrix.
+
+Returns `(X_next::AbstractMatrix, accepted::AbstractVector)`.
+
+**GPU use:** pass `CuArray` inputs and GPU-compatible `logp_batch`/`gradlogp_batch`.
+Requires `cholM=nothing` for full on-device execution (Cholesky preconditioner involves
+a CPU-side triangular solve).  Use `eltype(X)` for `ε` to avoid float-type promotions
+that would pull data off GPU.
+"""
+function mala_step_batched(
+    logp_batch,
+    gradlogp_batch,
+    X::AbstractMatrix,
+    ε::Real,
+    Ξ::AbstractMatrix,
+    u::AbstractVector;
+    cholM=nothing,
+)
+    D, N = size(X)
+    size(Ξ) == (D, N) || throw(DimensionMismatch("X and Ξ must have the same size"))
+    length(u) == N    || throw(DimensionMismatch("u must have length N = size(X,2)"))
+
+    # Cast ε to element type of X to avoid float-promotion off GPU.
+    ε_T = eltype(X)(ε)
+
+    G_X = gradlogp_batch(X)                                                 # D×N
+    Y   = X .+ ε_T .* _apply_M_batched(G_X, cholM) .+
+          sqrt(2 * ε_T) .* _apply_L_batched(Ξ, cholM)                      # D×N
+
+    lp_X = logp_batch(X)                                                    # N
+    lp_Y = logp_batch(Y)                                                    # N
+    G_Y  = gradlogp_batch(Y)                                                # D×N
+
+    lq_YX = logq_mala_batched(Y, X, G_X, ε_T; cholM=cholM)                # N
+    lq_XY = logq_mala_batched(X, Y, G_Y, ε_T; cholM=cholM)                # N
+
+    logα = @. (lp_Y + lq_XY) - (lp_X + lq_YX)                            # N
+    accepted = @. log(u) < logα                                             # N Bool
+
+    # Select: proposal if accepted, current if rejected.
+    # reshape to 1×N so it broadcasts against D×N.
+    mask   = reshape(accepted, 1, N)
+    X_next = @. ifelse(mask, Y, X)                                          # D×N
+    return X_next, vec(accepted)
 end
 
 end # module

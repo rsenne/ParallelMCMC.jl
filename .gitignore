@@ -10,3 +10,4 @@ coverage
 docs/build/
 env
 node_modules
+LocalPreferences.toml

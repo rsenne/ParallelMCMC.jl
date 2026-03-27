@@ -81,10 +81,14 @@ function jac_diag(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     return diag(jac_full(rec, prep, x, t))
 end
 
-@inline function _rademacher!(z::AbstractVector, rng::AbstractRNG)
-    for i in eachindex(z)
-        z[i] = rand(rng, Bool) ? one(eltype(z)) : -one(eltype(z))
+@inline function _rademacher!(z::AbstractVector{T}, rng::AbstractRNG) where {T}
+    D    = length(z)
+    bits = rand(rng, Bool, D)
+    vals = Vector{T}(undef, D)
+    for i in 1:D
+        vals[i] = bits[i] ? one(T) : -one(T)
     end
+    copyto!(z, vals)   # host-to-device when z is a CuVector; plain copy otherwise
     return z
 end
 
@@ -127,13 +131,12 @@ function jac_diag_stoch(
     z = zbuf === nothing ? Vector{FT}(undef, D) : zbuf
     length(z) == D || throw(ArgumentError("zbuf must have length D"))
 
-    d = zeros(FT, D)
+    # d matches the array type of z (CuVector on GPU, Vector on CPU).
+    d = fill!(similar(z, D), zero(FT))
     for _ in 1:probes
         _rademacher!(z, rng)
         jv = _jvp_step_lin(rec, prep_pf, x, t, z)
-        for i in 1:D
-            d[i] += z[i] * jv[i]
-        end
+        @. d += z * jv
     end
     d .*= one(FT) / probes
     return d
