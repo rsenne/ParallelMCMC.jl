@@ -261,9 +261,10 @@ function _build_mala_deer_rec(
     step_lin = (x, te, a) -> MALA.mala_step_surrogate(logp, gradlogp, x, ε, te.ξ, a; cholM=cholM)
     consts   = (x, te) -> (MALA.mala_accept_indicator(logp, gradlogp, x, ε, te.ξ, te.u; cholM=cholM),)
 
+    FP = typeof(float(ε))
     return DEER.TapedRecursion(
         step_fwd, step_lin, tape;
-        consts=consts, const_example=(0.0,), backend=backend,
+        consts=consts, const_example=(zero(FP),), backend=backend,
     )
 end
 
