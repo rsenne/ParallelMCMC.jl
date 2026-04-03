@@ -81,6 +81,31 @@ function jac_diag(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
     return diag(jac_full(rec, prep, x, t))
 end
 
+"""
+Diagonal of the surrogate Jacobian via D JVP calls with standard basis vectors.
+
+GPU-compatible alternative to `jac_diag`: ForwardDiff's `jacobian` uses scalar
+indexing to seed Dual numbers (incompatible with CuArrays), but `pushforward`
+constructs Duals via element-wise broadcast and works on GPU.
+
+For standard basis e_i:  diag(J)[i] = (J e_i)[i],  accumulated as  d .+= e_i .* (J e_i).
+"""
+function jac_diag_via_jvps(rec::TapedRecursion, prep_pf, x::AbstractVector, t::Int)
+    D  = length(x)
+    FT = eltype(x)
+    # Copy the D×D identity matrix to the same device as x in one transfer.
+    I_buf = similar(x, D, D)
+    copyto!(I_buf, Matrix{FT}(I, D, D))
+    d = similar(x)
+    fill!(d, zero(FT))
+    for i in 1:D
+        ei = view(I_buf, :, i)        # column slice — no scalar indexing
+        jv = _jvp_step_lin(rec, prep_pf, x, t, ei)
+        d .+= ei .* jv                # accumulate exact J[i,i] at position i
+    end
+    return d
+end
+
 @inline function _rademacher!(z::AbstractVector{T}, rng::AbstractRNG) where {T}
     D    = length(z)
     bits = rand(rng, Bool, D)
