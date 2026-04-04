@@ -135,10 +135,7 @@ gradlogp_iface(x) = -x
         model = DensityModel(logp_iface, gradlogp_iface, 2)
         sampler = MALASampler(0.15)
 
-        chain = sample(
-            model, sampler, 200;
-            chain_type=MCMCChains.Chains, progress=false,
-        )
+        chain = sample(model, sampler, 200; chain_type=MCMCChains.Chains, progress=false)
 
         @test chain isa MCMCChains.Chains
         @test size(chain, 1) == 200
@@ -165,8 +162,11 @@ gradlogp_iface(x) = -x
         sampler = MALASampler(0.15)
 
         chain = sample(
-            model, sampler, 50;
-            chain_type=MCMCChains.Chains, progress=false,
+            model,
+            sampler,
+            50;
+            chain_type=MCMCChains.Chains,
+            progress=false,
             param_names=[:mu, :sigma],
         )
 
@@ -182,8 +182,12 @@ gradlogp_iface(x) = -x
         sampler = MALASampler(0.3)
 
         chain = sample(
-            MersenneTwister(2025), model, sampler, 20_000;
-            chain_type=MCMCChains.Chains, progress=false,
+            MersenneTwister(2025),
+            model,
+            sampler,
+            20_000;
+            chain_type=MCMCChains.Chains,
+            progress=false,
         )
 
         burn = 3_000

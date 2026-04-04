@@ -107,8 +107,12 @@ end
     sampler = DEERSampler(0.05; T=16)
 
     chain = sample(
-        MersenneTwister(1), model, sampler, 100;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(1),
+        model,
+        sampler,
+        100;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     @test chain isa MCMCChains.Chains
@@ -125,8 +129,12 @@ end
     sampler = DEERSampler(0.05; T=16)
 
     chain = sample(
-        MersenneTwister(2), model, sampler, 40;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(2),
+        model,
+        sampler,
+        40;
+        chain_type=MCMCChains.Chains,
+        progress=false,
         param_names=[:mu, :sigma],
     )
 
@@ -140,28 +148,37 @@ end
     sampler = DEERSampler(0.1; T=32, damping=0.5)
 
     chain = sample(
-        MersenneTwister(2025), model, sampler, 5_000;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(2025),
+        model,
+        sampler,
+        5_000;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     burn = 500
     post = Array(chain[burn:end, :, :])  # (N-burn) × D
 
-    mu   = vec(mean(post; dims=1))
+    mu = vec(mean(post; dims=1))
     vars = vec(var(post; dims=1))
 
-    @test maximum(abs.(mu))       < 0.15
+    @test maximum(abs.(mu)) < 0.15
     @test maximum(abs.(vars .- 1.0)) < 0.25
 end
 
 @testset "DEERSampler parallel chains via MCMCThreads" begin
-    model   = DensityModel(logp_deer, gradlogp_deer, 2)
+    model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = DEERSampler(0.05; T=8)
 
     chains = sample(
-        MersenneTwister(42), model, sampler,
-        ParallelMCMC.AbstractMCMC.MCMCThreads(), 40, 2;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(42),
+        model,
+        sampler,
+        ParallelMCMC.AbstractMCMC.MCMCThreads(),
+        40,
+        2;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     @test chains isa MCMCChains.Chains

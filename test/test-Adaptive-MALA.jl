@@ -7,19 +7,18 @@ using MCMCChains
 using ParallelMCMC
 const MALA = ParallelMCMC.MALA
 
-logp_adapt(x)      = -0.5 * dot(x, x)
-gradlogp_adapt(x)  = -x
-
+logp_adapt(x) = -0.5 * dot(x, x)
+gradlogp_adapt(x) = -x
 
 @testset "mala_step_with_logα returns same x_next and accepted as mala_step_full" begin
     rng = MersenneTwister(1)
-    D   = 4
+    D = 4
     for _ in 1:20
-        x  = randn(rng, D)
-        ξ  = randn(rng, D)
-        u  = rand(rng) * 0.999 + 1e-15
+        x = randn(rng, D)
+        ξ = randn(rng, D)
+        u = rand(rng) * 0.999 + 1e-15
 
-        x1, a1       = MALA.mala_step_full(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
+        x1, a1 = MALA.mala_step_full(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
         x2, a2, logα = MALA.mala_step_with_logα(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
 
         @test x1 == x2
@@ -33,22 +32,22 @@ end
 @testset "AdaptiveMALASampler construction" begin
     s = AdaptiveMALASampler(0.1)
     @test s isa ParallelMCMC.AbstractMCMC.AbstractSampler
-    @test s.epsilon_init  == 0.1
-    @test s.n_warmup      == 1000
+    @test s.epsilon_init == 0.1
+    @test s.n_warmup == 1000
     @test s.target_accept ≈ 0.574
-    @test s.gamma  ≈ 0.05
-    @test s.t0     ≈ 10.0
-    @test s.kappa  ≈ 0.75
+    @test s.gamma ≈ 0.05
+    @test s.t0 ≈ 10.0
+    @test s.kappa ≈ 0.75
     @test s.cholM === nothing
 
     s2 = AdaptiveMALASampler(0.05; n_warmup=500, target_accept=0.65)
-    @test s2.n_warmup      == 500
+    @test s2.n_warmup == 500
     @test s2.target_accept ≈ 0.65
 end
 
 @testset "AdaptiveMALASampler initial step" begin
-    rng     = MersenneTwister(42)
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 3)
+    rng = MersenneTwister(42)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 3)
     sampler = AdaptiveMALASampler(0.1)
 
     trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
@@ -57,18 +56,18 @@ end
     @test state isa AdaptiveMALAState
     @test length(trans.x) == 3
     @test isfinite(trans.logp)
-    @test trans.step_size  == sampler.epsilon_init
-    @test trans.is_warmup  == true
-    @test state.step       == 0
-    @test state.epsilon    == sampler.epsilon_init
+    @test trans.step_size == sampler.epsilon_init
+    @test trans.is_warmup == true
+    @test state.step == 0
+    @test state.epsilon == sampler.epsilon_init
     @test state.epsilon_bar == sampler.epsilon_init
 end
 
 @testset "AdaptiveMALASampler initial step respects initial_params" begin
-    rng     = MersenneTwister(7)
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 2)
+    rng = MersenneTwister(7)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.1)
-    x0      = [1.0, -1.0]
+    x0 = [1.0, -1.0]
     x0_copy = copy(x0)
 
     trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler; initial_params=x0)
@@ -78,8 +77,8 @@ end
 end
 
 @testset "step counter increments during warmup" begin
-    rng     = MersenneTwister(5)
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 2)
+    rng = MersenneTwister(5)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.05; n_warmup=10)
 
     _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
@@ -92,9 +91,9 @@ end
 end
 
 @testset "step size changes during warmup but freezes after" begin
-    rng     = MersenneTwister(11)
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 3)
-    n_w     = 20
+    rng = MersenneTwister(11)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 3)
+    n_w = 20
     sampler = AdaptiveMALASampler(0.1; n_warmup=n_w)
 
     _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
@@ -112,8 +111,8 @@ end
     # First post-warmup step: is_warmup should be false, step_size should be frozen ε̄
     epsilon_bar_final = state.epsilon_bar
     t_post, state_post = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
-    @test t_post.is_warmup  == false
-    @test t_post.step_size  ≈ epsilon_bar_final
+    @test t_post.is_warmup == false
+    @test t_post.step_size ≈ epsilon_bar_final
 
     # Subsequent post-warmup steps keep the same step_size
     _, state_post2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state_post)
@@ -121,9 +120,9 @@ end
 end
 
 @testset "adapted step size targets acceptance rate" begin
-    D       = 5
-    model   = DensityModel(logp_adapt, gradlogp_adapt, D)
-    n_w     = 2_000
+    D = 5
+    model = DensityModel(logp_adapt, gradlogp_adapt, D)
+    n_w = 2_000
     sampler = AdaptiveMALASampler(0.5; n_warmup=n_w, target_accept=0.574)
 
     # Use a single persistent RNG throughout warmup and post-warmup.
@@ -146,7 +145,7 @@ end
 end
 
 @testset "sample() end-to-end with AdaptiveMALASampler" begin
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 2)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.2; n_warmup=50)
 
     samples = sample(MersenneTwister(1), model, sampler, 100; progress=false)
@@ -154,22 +153,26 @@ end
 end
 
 @testset "sample() with chain_type=Chains" begin
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 2)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.2; n_warmup=50)
 
     chain = sample(
-        MersenneTwister(1), model, sampler, 150;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(1),
+        model,
+        sampler,
+        150;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     @test chain isa MCMCChains.Chains
     @test size(chain, 1) == 150
 
     internals = names(chain, :internals)
-    @test :logp       in internals
-    @test :accepted   in internals
-    @test :step_size  in internals
-    @test :is_warmup  in internals
+    @test :logp in internals
+    @test :accepted in internals
+    @test :step_size in internals
+    @test :is_warmup in internals
 
     @test all(isfinite, chain[:logp])
     @test all(x -> x == 0.0 || x == 1.0, chain[:accepted])
@@ -182,18 +185,22 @@ end
 end
 
 @testset "step_size is constant after warmup" begin
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 3)
-    n_w     = 30
+    model = DensityModel(logp_adapt, gradlogp_adapt, 3)
+    n_w = 30
     sampler = AdaptiveMALASampler(0.1; n_warmup=n_w)
 
     chain = sample(
-        MersenneTwister(3), model, sampler, n_w + 50;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(3),
+        model,
+        sampler,
+        n_w + 50;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     # Filter by is_warmup flag to avoid off-by-one from the init transition.
-    is_wup      = vec(chain[:is_warmup]) .== 1.0
-    step_sizes  = vec(chain[:step_size])
+    is_wup = vec(chain[:is_warmup]) .== 1.0
+    step_sizes = vec(chain[:step_size])
     post_warmup = step_sizes[.!is_wup]
 
     @test length(post_warmup) > 0
@@ -202,34 +209,43 @@ end
 end
 
 @testset "AdaptiveMALASampler stationary distribution" begin
-    D       = 3
-    model   = DensityModel(logp_adapt, gradlogp_adapt, D)
-    n_w     = 1_000
+    D = 3
+    model = DensityModel(logp_adapt, gradlogp_adapt, D)
+    n_w = 1_000
     sampler = AdaptiveMALASampler(0.5; n_warmup=n_w)
 
     chain = sample(
-        MersenneTwister(2025), model, sampler, n_w + 5_000;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(2025),
+        model,
+        sampler,
+        n_w + 5_000;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     # Discard warmup
     post = Array(chain[(n_w + 1):end, :, :])   # 5000 × D
 
-    mu   = vec(mean(post; dims=1))
+    mu = vec(mean(post; dims=1))
     vars = vec(var(post; dims=1))
 
-    @test maximum(abs.(mu))          < 0.15
+    @test maximum(abs.(mu)) < 0.15
     @test maximum(abs.(vars .- 1.0)) < 0.25
 end
 
 @testset "AdaptiveMALASampler parallel chains via MCMCThreads" begin
-    model   = DensityModel(logp_adapt, gradlogp_adapt, 2)
+    model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.1; n_warmup=20)
 
     chains = sample(
-        MersenneTwister(42), model, sampler,
-        ParallelMCMC.AbstractMCMC.MCMCThreads(), 60, 2;
-        chain_type=MCMCChains.Chains, progress=false,
+        MersenneTwister(42),
+        model,
+        sampler,
+        ParallelMCMC.AbstractMCMC.MCMCThreads(),
+        60,
+        2;
+        chain_type=MCMCChains.Chains,
+        progress=false,
     )
 
     @test chains isa MCMCChains.Chains

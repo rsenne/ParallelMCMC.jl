@@ -27,14 +27,14 @@ With mass matrix M (passed as `cholM = cholesky(M)`):
 With `cholM=nothing` (default), uses identity M = I.
 """
 function logq_mala(
-    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real;
-    cholM=nothing,
+    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real; cholM=nothing
 )
     T = typeof(ϵ)
     μ = x .+ ϵ .* _apply_M(gradlogp_x, cholM)
     d = length(x)
     r = y .- μ
-    return -T(0.5) * _quad_Minv(r, cholM) / (2ϵ) - (T(d) / 2) * log(T(4π) * ϵ) - T(0.5) * _logdet_M(cholM)
+    return -T(0.5) * _quad_Minv(r, cholM) / (2ϵ) - (T(d) / 2) * log(T(4π) * ϵ) -
+           T(0.5) * _logdet_M(cholM)
 end
 
 """
@@ -53,8 +53,7 @@ Returns:
 - x_next
 """
 function mala_step_taped(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real;
-    cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
@@ -108,7 +107,7 @@ end
 
 "Compute the MALA proposal map y = x + ϵ M ∇logp(x) + √(2ϵ) L ξ."
 function mala_proposal(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector; cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector; cholM=nothing
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     g_x = gradlogp(x)
@@ -117,7 +116,7 @@ end
 
 "Compute log acceptance ratio logα(x→y) for MALA."
 function mala_logα(
-    logp, gradlogp, x::AbstractVector, y::AbstractVector, ϵ::Real; cholM=nothing,
+    logp, gradlogp, x::AbstractVector, y::AbstractVector, ϵ::Real; cholM=nothing
 )
     g_x = gradlogp(x)
     g_y = gradlogp(y)
@@ -134,12 +133,11 @@ Returns a float in {0, 1} matching the precision of `u`, for use as a constant
 gate in the DEER surrogate step.
 """
 function mala_accept_indicator(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real;
-    cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
 )
-    y    = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
+    y = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
     logα = mala_logα(logp, gradlogp, x, y, ϵ; cholM=cholM)
-    FP   = typeof(float(u))
+    FP = typeof(float(u))
     return (log(u) < logα) ? one(FP) : zero(FP)
 end
 
@@ -153,8 +151,7 @@ separately which evaluates it five times.
 Returns `(x_next, accepted::Bool)`.
 """
 function mala_step_full(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real;
-    cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
 )
     x_next, accepted, _ = mala_step_with_logα(logp, gradlogp, x, ϵ, ξ, u; cholM=cholM)
     return x_next, accepted
@@ -170,22 +167,21 @@ The returned `logα` is the un-clamped value; the actual acceptance probability 
 Returns `(x_next, accepted::Bool, logα)`.
 """
 function mala_step_with_logα(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real;
-    cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
 
     g_x = gradlogp(x)
-    y   = x .+ ϵ .* _apply_M(g_x, cholM) .+ sqrt(2ϵ) .* _apply_L(ξ, cholM)
+    y = x .+ ϵ .* _apply_M(g_x, cholM) .+ sqrt(2ϵ) .* _apply_L(ξ, cholM)
 
     logp_x = logp(x)
     logp_y = logp(y)
-    g_y    = gradlogp(y)
+    g_y = gradlogp(y)
 
     logq_y_given_x = logq_mala(y, x, g_x, ϵ; cholM=cholM)
     logq_x_given_y = logq_mala(x, y, g_y, ϵ; cholM=cholM)
-    logα           = (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
+    logα = (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
 
     accepted = log(u) < logα
     x_next = accepted ? y : x
@@ -197,8 +193,7 @@ Stop-gradient surrogate step used for Jacobians.
 `a` (0 or 1) must be provided as a constant by the DEER machinery.
 """
 function mala_step_surrogate(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, a::Real;
-    cholM=nothing,
+    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, a::Real; cholM=nothing
 )
     y = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
     return (a .* y) .+ ((1 - a) .* x)
@@ -235,11 +230,7 @@ Compute `log q(Y[:,n] | X[:,n])` for all N chains simultaneously.
 `Y`, `X`, `gradlogp_X` are D×N; returns a length-N vector.
 """
 function logq_mala_batched(
-    Y::AbstractMatrix,
-    X::AbstractMatrix,
-    gradlogp_X::AbstractMatrix,
-    ε::Real;
-    cholM=nothing,
+    Y::AbstractMatrix, X::AbstractMatrix, gradlogp_X::AbstractMatrix, ε::Real; cholM=nothing
 )
     T = typeof(ε)
     D = size(X, 1)
@@ -279,18 +270,19 @@ function mala_step_batched(
 )
     D, N = size(X)
     size(Ξ) == (D, N) || throw(DimensionMismatch("X and Ξ must have the same size"))
-    length(u) == N    || throw(DimensionMismatch("u must have length N = size(X,2)"))
+    length(u) == N || throw(DimensionMismatch("u must have length N = size(X,2)"))
 
     # Cast ε to element type of X to avoid float-promotion off GPU.
     ε_T = eltype(X)(ε)
 
     G_X = gradlogp_batch(X)                                                 # D×N
-    Y   = X .+ ε_T .* _apply_M_batched(G_X, cholM) .+
-          sqrt(2 * ε_T) .* _apply_L_batched(Ξ, cholM)                      # D×N
+    Y =
+        X .+ ε_T .* _apply_M_batched(G_X, cholM) .+
+        sqrt(2 * ε_T) .* _apply_L_batched(Ξ, cholM)                      # D×N
 
     lp_X = logp_batch(X)                                                    # N
     lp_Y = logp_batch(Y)                                                    # N
-    G_Y  = gradlogp_batch(Y)                                                # D×N
+    G_Y = gradlogp_batch(Y)                                                # D×N
 
     lq_YX = logq_mala_batched(Y, X, G_X, ε_T; cholM=cholM)                # N
     lq_XY = logq_mala_batched(X, Y, G_Y, ε_T; cholM=cholM)                # N
@@ -300,7 +292,7 @@ function mala_step_batched(
 
     # Select: proposal if accepted, current if rejected.
     # reshape to 1×N so it broadcasts against D×N.
-    mask   = reshape(accepted, 1, N)
+    mask = reshape(accepted, 1, N)
     X_next = @. ifelse(mask, Y, X)                                          # D×N
     return X_next, vec(accepted)
 end

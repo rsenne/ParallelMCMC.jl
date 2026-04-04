@@ -1,10 +1,10 @@
 module DynamicPPLExt
 
 using ParallelMCMC
-import ADTypes
-import DynamicPPL
-import LogDensityProblems
-import LogDensityProblemsAD
+using ADTypes: ADTypes
+using DynamicPPL: DynamicPPL
+using LogDensityProblems: LogDensityProblems
+using LogDensityProblemsAD: LogDensityProblemsAD
 
 """
     DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoMooncake(; config=nothing))
@@ -39,24 +39,24 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
   `ad_backend = ADTypes.AutoEnzyme()`.
 """
 function ParallelMCMC.DensityModel(
-    turing_model::DynamicPPL.Model;
-    ad_backend=ADTypes.AutoMooncake(; config=nothing),
+    turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoMooncake(; config=nothing)
 )
     # Build the LogDensityProblems-compatible gradient object
-    ld  = DynamicPPL.LogDensityFunction(turing_model)
+    ld = DynamicPPL.LogDensityFunction(turing_model)
     ldg = LogDensityProblemsAD.ADgradient(ad_backend, ld)
 
     caps = LogDensityProblems.capabilities(ldg)
-    caps isa LogDensityProblems.LogDensityOrder{0} &&
-        error("AD gradient setup failed. The wrapped model must support gradients. " *
-              "Ensure your ad_backend is compatible.")
+    caps isa LogDensityProblems.LogDensityOrder{0} && error(
+        "AD gradient setup failed. The wrapped model must support gradients. " *
+        "Ensure your ad_backend is compatible.",
+    )
 
     dim = LogDensityProblems.dimension(ldg)
 
     # Try to extract parameter names; fall back to nothing on any error or mismatch.
     param_names = _try_extract_param_names(turing_model, dim)
 
-    logp(x)     = LogDensityProblems.logdensity(ldg, x)
+    logp(x) = LogDensityProblems.logdensity(ldg, x)
     function gradlogp(x)
         _, g = LogDensityProblems.logdensity_and_gradient(ldg, x)
         return g
@@ -88,9 +88,9 @@ function _try_extract_param_names(model::DynamicPPL.Model, expected_dim::Int)
             return names
         else
             @warn "ParallelMCMC: parameter name extraction produced $(length(names)) names " *
-                  "but model has $expected_dim unconstrained dimensions " *
-                  "(likely due to bijector dimension changes, e.g. Dirichlet/LKJ constraints). " *
-                  "Falling back to generic x[1], x[2], ... names."
+                "but model has $expected_dim unconstrained dimensions " *
+                "(likely due to bijector dimension changes, e.g. Dirichlet/LKJ constraints). " *
+                "Falling back to generic x[1], x[2], ... names."
             return nothing
         end
     catch

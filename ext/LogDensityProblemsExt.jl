@@ -1,7 +1,7 @@
 module LogDensityProblemsExt
 
 using ParallelMCMC
-import LogDensityProblems
+using LogDensityProblems: LogDensityProblems
 
 """
     DensityModel(ld; param_names=nothing)
@@ -44,9 +44,10 @@ names automatically.
 """
 function ParallelMCMC.DensityModel(ld; param_names=nothing)
     caps = LogDensityProblems.capabilities(ld)
-    caps isa LogDensityProblems.LogDensityOrder{0} &&
-        error("LogDensityProblems model must support gradients (LogDensityOrder{1} or higher). " *
-              "Wrap it with LogDensityProblemsAD.ADgradient first.")
+    caps isa LogDensityProblems.LogDensityOrder{0} && error(
+        "LogDensityProblems model must support gradients (LogDensityOrder{1} or higher). " *
+        "Wrap it with LogDensityProblemsAD.ADgradient first.",
+    )
 
     dim = LogDensityProblems.dimension(ld)
 

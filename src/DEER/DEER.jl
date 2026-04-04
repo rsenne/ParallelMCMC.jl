@@ -36,8 +36,12 @@ end
 
 "Main constructor."
 function TapedRecursion(
-    step_fwd, step_lin, tape::Vector;
-    consts=(_x, _tt) -> (), const_example=(), backend::AbstractADType=DEFAULT_BACKEND,
+    step_fwd,
+    step_lin,
+    tape::Vector;
+    consts=(_x, _tt) -> (),
+    const_example=(),
+    backend::AbstractADType=DEFAULT_BACKEND,
 )
     return TapedRecursion(step_fwd, step_lin, consts, tape, const_example, backend)
 end
@@ -50,7 +54,7 @@ end
 
 "Prepare Jacobian for the surrogate step (reusable across t as long as tape element type is stable)."
 function prepare(rec::TapedRecursion, x0::AbstractVector)
-    f  = StepWithTape(rec)
+    f = StepWithTape(rec)
     cs = rec.const_example
     return DI.prepare_jacobian(
         f, rec.backend, x0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
@@ -59,8 +63,8 @@ end
 
 "Prepare pushforward (JVP) for the surrogate step_lin."
 function prepare_pushforward(rec::TapedRecursion, x0::AbstractVector)
-    f   = StepWithTape(rec)
-    cs  = rec.const_example
+    f = StepWithTape(rec)
+    cs = rec.const_example
     tx0 = (zero(x0),)
     return DI.prepare_pushforward(
         f, rec.backend, x0, tx0, DI.Constant(rec.tape[1]), (DI.Constant(c) for c in cs)...
@@ -69,7 +73,7 @@ end
 
 "Full Jacobian of surrogate step_lin(x, tape_t, consts...) w.r.t. x."
 function jac_full(rec::TapedRecursion, prep, x::AbstractVector, t::Int)
-    f  = StepWithTape(rec)
+    f = StepWithTape(rec)
     cs = rec.consts(x, rec.tape[t])
     return DI.jacobian(
         f, prep, rec.backend, x, DI.Constant(rec.tape[t]), (DI.Constant(c) for c in cs)...
@@ -91,7 +95,7 @@ constructs Duals via element-wise broadcast and works on GPU.
 For standard basis e_i:  diag(J)[i] = (J e_i)[i],  accumulated as  d .+= e_i .* (J e_i).
 """
 function jac_diag_via_jvps(rec::TapedRecursion, prep_pf, x::AbstractVector, t::Int)
-    D  = length(x)
+    D = length(x)
     FT = eltype(x)
     # Copy the D×D identity matrix to the same device as x in one transfer.
     I_buf = similar(x, D, D)
@@ -107,7 +111,7 @@ function jac_diag_via_jvps(rec::TapedRecursion, prep_pf, x::AbstractVector, t::I
 end
 
 @inline function _rademacher!(z::AbstractVector{T}, rng::AbstractRNG) where {T}
-    D    = length(z)
+    D = length(z)
     bits = rand(rng, Bool, D)
     vals = Vector{T}(undef, D)
     for i in 1:D
@@ -120,12 +124,17 @@ end
 function _jvp_step_lin(
     rec::TapedRecursion, prep_pf, x::AbstractVector, t::Int, v::AbstractVector
 )
-    f  = StepWithTape(rec)
+    f = StepWithTape(rec)
     cs = rec.consts(x, rec.tape[t])
     tx = (v,)
     res = DI.pushforward(
-        f, prep_pf, rec.backend, x, tx,
-        DI.Constant(rec.tape[t]), (DI.Constant(c) for c in cs)...,
+        f,
+        prep_pf,
+        rec.backend,
+        x,
+        tx,
+        DI.Constant(rec.tape[t]),
+        (DI.Constant(c) for c in cs)...,
     )
     return res isa Tuple ? res[end] : res
 end
@@ -149,8 +158,8 @@ function jac_diag_stoch(
     rng::AbstractRNG=Random.default_rng(),
     zbuf::Union{Nothing,AbstractVector}=nothing,
 )
-    D      = length(x)
-    FT     = float(eltype(x))
+    D = length(x)
+    FT = float(eltype(x))
     probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
 
     z = zbuf === nothing ? Vector{FT}(undef, D) : zbuf
@@ -189,25 +198,26 @@ Returns:
 function solve_affine_scan_diag(A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector)
     D, T = size(A)
     size(B) == (D, T) || throw(ArgumentError("B must have the same size as A"))
-    length(s0) == D   || throw(ArgumentError("s0 length must match size(A,1)"))
+    length(s0) == D || throw(ArgumentError("s0 length must match size(A,1)"))
 
     # Work on copies; swap buffers each level to avoid allocating inside the loop.
-    α    = copy(A)
-    β    = copy(B)
+    α = copy(A)
+    β = copy(B)
     αnew = similar(α)
     βnew = similar(β)
 
     offset = 1
     while offset < T
         # Columns 1:offset are unchanged at this level.
-        αnew[:, 1:offset]       .= α[:, 1:offset]
-        βnew[:, 1:offset]       .= β[:, 1:offset]
+        αnew[:, 1:offset] .= α[:, 1:offset]
+        βnew[:, 1:offset] .= β[:, 1:offset]
 
         # Columns offset+1:T combine with their left neighbour at distance `offset`.
         #   αnew[:,t] = α[:,t] * α[:,t-offset]
         #   βnew[:,t] = α[:,t] * β[:,t-offset] + β[:,t]
-        αnew[:, offset+1:T] .= α[:, offset+1:T] .* α[:, 1:T-offset]
-        βnew[:, offset+1:T] .= α[:, offset+1:T] .* β[:, 1:T-offset] .+ β[:, offset+1:T]
+        αnew[:, (offset + 1):T] .= α[:, (offset + 1):T] .* α[:, 1:(T - offset)]
+        βnew[:, (offset + 1):T] .=
+            α[:, (offset + 1):T] .* β[:, 1:(T - offset)] .+ β[:, (offset + 1):T]
 
         α, αnew = αnew, α
         β, βnew = βnew, β
@@ -242,12 +252,12 @@ function deer_update(
     probes::Int=1,
     rng::AbstractRNG=Random.default_rng(),
 )
-    s0   = vec(s0_in)
+    s0 = vec(s0_in)
     D, T = size(S)
-    length(s0) == D        || throw(ArgumentError("S must be D×T with D=length(s0)"))
-    T == length(rec.tape)  || throw(ArgumentError("size(S,2) must match length(rec.tape)"))
+    length(s0) == D || throw(ArgumentError("S must be D×T with D=length(s0)"))
+    T == length(rec.tape) || throw(ArgumentError("size(S,2) must match length(rec.tape)"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
-    probes ≥ 1             || throw(ArgumentError("probes must be ≥ 1"))
+    probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
 
     FT = float(eltype(s0))
 
@@ -256,33 +266,58 @@ function deer_update(
         A = similar(S)
         B = similar(S)
 
-        nt   = Base.Threads.maxthreadid()
-        # zbufs for stoch_diag: match array type of s0 so GPU backends work correctly.
-        zbufs = jacobian === :stoch_diag ? [similar(s0, D) for _ in 1:nt] : nothing
-        rngs  = if jacobian === :stoch_diag
-            seeds = rand(rng, UInt, nt)
-            [MersenneTwister(seeds[i]) for i in 1:nt]
+        # GPU arrays (CuVector, etc.) require a sequential loop:
+        #   (a) ForwardDiff's prepared pushforward stores a single mutable xdual_tmp
+        #       buffer — concurrent writes from @threads cause a data race on GPU.
+        #   (b) GPU kernels are internally parallel; Julia-thread parallelism adds no
+        #       benefit and breaks device memory safety.
+        on_gpu = !(s0 isa Array)
+
+        if on_gpu
+            zbuf_gpu = jacobian === :stoch_diag ? similar(s0, D) : nothing
+            for t in 1:T
+                xbar = t == 1 ? s0 : S[:, t - 1]
+                jt = if jacobian === :diag
+                    jac_diag_via_jvps(rec, prep, xbar, t)
+                else
+                    jac_diag_stoch(rec, prep, xbar, t; probes=probes, rng=rng, zbuf=zbuf_gpu)
+                end
+                ft = rec.step_fwd(xbar, rec.tape[t])
+                view(A, :, t) .= jt
+                view(B, :, t) .= ft .- jt .* xbar
+            end
         else
-            nothing
-        end
-
-        @threads for t in 1:T
-            tid  = threadid()
-            # S[:, t-1] returns a concrete column copy — Vector on CPU, CuVector on GPU.
-            xbar = t == 1 ? s0 : S[:, t - 1]
-
-            jt = if jacobian === :diag
-                jac_diag(rec, prep, xbar, t)
+            nt = Base.Threads.maxthreadid()
+            # zbufs for stoch_diag: one per thread to avoid sharing.
+            zbufs = jacobian === :stoch_diag ? [similar(s0, D) for _ in 1:nt] : nothing
+            rngs = if jacobian === :stoch_diag
+                seeds = rand(rng, UInt, nt)
+                [MersenneTwister(seeds[i]) for i in 1:nt]
             else
-                jac_diag_stoch(
-                    rec, prep, xbar, t; probes=probes, rng=rngs[tid], zbuf=zbufs[tid],
-                )
+                nothing
             end
 
-            ft = rec.step_fwd(xbar, rec.tape[t])
-            # Broadcast column assignment: works on both CPU Matrix and GPU CuMatrix.
-            view(A, :, t) .= jt
-            view(B, :, t) .= ft .- jt .* xbar
+            @threads for t in 1:T
+                tid = threadid()
+                # S[:, t-1] returns a column copy — Vector on CPU.
+                xbar = t == 1 ? s0 : S[:, t - 1]
+                jt = if jacobian === :diag
+                    jac_diag(rec, prep, xbar, t)
+                else
+                    jac_diag_stoch(
+                        rec,
+                        prep,
+                        xbar,
+                        t;
+                        probes=probes,
+                        rng=rngs[tid],
+                        zbuf=zbufs[tid],
+                    )
+                end
+                ft = rec.step_fwd(xbar, rec.tape[t])
+                view(A, :, t) .= jt
+                view(B, :, t) .= ft .- jt .* xbar
+            end
         end
 
         S_new = solve_affine_scan_diag(A, B, s0)
@@ -293,28 +328,34 @@ function deer_update(
 
     elseif jacobian === :full
         A_mats = Vector{Matrix{FT}}(undef, T)
-        b      = Matrix{FT}(undef, D, T)
-        xbuf   = zeros(FT, D)
+        b = Matrix{FT}(undef, D, T)
+        xbuf = zeros(FT, D)
 
         for t in 1:T
             xbar = if t == 1
                 s0
             else
-                for i in 1:D; xbuf[i] = S[i, t - 1]; end
+                for i in 1:D
+                    ;
+                    xbuf[i] = S[i, t - 1];
+                end
                 xbuf
             end
 
-            Jt      = jac_full(rec, prep, xbar, t)
+            Jt = jac_full(rec, prep, xbar, t)
             A_mats[t] = Jt
-            ft      = rec.step_fwd(xbar, rec.tape[t])
-            tmp     = Jt * xbar
-            for i in 1:D; b[i, t] = ft[i] - tmp[i]; end
+            ft = rec.step_fwd(xbar, rec.tape[t])
+            tmp = Jt * xbar
+            for i in 1:D
+                ;
+                b[i, t] = ft[i] - tmp[i];
+            end
         end
 
-        S_new  = Matrix{FT}(undef, D, T)
+        S_new = Matrix{FT}(undef, D, T)
         s_prev = copy(s0)
         for t in 1:T
-            s_prev      = A_mats[t] * s_prev .+ view(b, :, t)
+            s_prev = A_mats[t] * s_prev .+ view(b, :, t)
             S_new[:, t] .= s_prev
         end
         if damping != 1.0
@@ -381,8 +422,8 @@ function solve(
     return_info::Bool=false,
 )
     s0 = vec(s0_in)
-    D  = length(s0)
-    T  = length(rec.tape)
+    D = length(s0)
+    T = length(rec.tape)
 
     maxiter ≥ 1 || throw(ArgumentError("maxiter must be ≥ 1"))
     tol_abs ≥ 0 || throw(ArgumentError("tol_abs must be ≥ 0"))
@@ -399,7 +440,9 @@ function solve(
         copy(init)
     end
 
-    prep = if jacobian === :stoch_diag
+    # GPU arrays use JVP-based diagonal (broadcast-safe), which needs a pushforward prep.
+    # CPU :diag uses the full Jacobian prep (chunked ForwardDiff, faster for small D).
+    prep = if jacobian === :stoch_diag || (jacobian === :diag && !(s0 isa Array))
         prepare_pushforward(rec, s0)
     elseif jacobian === :full || jacobian === :diag
         prepare(rec, s0)
@@ -407,35 +450,36 @@ function solve(
         nothing
     end
 
-    converged   = false
+    converged = false
     last_metric = Inf
-    iters       = 0
+    iters = 0
 
     for iter in 1:maxiter
         iters = iter
         S_new = deer_update(
-            rec, s0, S, prep; jacobian=jacobian, damping=damping, probes=probes, rng=rng,
+            rec, s0, S, prep; jacobian=jacobian, damping=damping, probes=probes, rng=rng
         )
 
         # Single pair of reductions over the full D×T matrix — one GPU kernel each.
         # This replaces T per-column scalar loops and is efficient on both CPU and GPU.
-        Δ_max   = maximum(abs.(S_new .- S))
+        Δ_max = maximum(abs.(S_new .- S))
         S_scale = tol_abs + tol_rel * maximum(abs.(S_new))
-        metric  = Δ_max / S_scale
+        metric = Δ_max / S_scale
 
-        S           = S_new
+        S = S_new
         last_metric = metric
-        metric ≤ 1 && (converged = true; break)
+        metric ≤ 1 && (converged=true; break)
     end
 
     return_info || return S
-    return S, (
-        converged = converged,
-        iters     = iters,
-        metric    = last_metric,
-        jacobian  = jacobian,
-        damping   = damping,
-        probes    = probes,
+    return S,
+    (
+        converged=converged,
+        iters=iters,
+        metric=last_metric,
+        jacobian=jacobian,
+        damping=damping,
+        probes=probes,
     )
 end
 
