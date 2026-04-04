@@ -31,12 +31,10 @@ else
     broadcast and is unconditionally available.  AutoEnzyme is added when
     Enzyme is loadable and its CUDA extension is functional.
     =#
-    _gpu_backends = Pair{String,ADTypes.AbstractADType}[
-        "ForwardDiff" => ADTypes.AutoForwardDiff(),
-    ]
+    _gpu_backends = Pair{String,ADTypes.AbstractADType}["ForwardDiff" => ADTypes.AutoForwardDiff(),]
     if !Sys.iswindows()
         try
-            import Enzyme
+            using Enzyme: Enzyme
             push!(_gpu_backends, "Enzyme" => ADTypes.AutoEnzyme())
         catch
             @warn "Enzyme not loadable — skipping Enzyme GPU DEER tests"
@@ -116,7 +114,8 @@ else
     end
 
     @testset "DEER.solve GPU backend=$bname (stoch_diag)" for (bname, backend) in
-                                                               _gpu_backends
+                                                              _gpu_backends
+
         rng = MersenneTwister(7)
         D, T = 4, 32
         ε = 0.05f0
@@ -164,7 +163,9 @@ else
         rng = MersenneTwister(7)
         D = 3
         model = DensityModel(_logp, _gradlogp, D)
-        sampler = DEERSampler(0.05f0; T=8, maxiter=200, jacobian=:diag, backend=_gpu_backend)
+        sampler = DEERSampler(
+            0.05f0; T=8, maxiter=200, jacobian=:diag, backend=_gpu_backend
+        )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
         trans, state = ParallelMCMC.AbstractMCMC.step(
@@ -185,7 +186,9 @@ else
         rng = MersenneTwister(42)
         D = 3
         model = DensityModel(_logp, _gradlogp, D)
-        sampler = DEERSampler(0.05f0; T=8, maxiter=200, jacobian=:diag, backend=_gpu_backend)
+        sampler = DEERSampler(
+            0.05f0; T=8, maxiter=200, jacobian=:diag, backend=_gpu_backend
+        )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
         trans, state = ParallelMCMC.AbstractMCMC.step(
@@ -206,7 +209,9 @@ else
         rng = MersenneTwister(99)
         D, T = 3, 4
         model = DensityModel(_logp, _gradlogp, D)
-        sampler = DEERSampler(0.05f0; T=T, maxiter=200, jacobian=:diag, backend=_gpu_backend)
+        sampler = DEERSampler(
+            0.05f0; T=T, maxiter=200, jacobian=:diag, backend=_gpu_backend
+        )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
         _, state = ParallelMCMC.AbstractMCMC.step(

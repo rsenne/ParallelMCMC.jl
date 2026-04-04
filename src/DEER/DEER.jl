@@ -305,7 +305,13 @@ function deer_update(
                         jac_diag(rec, prep, xbar, t)
                     else
                         jac_diag_stoch(
-                            rec, prep, xbar, t; probes=probes, rng=rng_t, zbuf=zbuf_t
+                            rec,
+                            prep,
+                            xbar,
+                            t;
+                            probes=probes,
+                            rng=rng_t,
+                            zbuf=zbuf_t,
                         )
                     end
                     ft = rec.step_fwd(xbar, rec.tape[t])

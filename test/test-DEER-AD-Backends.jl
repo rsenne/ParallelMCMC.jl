@@ -18,9 +18,13 @@ function _make_tape_and_ref(rng, D, T, ε)
 end
 
 function _make_rec(tape, ε, backend)
-    step_fwd = (x, te) -> ParallelMCMC.MALA.mala_step_taped(_logp, _gradlogp, x, ε, te.ξ, te.u)
-    step_lin = (x, te, a) -> ParallelMCMC.MALA.mala_step_surrogate(_logp, _gradlogp, x, ε, te.ξ, a)
-    consts = (x, te) -> (ParallelMCMC.MALA.mala_accept_indicator(_logp, _gradlogp, x, ε, te.ξ, te.u),)
+    step_fwd =
+        (x, te) -> ParallelMCMC.MALA.mala_step_taped(_logp, _gradlogp, x, ε, te.ξ, te.u)
+    step_lin =
+        (x, te, a) -> ParallelMCMC.MALA.mala_step_surrogate(_logp, _gradlogp, x, ε, te.ξ, a)
+    consts =
+        (x, te) ->
+            (ParallelMCMC.MALA.mala_accept_indicator(_logp, _gradlogp, x, ε, te.ξ, te.u),)
     return ParallelMCMC.DEER.TapedRecursion(
         step_fwd, step_lin, tape; consts=consts, const_example=(0.0,), backend=backend
     )
@@ -38,7 +42,7 @@ push!(_all_backends, "ForwardDiff" => ADTypes.AutoForwardDiff())
 
 # Mooncake — always in project deps
 try
-    import Mooncake
+    using Mooncake: Mooncake
     push!(_all_backends, "Mooncake" => ADTypes.AutoMooncake(; config=nothing))
 catch e
     @warn "Mooncake not loadable, skipping" exception=e
@@ -52,7 +56,7 @@ Enzyme is still tested on GPU via test-GPU-DEER.jl (CUDA path).
 =#
 if !Sys.iswindows()
     try
-        import Enzyme
+        using Enzyme: Enzyme
         push!(_all_backends, "Enzyme" => ADTypes.AutoEnzyme())
     catch e
         @warn "Enzyme not loadable, skipping" exception=e
@@ -61,7 +65,7 @@ end
 
 # ReverseDiff
 try
-    import ReverseDiff
+    using ReverseDiff: ReverseDiff
     push!(_all_backends, "ReverseDiff" => ADTypes.AutoReverseDiff())
 catch e
     @warn "ReverseDiff not loadable, skipping" exception=e
@@ -69,7 +73,7 @@ end
 
 # Zygote — DI's Zygote extension also loads ForwardDiff for its pushforward path
 try
-    import Zygote
+    using Zygote: Zygote
     push!(_all_backends, "Zygote" => ADTypes.AutoZygote())
 catch e
     @warn "Zygote not loadable, skipping" exception=e
