@@ -128,9 +128,7 @@ end
 
 @testset "DEERSampler logistic: posterior mean matches AdaptiveMALA reference" begin
     X64, y64 = Float64.(_LR_X), Float64.(_LR_y)
-    model = DensityModel(
-        β -> _logp_lr(β, X64, y64), β -> _gradlogp_lr(β, X64, y64), _LR_D
-    )
+    model = DensityModel(β -> _logp_lr(β, X64, y64), β -> _gradlogp_lr(β, X64, y64), _LR_D)
 
     mala_chain = sample(
         MersenneTwister(2025),
@@ -141,9 +139,7 @@ end
         progress=false,
         discard_warmup=true,
     )
-    β_mala = vec(
-        mean(Array(mala_chain[:, [Symbol("x[1]"), Symbol("x[2]")], 1]); dims=1)
-    )
+    β_mala = vec(mean(Array(mala_chain[:, [Symbol("x[1]"), Symbol("x[2]")], 1]); dims=1))
 
     deer_chain = sample(
         MersenneTwister(42),
@@ -181,7 +177,6 @@ end
 if !_cuda_ok_lr
     @warn "CUDA not available — skipping GPU logistic regression DEER tests"
 else
-
     _X_f32 = Float32.(_LR_X)
     _y_f32 = Float32.(_LR_y)
 
@@ -264,22 +259,16 @@ else
         )
 
         model_cpu = DensityModel(
-            β -> _logp_lr(β, _X_f32, _y_f32),
-            β -> _gradlogp_lr(β, _X_f32, _y_f32),
-            _LR_D,
+            β -> _logp_lr(β, _X_f32, _y_f32), β -> _gradlogp_lr(β, _X_f32, _y_f32), _LR_D
         )
         model_gpu = DensityModel(
-            β -> _logp_lr(β, X_gpu, y_gpu),
-            β -> _gradlogp_lr(β, X_gpu, y_gpu),
-            _LR_D,
+            β -> _logp_lr(β, X_gpu, y_gpu), β -> _gradlogp_lr(β, X_gpu, y_gpu), _LR_D
         )
 
         n_samples, n_burn = 400, 100
 
         raw_cpu = sample(MersenneTwister(42), model_cpu, sampler, n_samples; progress=false)
-        β_cpu = vec(
-            mean(reduce(hcat, [s.x for s in raw_cpu[(n_burn + 1):end]]); dims=2)
-        )
+        β_cpu = vec(mean(reduce(hcat, [s.x for s in raw_cpu[(n_burn + 1):end]]); dims=2))
 
         raw_gpu = sample(
             MersenneTwister(42),
@@ -297,5 +286,4 @@ else
         @test abs(β_gpu[1] - β_cpu[1]) < 0.15
         @test abs(β_gpu[2] - β_cpu[2]) < 0.15
     end
-
 end # _cuda_ok_lr
