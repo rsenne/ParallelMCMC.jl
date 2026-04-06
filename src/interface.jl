@@ -274,13 +274,29 @@ function _build_mala_deer_rec(
     step_fwd =
         (x, te) -> MALA.mala_step_taped(logp, gradlogp, x, ε, te.ξ, te.u; cholM=cholM)
 
-    # step_lin: sigmoid stop-gradient surrogate for Jacobian computation (paper Section 3.2).
+    # step_lin: sigmoid stop-gradient surrogate, kept for :full Jacobian mode.
     # te.u enters as DI.Constant, so log(u) does not contribute to the gradient.
     step_lin =
         (x, te) ->
             MALA.mala_step_surrogate_sigmoid(logp, gradlogp, x, ε, te.ξ, te.u; cholM=cholM)
 
-    return DEER.TapedRecursion(step_fwd, step_lin, tape; backend=backend)
+    # jvp_lin: explicit analytical JVP of step_lin w.r.t. x (paper Section 3.2 formula).
+    # Avoids nested AD when gradlogp is itself AD-computed (e.g. via LogDensityProblemsAD).
+    # Inner HVPs H(x)v are computed via a fresh DI.pushforward of gradlogp — no outer
+    # AD tracing through the MALA surrogate's control flow.
+    jvp_lin = (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
+        logp,
+        gradlogp,
+        x,
+        ε,
+        te.ξ,
+        te.u,
+        v,
+        (pt, dir) -> DEER._hvp_nopre(gradlogp, backend, pt, dir);
+        cholM=cholM,
+    )
+
+    return DEER.TapedRecursion(step_fwd, step_lin, tape; jvp=jvp_lin, backend=backend)
 end
 
 function _deer_solve_new_tape(

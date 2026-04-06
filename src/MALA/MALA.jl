@@ -310,4 +310,66 @@ function mala_step_batched(
     return X_next, vec(accepted)
 end
 
+"""
+Explicit JVP (pushforward) of `mala_step_surrogate_sigmoid` w.r.t. `x`, evaluated in
+the direction `v`.
+
+Formula derivation (M = identity; generalises to mass matrix via the cholM kwargs):
+
+    y(x)   = x + ε M ∇logp(x) + √(2ε) L ξ              (proposal)
+    w      = y'(x)[v]  = v + ε M H(x)v                   (1st HVP at x)
+    r      = x − y − ε M ∇logp(y)                        (backward residual)
+    dr/dx  = v − w − ε M H(y)w                           (2nd HVP at y, in direction w)
+    ∂logα  = ∇logp(y)·w − ∇logp(x)·v − r'M⁻¹dr/(2ε)
+    ∂g     = g(1−g) ∂logα
+    output = g w + (y−x) ∂g + (1−g) v
+
+Note: ∂log q(y|x)/∂x = 0 because the forward residual y−μₓ = √(2ε)Lξ is constant in x.
+
+Arguments:
+- `hvp_fn(pt, dir)`: computes ∂gradlogp(pt)/∂pt · dir = H(pt) dir (one JVP of gradlogp).
+"""
+function mala_step_surrogate_sigmoid_jvp(
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ε::Real,
+    ξ::AbstractVector,
+    u::Real,
+    v::AbstractVector,
+    hvp_fn;
+    cholM=nothing,
+)
+    #Forward pass
+    g_x = gradlogp(x)
+    y = x .+ ε .* _apply_M(g_x, cholM) .+ sqrt(2ε) .* _apply_L(ξ, cholM)
+    g_y = gradlogp(y)
+    logp_x = logp(x)
+    logp_y = logp(y)
+    logq_yx = logq_mala(y, x, g_x, ε; cholM=cholM)
+    logq_xy = logq_mala(x, y, g_y, ε; cholM=cholM)
+    logα = (logp_y + logq_xy) - (logp_x + logq_yx)
+    g̃ = logα - log(u)
+    g = one(g̃) / (one(g̃) + exp(-g̃))
+
+    # 1st HVP: w = y'(x)[v] = v + ε M H(x)v 
+    Hv_x = hvp_fn(x, v)
+    w = v .+ ε .* _apply_M(Hv_x, cholM)
+
+    # needed for derivative of backward residual 
+    Hv_y = hvp_fn(y, w)
+
+    r = x .- y .- ε .* _apply_M(g_y, cholM)          # backward residual
+    dr = v .- w .- ε .* _apply_M(Hv_y, cholM)        # dr/dx[v]
+
+    # Directional derivative of log-acceptance ratio
+    # ∂log q(y|x)/∂x = 0; ∂log q(x|y)/∂x = −(1/2ε) M⁻¹r · dr
+    Minv_r = isnothing(cholM) ? r : cholM \ r
+    dlogα = dot(g_y, w) - dot(g_x, v) - inv(2ε) * dot(Minv_r, dr)
+
+    # Assemble output JVP
+    dg = g * (one(g) - g) * dlogα
+    return g .* w .+ (y .- x) .* dg .+ (one(g) - g) .* v
+end
+
 end # module

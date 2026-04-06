@@ -16,15 +16,19 @@ const DEFAULT_BACKEND = ADTypes.AutoEnzyme(; mode=Enzyme.Forward)
 Deterministic recursion driven by a pre-generated tape.
 
 - `step_fwd(x, tape_t)`: exact forward transition (may include MH accept/reject).
-- `step_lin(x, tape_t, c...)`: surrogate used only for Jacobians.
+- `step_lin(x, tape_t, c...)`: surrogate used only for Jacobians (via AD).
+- `jvp`: optional explicit JVP `(x, tape_t, v) -> J·v`.  When provided, bypasses AD
+  entirely for `:stoch_diag` and `:diag` modes — useful when `step_lin` contains
+  nested AD (e.g. gradlogp computed by reverse-mode AD).  Defaults to `nothing`.
 - `consts(x, tape_t) -> Tuple`: returns constants `c...` passed into `step_lin`.
 - `const_example`: example tuple of constants, used in `prepare`.
-- `backend`: AD backend (any `ADTypes.AbstractADType`); defaults to `AutoMooncake`.
-  Pass `AutoEnzyme()` or another GPU-compatible backend for GPU execution.
+- `backend`: AD backend (any `ADTypes.AbstractADType`); defaults to `AutoEnzyme(Forward)`.
+  Pass a GPU-compatible backend for GPU execution.
 """
-struct TapedRecursion{Ff,Fl,Fc,Tt,Ce,AD<:AbstractADType}
+struct TapedRecursion{Ff,Fl,Fj,Fc,Tt,Ce,AD<:AbstractADType}
     step_fwd::Ff
     step_lin::Fl
+    jvp::Fj          # explicit (x, te, v) -> J·v, or Nothing
     consts::Fc
     tape::Vector{Tt}
     const_example::Ce
@@ -33,7 +37,7 @@ end
 
 "Backward-compatible constructor: uses the same step for forward + Jacobian, no constants."
 function TapedRecursion(step, tape::Vector)
-    return TapedRecursion(step, step, (_x, _tt) -> (), tape, (), DEFAULT_BACKEND)
+    return TapedRecursion(step, step, nothing, (_x, _tt) -> (), tape, (), DEFAULT_BACKEND)
 end
 
 "Main constructor."
@@ -41,11 +45,12 @@ function TapedRecursion(
     step_fwd,
     step_lin,
     tape::Vector;
+    jvp=nothing,
     consts=(_x, _tt) -> (),
     const_example=(),
     backend::AbstractADType=DEFAULT_BACKEND,
 )
-    return TapedRecursion(step_fwd, step_lin, consts, tape, const_example, backend)
+    return TapedRecursion(step_fwd, step_lin, jvp, consts, tape, const_example, backend)
 end
 
 # Stable callable for DI (Jacobian always taken w.r.t. step_lin)
@@ -123,9 +128,26 @@ end
     return z
 end
 
+"""
+Compute a single JVP of `f` at `x` in direction `v` using `backend`, preparing
+internally on every call.  Suitable for use inside explicit JVP closures where
+the call site (e.g. `mala_step_surrogate_sigmoid_jvp`) manages its own loop and
+re-preparation overhead is acceptable.
+"""
+function _hvp_nopre(
+    f, backend::AbstractADType, x::AbstractVector, v::AbstractVector
+)
+    prep = DI.prepare_pushforward(f, backend, x, (v,))
+    res = DI.pushforward(f, prep, backend, x, (v,))
+    return res isa Tuple ? first(res) : res
+end
+
 function _jvp_step_lin(
     rec::TapedRecursion, prep_pf, x::AbstractVector, t::Int, v::AbstractVector
 )
+    if rec.jvp !== nothing
+        return rec.jvp(x, rec.tape[t], v)
+    end
     f = StepWithTape(rec)
     cs = rec.consts(x, rec.tape[t])
     tx = (v,)
@@ -305,7 +327,13 @@ function deer_update(
                     # S[:, t-1] returns a column copy — Vector on CPU.
                     xbar = t == 1 ? s0 : S[:, t - 1]
                     jt = if jacobian === :diag
-                        jac_diag(rec, prep, xbar, t)
+                        # Explicit JVP: use JVP-based diagonal (avoids outer AD layer).
+                        # Otherwise: full Jacobian via DI (chunked ForwardDiff on CPU).
+                        if rec.jvp !== nothing
+                            jac_diag_via_jvps(rec, prep, xbar, t)
+                        else
+                            jac_diag(rec, prep, xbar, t)
+                        end
                     else
                         jac_diag_stoch(
                             rec,
@@ -458,11 +486,16 @@ function solve(
         copy(init)
     end
 
-    # GPU arrays use JVP-based diagonal (broadcast-safe), which needs a pushforward prep.
-    # CPU :diag uses the full Jacobian prep (chunked ForwardDiff, faster for small D).
-    prep = if jacobian === :stoch_diag || (jacobian === :diag && !(s0 isa Array))
+    # When an explicit JVP is provided, DI prep is not needed for :diag/:stoch_diag.
+    # :full still requires the full Jacobian prep (DI.jacobian path).
+    # GPU arrays use JVP-based diagonal (broadcast-safe); CPU :diag uses full Jacobian.
+    prep = if jacobian === :full
+        prepare(rec, s0)
+    elseif rec.jvp !== nothing
+        nothing   # explicit JVP bypasses DI entirely
+    elseif jacobian === :stoch_diag || (jacobian === :diag && !(s0 isa Array))
         prepare_pushforward(rec, s0)
-    elseif jacobian === :full || jacobian === :diag
+    elseif jacobian === :diag
         prepare(rec, s0)
     else
         nothing
