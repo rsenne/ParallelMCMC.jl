@@ -18,11 +18,9 @@ using LinearAlgebra
 using Printf
 using Statistics
 
-using ADTypes
 using AbstractMCMC: sample
 using ParallelMCMC
 using ParallelMCMCBenchmarks
-using ForwardDiff
 
 const BayesLogReg = ParallelMCMCBenchmarks.BayesLogReg
 
@@ -51,7 +49,6 @@ deer_cpu = ParallelMALASampler(
     tol_abs=1.0f-4,
     tol_rel=1.0f-3,
     damping=0.5f0,
-    backend=AutoForwardDiff(),
 )
 mala_cpu = AdaptiveMALASampler(0.1f0; n_warmup=500)
 
@@ -103,7 +100,7 @@ end
 # CPU DEER
 
 println("=" ^ 65)
-println("CPU ParallelMALASampler  (T=16, AutoForwardDiff, Float32)")
+println("CPU ParallelMALASampler  (T=16, AutoEnzyme, Float32)")
 println("Model: Bayesian logistic regression  D=$D  N_data=$N_data")
 println("=" ^ 65, "\n")
 
@@ -129,13 +126,12 @@ if _cuda_ok
         tol_abs=1.0f-4,
         tol_rel=1.0f-3,
         damping=0.5f0,
-        backend=AutoForwardDiff(),
     )
 
     x0_gpu = CUDA.CuArray(zeros(Float32, D))
 
     println("=" ^ 65)
-    println("GPU ParallelMALASampler  (T=16, AutoForwardDiff, Float32, CuArrays)")
+    println("GPU ParallelMALASampler  (T=16, AutoEnzyme, Float32, CuArrays)")
     println("Model: Bayesian logistic regression  D=$D  N_data=$N_data")
     println("=" ^ 65, "\n")
 

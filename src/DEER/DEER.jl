@@ -311,8 +311,7 @@ function solve(
         S_new = deer_update(
             rec, s0, S; jacobian=jacobian, damping=damping, probes=probes, rng=rng
         )
-
-        # Single pair of reductions over the full D×T matrix — one GPU kernel each.
+        
         Δ_max = maximum(abs.(S_new .- S))
         S_scale = tol_abs + tol_rel * maximum(abs.(S_new))
         metric = Δ_max / S_scale
