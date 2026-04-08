@@ -32,7 +32,7 @@ end
 
 @testset "LogDensityProblemsExt: param_names kwarg" begin
     ld = DynamicPPL.LogDensityFunction(normal_model(TRUE_OBS))
-    ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoMooncake(; config=nothing), ld)
+    ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoEnzyme(), ld)
 
     model = DensityModel(ldg; param_names=[:μ])
 

@@ -97,18 +97,6 @@ for (n_samples, reps, label) in configs
     )
 end
 
-# CPU DEER
-
-println("=" ^ 65)
-println("CPU ParallelMALASampler  (T=16, AutoEnzyme, Float32)")
-println("Model: Bayesian logistic regression  D=$D  N_data=$N_data")
-println("=" ^ 65, "\n")
-
-for (n_samples, reps, label) in configs
-    results[("CPU-DEER", label)] = run_bench(
-        model_cpu, deer_cpu, n_samples; reps, label, device="CPU", sampler_name="DEER"
-    )
-end
 
 # GPU DEER
 
@@ -163,23 +151,19 @@ println("Summary: median wall-clock time (ms)")
 println("=" ^ 65)
 
 if _cuda_ok
-    @printf "%-10s  %12s  %12s  %12s  %12s  %12s\n" "N samples" "CPU-MALA" "CPU-DEER" "GPU-DEER" "GPU/CPU-MALA" "GPU/CPU-DEER"
+    @printf "%-10s  %12s  %12s  %12s  %12s  %12s\n" "N samples" "CPU-MALA" "GPU-DEER" "GPU/CPU-MALA"
     for (_, _, label) in configs
         t_mala = median(results[("CPU-MALA", label)]).time / 1e6
-        t_cpu_deer = median(results[("CPU-DEER", label)]).time / 1e6
         t_gpu_deer = median(results[("GPU-DEER", label)]).time / 1e6
         @printf "%-10s  %12.1f  %12.1f  %12.1f  %12.2fx  %12.2fx\n" label t_mala t_cpu_deer t_gpu_deer (
             t_gpu_deer/t_mala
-        ) (t_gpu_deer/t_cpu_deer)
+        )
     end
 else
-    @printf "%-10s  %12s  %12s  %12s\n" "N samples" "CPU-MALA" "CPU-DEER" "DEER/MALA"
+    @printf "%-10s  %12s  %12s  %12s\n" "N samples" "CPU-MALA" "DEER/MALA"
     for (_, _, label) in configs
         t_mala = median(results[("CPU-MALA", label)]).time / 1e6
         t_cpu_deer = median(results[("CPU-DEER", label)]).time / 1e6
-        @printf "%-10s  %12.1f  %12.1f  %12.2fx\n" label t_mala t_cpu_deer (
-            t_cpu_deer/t_mala
-        )
     end
 end
 println()

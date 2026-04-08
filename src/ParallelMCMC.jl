@@ -17,8 +17,6 @@ export DensityModel
 export MALASampler, MALATransition, MALAState
 export AdaptiveMALASampler, AdaptiveMALATransition, AdaptiveMALAState
 export ParallelMALASampler, ParallelMALATransition, ParallelMALAState
-export solve_affine_seq!, solve_affine_seq, solve_affine_scan_diag!, solve_affine_scan_diag,
-       check_affine_scan, affine_scan_residual
 export MALA, DEER
 
 end

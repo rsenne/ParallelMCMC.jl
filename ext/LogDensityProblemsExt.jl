@@ -22,7 +22,7 @@ to `sample(...)`.
 
 # Turing.jl / DynamicPPL example
 ```julia
-using Turing, LogDensityProblems, LogDensityProblemsAD, Mooncake, ParallelMCMC, MCMCChains
+using Turing, LogDensityProblems, LogDensityProblemsAD, Enzyme, ParallelMCMC, MCMCChains
 
 @model function mymodel(y)
     μ ~ Normal(0, 1)
@@ -31,7 +31,7 @@ end
 
 obs = 1.5
 ld  = DynamicPPL.LogDensityFunction(mymodel(obs))
-ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoMooncake(; config=nothing), ld)
+ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoEnzyme(), ld)
 
 model = DensityModel(ldg; param_names=[:μ])
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;

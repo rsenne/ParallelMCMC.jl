@@ -27,11 +27,9 @@ else
     Collect GPU-compatible backends to test.
     DifferentiationInterface abstracts over backends; any backend whose
     pushforward works on CuArrays (i.e. uses broadcast rather than scalar
-    indexing) is valid.  AutoForwardDiff constructs Duals via element-wise
-    broadcast and is unconditionally available.  AutoEnzyme is added when
-    Enzyme is loadable and its CUDA extension is functional.
+    indexing) is valid.
     =#
-    _gpu_backends = Pair{String,ADTypes.AbstractADType}["ForwardDiff" => ADTypes.AutoForwardDiff(),]
+    _gpu_backends = Pair{String,ADTypes.AbstractADType}[]
     if !Sys.iswindows()
         try
             using Enzyme: Enzyme

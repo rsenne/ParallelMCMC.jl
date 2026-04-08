@@ -1,5 +1,8 @@
 module DEERScan
 
+export solve_affine_seq!, solve_affine_seq, solve_affine_scan_diag!, solve_affine_scan_diag,
+       check_affine_scan, affine_scan_residual
+       
 """
     solve_affine_seq!(S, A, B, s0)
 

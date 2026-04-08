@@ -25,13 +25,6 @@ Turing integration: uses the DynamicPPL convenience constructor.  These are
 CPU-only because DynamicPPL model evaluation does not support GPU arrays.
 ParallelMALASampler works fine with Turing on CPU; for GPU you supply a manual
 logp/gradlogp that is array-type-agnostic (see below).
-
-Statistical/GPU: use a hand-written logp/gradlogp implemented as pure array
-broadcasts.  These work identically on CPU Vectors and GPU CuVectors, and
-let us use AutoForwardDiff() as the DEER Jacobian backend (ForwardDiff traces
-Dual numbers through the explicit gradient analytically, which is faster than
-second-order Mooncake through the Turing closure).  The GPU tests compare a
-DEER trajectory against the sequential MALA ground truth using the same tape.
 =#
 
 const _LR_D = 2
@@ -124,7 +117,6 @@ end
 end
 
 # Statistical correctness: DEER posterior mean matches AdaptiveMALA reference.
-# Uses the manual DensityModel so the DEER Jacobian can use AutoForwardDiff().
 
 @testset "ParallelMALASampler logistic: posterior mean matches AdaptiveMALA reference" begin
     X64, y64 = Float64.(_LR_X), Float64.(_LR_y)
@@ -151,7 +143,7 @@ end
             tol_abs=1e-4,
             tol_rel=1e-3,
             damping=0.5,
-            backend=ADTypes.AutoForwardDiff(),
+            backend=ADTypes.AutoEnzyme(),
         ),
         800;
         chain_type=MCMCChains.Chains,
@@ -202,7 +194,7 @@ else
         gradlogp_gpu = β -> _gradlogp_lr(β, X_gpu, y_gpu)
 
         tape = [(ξ=CUDA.CuArray(ξs_cpu[t]), u=us[t]) for t in 1:T]
-        _backend = ADTypes.AutoForwardDiff()
+        _backend = ADTypes.AutoEnzyme()
         step_fwd =
             (x, te) ->
                 ParallelMCMC.MALA.mala_step_taped(logp_gpu, gradlogp_gpu, x, ε, te.ξ, te.u)
@@ -251,7 +243,7 @@ else
             tol_abs=1e-4f0,
             tol_rel=1e-3f0,
             damping=0.5f0,
-            backend=ADTypes.AutoForwardDiff(),
+            backend=ADTypes.AutoEnzyme(),
         )
 
         model_cpu = DensityModel(
