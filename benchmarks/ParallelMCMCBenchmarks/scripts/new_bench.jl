@@ -1,16 +1,15 @@
 """
 Raw GPU DEER benchmark for Bayesian logistic regression, with CPU sequential MALA baseline.
 
-This bypasses AbstractMCMC.sample(...) and measures:
-    1. GPU DEER block solve:
-       x0 -> build tape -> build TapedRecursion -> DEER.solve(rec, x0)
-    2. CPU sequential taped MALA for the same block length T
-    3. GPU batched logdensity evaluation on the solved trajectory
+This version isolates the GPU DEER solve by prebuilding:
+    1. the taped recursion `rec`
+    2. the DEER workspace `ws`
 
-Interpretation:
-- T is the DEER/MALA block length, i.e. the number of taped MALA steps in one block.
-- The CPU baseline performs those T steps sequentially.
-- The GPU DEER solve computes a full length-T block using the DEER fixed-point solve.
+So the timed region measures only:
+    DEER.solve(rec, x0; workspace=ws, ...)
+
+An additional builder benchmark is included so build-time allocations are separated
+from solve-time allocations.
 """
 
 using Random
@@ -26,7 +25,6 @@ const BayesLogReg = ParallelMCMCBenchmarks.BayesLogReg
 
 rng = MersenneTwister(20251231)
 
-# Start small, then sweep upward if needed.
 D = 512
 N_data = 131_072
 
@@ -36,7 +34,6 @@ y_f32 = Float32.(y_f32)
 
 CUDA.functional() || error("CUDA is not functional in this environment")
 
-# CPU and GPU copies of the same problem.
 X_cpu = X_f32
 y_cpu = y_f32
 X_gpu = CUDA.CuMatrix(X_f32)
@@ -55,10 +52,8 @@ model_gpu = DensityModel(
     grad_logdensity_batch=gradlogp_gpu_batch,
 )
 
-# Core DEER settings to test.
 T_vals = [8, 16, 32, 64]
 
-# Keep these fixed initially.
 epsilon = 0.1f0
 maxiter = 50
 tol_abs = 1.0f-4
@@ -69,10 +64,6 @@ probes = 1
 x0_gpu = CUDA.zeros(Float32, D)
 x0_cpu = zeros(Float32, D)
 
-"""
-Build exactly the same DEER problem that ParallelMALASampler uses internally,
-but expose it directly for raw benchmarking.
-"""
 function build_raw_deer_problem(
     rng::Random.AbstractRNG,
     model::DensityModel,
@@ -107,37 +98,22 @@ function build_raw_deer_problem(
     return rec
 end
 
-"""
-Time one raw DEER block solve, returning the trajectory S (D×T).
-"""
-function solve_raw_deer_block(
+function build_workspace(x0::AbstractVector, T::Int)
+    return DEER.DEERWorkspace(x0, T)
+end
+
+function solve_raw_deer_block_prebuilt(
     rng::Random.AbstractRNG,
-    model::DensityModel,
-    x0::AbstractVector;
-    epsilon::Float32,
-    T::Int,
-    maxiter::Int,
+    rec,
+    x0::AbstractVector,
+    ws;
     tol_abs::Float32,
     tol_rel::Float32,
+    maxiter::Int,
     damping::Float32,
     probes::Int,
-    cholM=nothing,
-    backend=DEER.DEFAULT_BACKEND,
 )
-    rec = build_raw_deer_problem(
-        rng, model, x0;
-        epsilon=epsilon,
-        T=T,
-        maxiter=maxiter,
-        tol_abs=tol_abs,
-        tol_rel=tol_rel,
-        damping=damping,
-        probes=probes,
-        cholM=cholM,
-        backend=backend,
-    )
-
-    S = DEER.solve(
+    return DEER.solve(
         rec,
         x0;
         tol_abs=tol_abs,
@@ -147,13 +123,10 @@ function solve_raw_deer_block(
         damping=damping,
         probes=probes,
         rng=rng,
+        workspace=ws,
     )
-    return S
 end
 
-"""
-Run T sequential taped MALA steps on CPU and return the full state path (length T+1).
-"""
 function solve_seq_mala_block(
     rng::Random.AbstractRNG,
     logp,
@@ -178,13 +151,10 @@ function solve_seq_mala_block(
     )
 end
 
-"""
-Benchmark just the raw DEER solve.
-"""
-function bench_raw_deer_solve(model, x0; T, reps)
-    println("  [GPU] raw DEER solve, T=$T")
+function bench_raw_deer_build(model, x0; T, reps)
+    println("  [GPU] build taped recursion only, T=$T")
 
-    S_warm = solve_raw_deer_block(
+    rec_warm = build_raw_deer_problem(
         MersenneTwister(42),
         model,
         x0;
@@ -199,7 +169,7 @@ function bench_raw_deer_solve(model, x0; T, reps)
     CUDA.synchronize()
 
     b = @benchmark begin
-        S = solve_raw_deer_block(
+        rec = build_raw_deer_problem(
             MersenneTwister(42),
             $model,
             $x0;
@@ -208,6 +178,60 @@ function bench_raw_deer_solve(model, x0; T, reps)
             maxiter=$maxiter,
             tol_abs=$tol_abs,
             tol_rel=$tol_rel,
+            damping=$damping,
+            probes=$probes,
+        )
+        CUDA.synchronize()
+        rec
+    end samples=reps evals=1
+
+    show(stdout, MIME("text/plain"), b)
+    println("\n")
+
+    t_ms = median(b).time / 1e6
+    @printf "    median build time: %.3f ms\n\n" t_ms
+    return b
+end
+
+function bench_raw_deer_solve_only(model, x0; T, reps)
+    println("  [GPU] raw DEER solve only (prebuilt rec + workspace), T=$T")
+
+    rec = build_raw_deer_problem(
+        MersenneTwister(42),
+        model,
+        x0;
+        epsilon=epsilon,
+        T=T,
+        maxiter=maxiter,
+        tol_abs=tol_abs,
+        tol_rel=tol_rel,
+        damping=damping,
+        probes=probes,
+    )
+    ws = build_workspace(x0, T)
+
+    S_warm = solve_raw_deer_block_prebuilt(
+        MersenneTwister(42),
+        rec,
+        x0,
+        ws;
+        tol_abs=tol_abs,
+        tol_rel=tol_rel,
+        maxiter=maxiter,
+        damping=damping,
+        probes=probes,
+    )
+    CUDA.synchronize()
+
+    b = @benchmark begin
+        S = solve_raw_deer_block_prebuilt(
+            MersenneTwister(42),
+            $rec,
+            $x0,
+            $ws;
+            tol_abs=$tol_abs,
+            tol_rel=$tol_rel,
+            maxiter=$maxiter,
             damping=$damping,
             probes=$probes,
         )
@@ -223,12 +247,9 @@ function bench_raw_deer_solve(model, x0; T, reps)
     @printf "    median solve time: %.3f ms\n" t_ms
     @printf "    implied throughput: %.1f samples/sec\n\n" samples_per_sec
 
-    return b
+    return b, rec, ws
 end
 
-"""
-Benchmark T sequential taped MALA steps on CPU.
-"""
 function bench_seq_mala_cpu(logp, gradlogp, x0; T, reps)
     println("  [CPU] sequential taped MALA, T=$T")
 
@@ -264,21 +285,17 @@ function bench_seq_mala_cpu(logp, gradlogp, x0; T, reps)
     return b
 end
 
-"""
-Benchmark batched logdensity over a solved block S.
-"""
-function bench_block_logdensity(model, x0; T, reps)
+function bench_block_logdensity(model, rec, x0, ws; T, reps)
     model.logdensity_batch === nothing && error("model.logdensity_batch is required")
 
-    S = solve_raw_deer_block(
+    S = solve_raw_deer_block_prebuilt(
         MersenneTwister(42),
-        model,
-        x0;
-        epsilon=epsilon,
-        T=T,
-        maxiter=maxiter,
+        rec,
+        x0,
+        ws;
         tol_abs=tol_abs,
         tol_rel=tol_rel,
+        maxiter=maxiter,
         damping=damping,
         probes=probes,
     )
@@ -308,27 +325,31 @@ println("=" ^ 72)
 println("Raw GPU DEER benchmark + CPU sequential MALA baseline")
 println("Model: Bayesian logistic regression   D=$D   N_data=$N_data   Float32")
 println("T = block length = number of taped MALA steps in one block")
-println("Measures raw GPU DEER block solve throughput, plus CPU sequential baseline")
+println("Measures build separately from solve; GPU solve uses prebuilt rec + workspace")
 println("=" ^ 72)
 println()
 
+build_results = Dict{Int,BenchmarkTools.Trial}()
 solve_results = Dict{Int,BenchmarkTools.Trial}()
 seq_results = Dict{Int,BenchmarkTools.Trial}()
 logp_results = Dict{Int,BenchmarkTools.Trial}()
 
 for T in T_vals
     reps = T <= 16 ? 8 : T <= 32 ? 6 : 4
-    solve_results[T] = bench_raw_deer_solve(model_gpu, x0_gpu; T=T, reps=reps)
+    build_results[T] = bench_raw_deer_build(model_gpu, x0_gpu; T=T, reps=reps)
+    solve_results[T], rec, ws = bench_raw_deer_solve_only(model_gpu, x0_gpu; T=T, reps=reps)
     seq_results[T] = bench_seq_mala_cpu(logp_cpu, gradlogp_cpu, x0_cpu; T=T, reps=reps)
-    logp_results[T] = bench_block_logdensity(model_gpu, x0_gpu; T=T, reps=reps)
+    logp_results[T] = bench_block_logdensity(model_gpu, rec, x0_gpu, ws; T=T, reps=reps)
 end
 
-println("=" ^ 104)
+println("=" ^ 122)
 println("Summary")
-println("=" ^ 104)
-@printf "%-8s  %12s  %14s  %12s  %14s  %10s  %14s\n" "T" "gpu solve ms" "gpu samp/sec" "cpu seq ms" "cpu step/sec" "speedup" "block logp ms"
+println("=" ^ 122)
+@printf "%-8s  %12s  %14s  %12s  %14s  %12s  %14s  %10s\n" "T" "build ms" "gpu solve ms" "gpu samp/sec" "cpu seq ms" "cpu step/sec" "block logp ms" "speedup"
 
 for T in T_vals
+    t_build_ms = median(build_results[T]).time / 1e6
+
     t_gpu_ms = median(solve_results[T]).time / 1e6
     t_gpu_s = median(solve_results[T]).time / 1e9
     gpu_rate = T / t_gpu_s
@@ -337,10 +358,10 @@ for T in T_vals
     t_cpu_s = median(seq_results[T]).time / 1e9
     cpu_rate = T / t_cpu_s
 
-    speedup = t_cpu_ms / t_gpu_ms
     t_logp_ms = median(logp_results[T]).time / 1e6
+    speedup = t_cpu_ms / t_gpu_ms
 
-    @printf "%-8d  %12.3f  %14.1f  %12.3f  %14.1f  %10.2f  %14.3f\n" T t_gpu_ms gpu_rate t_cpu_ms cpu_rate speedup t_logp_ms
+    @printf "% -8d  %12.3f  %14.3f  %14.1f  %12.3f  %12.1f  %14.3f  %10.2f\n" T t_build_ms t_gpu_ms gpu_rate t_cpu_ms cpu_rate t_logp_ms speedup
 end
 
 println()

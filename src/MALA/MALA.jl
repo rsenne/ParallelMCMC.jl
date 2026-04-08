@@ -2,7 +2,21 @@ module MALA
 
 using Random, LinearAlgebra
 
-# Preconditioner dispatch helpers.  cholM is either nothing (identity) or a Cholesky factor.
+export MALAWorkspace,
+       logq_mala, logq_mala!,
+       mala_step_taped, mala_step_taped!,
+       run_mala_sequential_taped,
+       mala_proposal, mala_proposal!,
+       mala_logα, mala_logα!,
+       mala_accept_indicator,
+       mala_step_full,
+       mala_step_with_logα,
+       mala_step_surrogate_sigmoid,
+       mala_step_surrogate_sigmoid_jvp,
+       mala_step_taped_and_jvp,
+       mala_step_taped_and_jvp!
+
+# Preconditioner dispatch helpers. cholM is either nothing (identity) or a Cholesky factor.
 _apply_M(g, ::Nothing) = g
 _apply_M(g, cholM::Cholesky) = cholM.L * (cholM.L' * g)
 
@@ -19,67 +33,209 @@ _logdet_M(::Nothing) = false  # Bool promotes to any numeric type without wideni
 _logdet_M(cholM::Cholesky) = logdet(cholM)
 
 """
-Compute the log of the MALA proposal density q(y | x).
+Reusable scratch buffers for allocation-light MALA primitives.
 
-With mass matrix M (passed as `cholM = cholesky(M)`):
-  y ~ Normal(x + ϵ M ∇logp(x), 2ϵ M)
-
-With `cholM=nothing` (default), uses identity M = I.
+All vectors are created with the same array type / device placement as `x_template`,
+so this workspace is GPU-compatible when constructed from a `CuVector`.
 """
-function logq_mala(
-    y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real; cholM=nothing
+struct MALAWorkspace{V}
+    g_x::V
+    g_y::V
+    y::V
+    μ::V
+    r::V
+    Hv_x::V
+    Hv_y::V
+    w::V
+    dr::V
+    jvp_out::V
+end
+
+function MALAWorkspace(x_template::AbstractVector)
+    g_x = similar(x_template)
+    g_y = similar(x_template)
+    y = similar(x_template)
+    μ = similar(x_template)
+    r = similar(x_template)
+    Hv_x = similar(x_template)
+    Hv_y = similar(x_template)
+    w = similar(x_template)
+    dr = similar(x_template)
+    jvp_out = similar(x_template)
+    return MALAWorkspace(g_x, g_y, y, μ, r, Hv_x, Hv_y, w, dr, jvp_out)
+end
+
+"""
+    logq_mala!(ws, y, x, gradlogp_x, ε; cholM=nothing)
+
+Allocation-light log proposal density using `ws.μ` and `ws.r` scratch.
+"""
+function logq_mala!(
+    ws::MALAWorkspace,
+    y::AbstractVector,
+    x::AbstractVector,
+    gradlogp_x::AbstractVector,
+    ϵ::Real;
+    cholM=nothing,
 )
     T = typeof(ϵ)
-    μ = x .+ ϵ .* _apply_M(gradlogp_x, cholM)
     d = length(x)
-    r = y .- μ
-    return -T(0.5) * _quad_Minv(r, cholM) / (2ϵ) - (T(d) / 2) * log(T(4π) * ϵ) -
+
+    if cholM === nothing
+        @. ws.μ = x + ϵ * gradlogp_x
+    else
+        tmp = _apply_M(gradlogp_x, cholM)
+        @. ws.μ = x + ϵ * tmp
+    end
+    @. ws.r = y - ws.μ
+
+    return -T(0.5) * _quad_Minv(ws.r, cholM) / (2ϵ) - (T(d) / 2) * log(T(4π) * ϵ) -
            T(0.5) * _logdet_M(cholM)
+end
+
+function logq_mala(
+    y::AbstractVector,
+    x::AbstractVector,
+    gradlogp_x::AbstractVector,
+    ϵ::Real;
+    cholM=nothing,
+)
+    ws = MALAWorkspace(x)
+    return logq_mala!(ws, y, x, gradlogp_x, ϵ; cholM=cholM)
+end
+
+"""
+    mala_proposal!(y, ws, logp, gradlogp, x, ε, ξ; cholM=nothing)
+
+Write proposal into `y`, and gradient at `x` into `ws.g_x`.
+"""
+function mala_proposal!(
+    y::AbstractVector,
+    ws::MALAWorkspace,
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector;
+    cholM=nothing,
+)
+    length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
+    copyto!(ws.g_x, gradlogp(x))
+    sqrt2ϵ = sqrt(2 * ϵ)
+
+    if cholM === nothing
+        @. y = x + ϵ * ws.g_x + sqrt2ϵ * ξ
+    else
+        Mgx = _apply_M(ws.g_x, cholM)
+        Lξ = _apply_L(ξ, cholM)
+        @. y = x + ϵ * Mgx + sqrt2ϵ * Lξ
+    end
+    return y
+end
+
+function mala_proposal(
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector;
+    cholM=nothing,
+)
+    ws = MALAWorkspace(x)
+    y = similar(x)
+    mala_proposal!(y, ws, logp, gradlogp, x, ϵ, ξ; cholM=cholM)
+    return y
+end
+
+"""
+    mala_logα!(ws, logp, gradlogp, x, y, ε; cholM=nothing)
+
+Allocation-light log acceptance ratio. Uses `ws.g_x`, `ws.g_y`, `ws.μ`, `ws.r`.
+"""
+function mala_logα!(
+    ws::MALAWorkspace,
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    y::AbstractVector,
+    ϵ::Real;
+    cholM=nothing,
+)
+    copyto!(ws.g_x, gradlogp(x))
+    copyto!(ws.g_y, gradlogp(y))
+    logp_x = logp(x)
+    logp_y = logp(y)
+    logq_y_given_x = logq_mala!(ws, y, x, ws.g_x, ϵ; cholM=cholM)
+    logq_x_given_y = logq_mala!(ws, x, y, ws.g_y, ϵ; cholM=cholM)
+    return (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
+end
+
+function mala_logα(
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    y::AbstractVector,
+    ϵ::Real;
+    cholM=nothing,
+)
+    ws = MALAWorkspace(x)
+    return mala_logα!(ws, logp, gradlogp, x, y, ϵ; cholM=cholM)
 end
 
 """
 One taped MALA step.
 
-Inputs:
-- logp(x): log density (up to constant)
-- gradlogp(x): gradient of log density
-- x: current state
-- ϵ: step size
-- ξ: N(0, I) noise vector (tape)
-- u: Uniform(0,1) scalar (tape)
-- cholM: optional Cholesky factor of mass matrix M (default: identity)
-
 Returns:
 - x_next
 """
-function mala_step_taped(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
+function mala_step_taped!(
+    x_next::AbstractVector,
+    ws::MALAWorkspace,
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
-    g_x = gradlogp(x)
 
-    y = x .+ ϵ .* _apply_M(g_x, cholM) .+ sqrt(2ϵ) .* _apply_L(ξ, cholM)
-
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ϵ, ξ; cholM=cholM)
     logp_x = logp(x)
-    logp_y = logp(y)
+    logp_y = logp(ws.y)
+    copyto!(ws.g_y, gradlogp(ws.y))
 
-    g_y = gradlogp(y)
-    logq_y_given_x = logq_mala(y, x, g_x, ϵ; cholM=cholM)
-    logq_x_given_y = logq_mala(x, y, g_y, ϵ; cholM=cholM)
-
+    logq_y_given_x = logq_mala!(ws, ws.y, x, ws.g_x, ϵ; cholM=cholM)
+    logq_x_given_y = logq_mala!(ws, x, ws.y, ws.g_y, ϵ; cholM=cholM)
     logα = (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
 
-    return (log(u) < logα) ? y : x
+    if log(u) < logα
+        copyto!(x_next, ws.y)
+    else
+        copyto!(x_next, x)
+    end
+    return x_next
+end
+
+function mala_step_taped(
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
+)
+    ws = MALAWorkspace(x)
+    x_next = similar(x)
+    mala_step_taped!(x_next, ws, logp, gradlogp, x, ϵ, ξ, u; cholM=cholM)
+    return x_next
 end
 
 """
 Run sequential taped MALA for T steps.
-
-Inputs:
-- x0: initial state
-- ξs: vector of ξ_t noise vectors, length T
-- us: vector of u_t uniforms, length T
 
 Returns:
 - xs: Vector of states length T+1, xs[1]=x0, xs[t+1]=x_t
@@ -97,136 +253,108 @@ function run_mala_sequential_taped(
     length(ξs) == T || throw(DimensionMismatch("ξs and us must have the same length"))
     xs = Vector{typeof(x0)}(undef, T + 1)
     xs[1] = copy(x0)
+
+    ws = MALAWorkspace(x0)
     x = copy(x0)
+    x_next = similar(x0)
+
     for t in 1:T
-        x = mala_step_taped(logp, gradlogp, x, ϵ, ξs[t], us[t]; cholM=cholM)
-        xs[t + 1] = copy(x)
+        mala_step_taped!(x_next, ws, logp, gradlogp, x, ϵ, ξs[t], us[t]; cholM=cholM)
+        xs[t + 1] = copy(x_next)
+        x, x_next = x_next, x
     end
     return xs
 end
 
-"Compute the MALA proposal map y = x + ϵ M ∇logp(x) + √(2ϵ) L ξ."
-function mala_proposal(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector; cholM=nothing
-)
-    length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
-    g_x = gradlogp(x)
-    return x .+ ϵ .* _apply_M(g_x, cholM) .+ sqrt(2ϵ) .* _apply_L(ξ, cholM)
-end
-
-"Compute log acceptance ratio logα(x→y) for MALA."
-function mala_logα(
-    logp, gradlogp, x::AbstractVector, y::AbstractVector, ϵ::Real; cholM=nothing
-)
-    g_x = gradlogp(x)
-    g_y = gradlogp(y)
-    logp_x = logp(x)
-    logp_y = logp(y)
-    logq_y_given_x = logq_mala(y, x, g_x, ϵ; cholM=cholM)
-    logq_x_given_y = logq_mala(x, y, g_y, ϵ; cholM=cholM)
-    return (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
-end
-
 """
 Primal accept indicator for a taped MALA step.
-Returns a float in {0, 1} matching the precision of `u`, for use as a constant
-gate in the DEER surrogate step.
+Returns a float in {0, 1} matching the precision of `u`.
 """
 function mala_accept_indicator(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
 )
-    y = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
-    logα = mala_logα(logp, gradlogp, x, y, ϵ; cholM=cholM)
+    ws = MALAWorkspace(x)
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ϵ, ξ; cholM=cholM)
+    logα = mala_logα!(ws, logp, gradlogp, x, ws.y, ϵ; cholM=cholM)
     FP = typeof(float(u))
     return (log(u) < logα) ? one(FP) : zero(FP)
 end
 
-"""
-One taped MALA step, returning both the next state and the accept flag.
-
-This is the efficient entry point: it evaluates `gradlogp` exactly twice (once at `x`,
-once at the proposal `y`), compared to calling `mala_accept_indicator` + `mala_step_taped`
-separately which evaluates it five times.
-
-Returns `(x_next, accepted::Bool)`.
-"""
 function mala_step_full(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
 )
     x_next, accepted, _ = mala_step_with_logα(logp, gradlogp, x, ϵ, ξ, u; cholM=cholM)
     return x_next, accepted
 end
 
-"""
-One taped MALA step, returning the next state, the accept flag, **and** the raw
-log acceptance ratio `logα = log p(y) + log q(x|y) - log p(x) - log q(y|x)`.
-
-The returned `logα` is the un-clamped value; the actual acceptance probability is
-`min(1, exp(logα))`.  This is needed by adaptive step-size schemes (dual averaging).
-
-Returns `(x_next, accepted::Bool, logα)`.
-"""
 function mala_step_with_logα(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
 
-    g_x = gradlogp(x)
-    y = x .+ ϵ .* _apply_M(g_x, cholM) .+ sqrt(2ϵ) .* _apply_L(ξ, cholM)
-
+    ws = MALAWorkspace(x)
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ϵ, ξ; cholM=cholM)
     logp_x = logp(x)
-    logp_y = logp(y)
-    g_y = gradlogp(y)
+    logp_y = logp(ws.y)
+    copyto!(ws.g_y, gradlogp(ws.y))
 
-    logq_y_given_x = logq_mala(y, x, g_x, ϵ; cholM=cholM)
-    logq_x_given_y = logq_mala(x, y, g_y, ϵ; cholM=cholM)
-    logα = (logp_y + logq_x_given_y) - (logp_x + logq_y_given_x)
+    logq_yx = logq_mala!(ws, ws.y, x, ws.g_x, ϵ; cholM=cholM)
+    logq_xy = logq_mala!(ws, x, ws.y, ws.g_y, ϵ; cholM=cholM)
+    logα = (logp_y + logq_xy) - (logp_x + logq_yx)
 
     accepted = log(u) < logα
-    x_next = accepted ? y : x
+    x_next = accepted ? copy(ws.y) : copy(x)
     return x_next, accepted, logα
 end
 
 """
-Stop-gradient surrogate step used for Jacobians (paper Section 3.2, eq. stop-gradient trick).
-
-Uses a continuous sigmoid gate g = σ(logα − log u) so that AD can differentiate
-through both the proposal direction *and* the acceptance probability:
-
-    ∂x_t/∂x_{t-1} = g·J_proposal + (1−g)·I + σ′(g̃)·(∂logα/∂x)·(ỹ−x)ᵀ
-
-Forward pass: `step_fwd` (`mala_step_taped`) still uses the exact binary accept/reject.
-This function is called only inside DEER's Jacobian computation.
-
-`u` enters via `DI.Constant` in `TapedRecursion`, so `log(u)` does not contribute
-to the Jacobian — matching the stop-gradient on the acceptance threshold.
+Stop-gradient surrogate step used for Jacobians.
 """
 function mala_step_surrogate_sigmoid(
-    logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
 )
-    y = mala_proposal(logp, gradlogp, x, ϵ, ξ; cholM=cholM)
-    logα = mala_logα(logp, gradlogp, x, y, ϵ; cholM=cholM)
+    ws = MALAWorkspace(x)
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ϵ, ξ; cholM=cholM)
+    logα = mala_logα!(ws, logp, gradlogp, x, ws.y, ϵ; cholM=cholM)
     g̃ = logα - log(u)
-    g = one(g̃) / (one(g̃) + exp(-g̃))   # σ(g̃), no external dep on sigmoid
-    return g .* y .+ (one(g) - g) .* x
+    g = one(g̃) / (one(g̃) + exp(-g̃))
+    out = similar(x)
+    @. out = g * ws.y + (one(g) - g) * x
+    return out
 end
 
-# Apply mass matrix to a D×N matrix of gradient columns (same math as scalar,
-# matrix multiply broadcasts naturally).
+# Apply mass matrix to a D×N matrix of gradient columns.
 _apply_M_batched(G::AbstractMatrix, ::Nothing) = G
 _apply_M_batched(G::AbstractMatrix, cholM::Cholesky) = cholM.L * (cholM.L' * G)
 
 _apply_L_batched(Ξ::AbstractMatrix, ::Nothing) = Ξ
 _apply_L_batched(Ξ::AbstractMatrix, cholM::Cholesky) = cholM.L * Ξ
 
-"""
-Compute column-wise M⁻¹-norm squared: `[||R[:,n]||²_{M⁻¹}]_n`.
-`R` is D×N; returns a length-N vector.
-GPU-compatible (uses `sum(abs2, …; dims=1)` which works on CuArrays).
-Note: `cholM` must be `nothing` when using GPU arrays; the triangular solve
-`cholM.L \\ R` pulls device arrays to CPU.
-"""
 function _quad_Minv_batched(R::AbstractMatrix, ::Nothing)
     return vec(sum(abs2, R; dims=1))
 end
@@ -236,14 +364,12 @@ function _quad_Minv_batched(R::AbstractMatrix, cholM::Cholesky)
     return vec(sum(abs2, W; dims=1))
 end
 
-"""
-    logq_mala_batched(Y, X, gradlogp_X, ε; cholM=nothing)
-
-Compute `log q(Y[:,n] | X[:,n])` for all N chains simultaneously.
-`Y`, `X`, `gradlogp_X` are D×N; returns a length-N vector.
-"""
 function logq_mala_batched(
-    Y::AbstractMatrix, X::AbstractMatrix, gradlogp_X::AbstractMatrix, ε::Real; cholM=nothing
+    Y::AbstractMatrix,
+    X::AbstractMatrix,
+    gradlogp_X::AbstractMatrix,
+    ε::Real;
+    cholM=nothing,
 )
     T = typeof(ε)
     D = size(X, 1)
@@ -254,24 +380,6 @@ function logq_mala_batched(
     return @. -T(0.5) * q / (2ε) - (T(D) / 2) * log(T(4π) * ε) - T(0.5) * ldet
 end
 
-"""
-    mala_step_batched(logp_batch, gradlogp_batch, X, ε, Ξ, u; cholM=nothing)
-
-Run one MALA step for N chains simultaneously.
-
-- `X` :: D×N — current states (one chain per column).
-- `Ξ` :: D×N — N(0,I) noise.
-- `u` :: length-N — Uniform(0,1) draws.
-- `logp_batch(X)` → length-N log-densities.
-- `gradlogp_batch(X)` → D×N gradient matrix.
-
-Returns `(X_next::AbstractMatrix, accepted::AbstractVector)`.
-
-**GPU use:** pass `CuArray` inputs and GPU-compatible `logp_batch`/`gradlogp_batch`.
-Requires `cholM=nothing` for full on-device execution (Cholesky preconditioner involves
-a CPU-side triangular solve).  Use `eltype(X)` for `ε` to avoid float-type promotions
-that would pull data off GPU.
-"""
 function mala_step_batched(
     logp_batch,
     gradlogp_batch,
@@ -285,49 +393,28 @@ function mala_step_batched(
     size(Ξ) == (D, N) || throw(DimensionMismatch("X and Ξ must have the same size"))
     length(u) == N || throw(DimensionMismatch("u must have length N = size(X,2)"))
 
-    # Cast ε to element type of X to avoid float-promotion off GPU.
     ε_T = eltype(X)(ε)
 
-    G_X = gradlogp_batch(X)                                                 # D×N
-    Y =
-        X .+ ε_T .* _apply_M_batched(G_X, cholM) .+
-        sqrt(2 * ε_T) .* _apply_L_batched(Ξ, cholM)                      # D×N
+    G_X = gradlogp_batch(X)
+    Y = X .+ ε_T .* _apply_M_batched(G_X, cholM) .+ sqrt(2 * ε_T) .* _apply_L_batched(Ξ, cholM)
 
-    lp_X = logp_batch(X)                                                    # N
-    lp_Y = logp_batch(Y)                                                    # N
-    G_Y = gradlogp_batch(Y)                                                # D×N
+    lp_X = logp_batch(X)
+    lp_Y = logp_batch(Y)
+    G_Y = gradlogp_batch(Y)
 
-    lq_YX = logq_mala_batched(Y, X, G_X, ε_T; cholM=cholM)                # N
-    lq_XY = logq_mala_batched(X, Y, G_Y, ε_T; cholM=cholM)                # N
+    lq_YX = logq_mala_batched(Y, X, G_X, ε_T; cholM=cholM)
+    lq_XY = logq_mala_batched(X, Y, G_Y, ε_T; cholM=cholM)
 
-    logα = @. (lp_Y + lq_XY) - (lp_X + lq_YX)                            # N
-    accepted = @. log(u) < logα                                             # N Bool
+    logα = @. (lp_Y + lq_XY) - (lp_X + lq_YX)
+    accepted = @. log(u) < logα
 
-    # Select: proposal if accepted, current if rejected.
-    # reshape to 1×N so it broadcasts against D×N.
     mask = reshape(accepted, 1, N)
-    X_next = @. ifelse(mask, Y, X)                                          # D×N
+    X_next = @. ifelse(mask, Y, X)
     return X_next, vec(accepted)
 end
 
 """
-Explicit JVP (pushforward) of `mala_step_surrogate_sigmoid` w.r.t. `x`, evaluated in
-the direction `v`.
-
-Formula derivation (M = identity; generalises to mass matrix via the cholM kwargs):
-
-    y(x)   = x + ε M ∇logp(x) + √(2ε) L ξ              (proposal)
-    w      = y'(x)[v]  = v + ε M H(x)v                   (1st HVP at x)
-    r      = x − y − ε M ∇logp(y)                        (backward residual)
-    dr/dx  = v − w − ε M H(y)w                           (2nd HVP at y, in direction w)
-    ∂logα  = ∇logp(y)·w − ∇logp(x)·v − r'M⁻¹dr/(2ε)
-    ∂g     = g(1−g) ∂logα
-    output = g w + (y−x) ∂g + (1−g) v
-
-Note: ∂log q(y|x)/∂x = 0 because the forward residual y−μₓ = √(2ε)Lξ is constant in x.
-
-Arguments:
-- `hvp_fn(pt, dir)`: computes ∂gradlogp(pt)/∂pt · dir = H(pt) dir (one JVP of gradlogp).
+Explicit JVP (pushforward) of `mala_step_surrogate_sigmoid` w.r.t. `x`.
 """
 function mala_step_surrogate_sigmoid_jvp(
     logp,
@@ -340,53 +427,56 @@ function mala_step_surrogate_sigmoid_jvp(
     hvp_fn;
     cholM=nothing,
 )
-    #Forward pass
-    g_x = gradlogp(x)
-    y = x .+ ε .* _apply_M(g_x, cholM) .+ sqrt(2ε) .* _apply_L(ξ, cholM)
-    g_y = gradlogp(y)
+    ws = MALAWorkspace(x)
+
+    # forward pass with reused scratch
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ε, ξ; cholM=cholM)
     logp_x = logp(x)
-    logp_y = logp(y)
-    logq_yx = logq_mala(y, x, g_x, ε; cholM=cholM)
-    logq_xy = logq_mala(x, y, g_y, ε; cholM=cholM)
+    logp_y = logp(ws.y)
+    copyto!(ws.g_y, gradlogp(ws.y))
+    logq_yx = logq_mala!(ws, ws.y, x, ws.g_x, ε; cholM=cholM)
+    logq_xy = logq_mala!(ws, x, ws.y, ws.g_y, ε; cholM=cholM)
     logα = (logp_y + logq_xy) - (logp_x + logq_yx)
     g̃ = logα - log(u)
     g = one(g̃) / (one(g̃) + exp(-g̃))
 
-    # 1st HVP: w = y'(x)[v] = v + ε M H(x)v 
-    Hv_x = hvp_fn(x, v)
-    w = v .+ ε .* _apply_M(Hv_x, cholM)
+    copyto!(ws.Hv_x, hvp_fn(x, v))
+    if cholM === nothing
+        @. ws.w = v + ε * ws.Hv_x
+    else
+        MHv_x = _apply_M(ws.Hv_x, cholM)
+        @. ws.w = v + ε * MHv_x
+    end
 
-    # needed for derivative of backward residual 
-    Hv_y = hvp_fn(y, w)
+    copyto!(ws.Hv_y, hvp_fn(ws.y, ws.w))
+    if cholM === nothing
+        @. ws.r = x - ws.y - ε * ws.g_y
+        @. ws.dr = v - ws.w - ε * ws.Hv_y
+        Minv_r = ws.r
+    else
+        Mg_y = _apply_M(ws.g_y, cholM)
+        MHv_y = _apply_M(ws.Hv_y, cholM)
+        @. ws.r = x - ws.y - ε * Mg_y
+        @. ws.dr = v - ws.w - ε * MHv_y
+        Minv_r = cholM \ ws.r
+    end
 
-    r = x .- y .- ε .* _apply_M(g_y, cholM)          # backward residual
-    dr = v .- w .- ε .* _apply_M(Hv_y, cholM)        # dr/dx[v]
-
-    # Directional derivative of log-acceptance ratio
-    # ∂log q(y|x)/∂x = 0; ∂log q(x|y)/∂x = −(1/2ε) M⁻¹r · dr
-    Minv_r = isnothing(cholM) ? r : cholM \ r
-    dlogα = dot(g_y, w) - dot(g_x, v) - inv(2ε) * dot(Minv_r, dr)
-
-    # Assemble output JVP
+    dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
     dg = g * (one(g) - g) * dlogα
-    return g .* w .+ (y .- x) .* dg .+ (one(g) - g) .* v
+
+    @. ws.jvp_out = g * ws.w + (ws.y - x) * dg + (one(g) - g) * v
+    return copy(ws.jvp_out)
 end
 
 """
 Fused MALA forward step and JVP of the sigmoid surrogate, sharing the primal computation.
 
-Returns `(x_next, J·v)` where:
-- `x_next` is from the exact forward step (binary accept/reject)
-- `J·v` is the JVP of `mala_step_surrogate_sigmoid` at `(x, ε, ξ, u)` in direction `v`
-
-Both results share a single evaluation of `gradlogp` at `x` and at the proposal `y`,
-and a single evaluation of `logp` at `x` and `y`.  This halves the primal cost
-relative to calling `mala_step_taped` and `mala_step_surrogate_sigmoid_jvp` separately.
-
-Arguments:
-- `hvp_fn(pt, dir)`: computes H(pt) dir = ∂gradlogp(pt)/∂pt · dir (one JVP of gradlogp).
+Returns `(x_next, J·v)`.
 """
-function mala_step_taped_and_jvp(
+function mala_step_taped_and_jvp!(
+    x_next::AbstractVector,
+    jvp_out::AbstractVector,
+    ws::MALAWorkspace,
     logp,
     gradlogp,
     x::AbstractVector,
@@ -400,36 +490,80 @@ function mala_step_taped_and_jvp(
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
 
-    g_x = gradlogp(x)
-    y = x .+ ε .* _apply_M(g_x, cholM) .+ sqrt(2ε) .* _apply_L(ξ, cholM)
-    g_y = gradlogp(y)
+    mala_proposal!(ws.y, ws, logp, gradlogp, x, ε, ξ; cholM=cholM)
     logp_x = logp(x)
-    logp_y = logp(y)
-    logq_yx = logq_mala(y, x, g_x, ε; cholM=cholM)
-    logq_xy = logq_mala(x, y, g_y, ε; cholM=cholM)
+    logp_y = logp(ws.y)
+    copyto!(ws.g_y, gradlogp(ws.y))
+    logq_yx = logq_mala!(ws, ws.y, x, ws.g_x, ε; cholM=cholM)
+    logq_xy = logq_mala!(ws, x, ws.y, ws.g_y, ε; cholM=cholM)
     logα = (logp_y + logq_xy) - (logp_x + logq_yx)
 
-    # Forward step: binary accept/reject 
-    x_next = (log(u) < logα) ? y : x
+    if log(u) < logα
+        copyto!(x_next, ws.y)
+    else
+        copyto!(x_next, x)
+    end
 
-    # JVP of sigmoid surrogate
     g̃ = logα - log(u)
     g = one(g̃) / (one(g̃) + exp(-g̃))
 
-    Hv_x = hvp_fn(x, v)
-    w = v .+ ε .* _apply_M(Hv_x, cholM)
+    copyto!(ws.Hv_x, hvp_fn(x, v))
+    if cholM === nothing
+        @. ws.w = v + ε * ws.Hv_x
+    else
+        MHv_x = _apply_M(ws.Hv_x, cholM)
+        @. ws.w = v + ε * MHv_x
+    end
 
-    Hv_y = hvp_fn(y, w)
-    r = x .- y .- ε .* _apply_M(g_y, cholM)
-    dr = v .- w .- ε .* _apply_M(Hv_y, cholM)
+    copyto!(ws.Hv_y, hvp_fn(ws.y, ws.w))
+    if cholM === nothing
+        @. ws.r = x - ws.y - ε * ws.g_y
+        @. ws.dr = v - ws.w - ε * ws.Hv_y
+        Minv_r = ws.r
+    else
+        Mg_y = _apply_M(ws.g_y, cholM)
+        MHv_y = _apply_M(ws.Hv_y, cholM)
+        @. ws.r = x - ws.y - ε * Mg_y
+        @. ws.dr = v - ws.w - ε * MHv_y
+        Minv_r = cholM \ ws.r
+    end
 
-    Minv_r = isnothing(cholM) ? r : cholM \ r
-    dlogα = dot(g_y, w) - dot(g_x, v) - inv(2ε) * dot(Minv_r, dr)
-
+    dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
     dg = g * (one(g) - g) * dlogα
-    jvp_out = g .* w .+ (y .- x) .* dg .+ (one(g) - g) .* v
 
+    @. jvp_out = g * ws.w + (ws.y - x) * dg + (one(g) - g) * v
     return x_next, jvp_out
 end
 
-end # module
+function mala_step_taped_and_jvp(
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    ε::Real,
+    ξ::AbstractVector,
+    u::Real,
+    v::AbstractVector,
+    hvp_fn;
+    cholM=nothing,
+)
+    ws = MALAWorkspace(x)
+    x_next = similar(x)
+    jvp_out = similar(x)
+    mala_step_taped_and_jvp!(
+        x_next,
+        jvp_out,
+        ws,
+        logp,
+        gradlogp,
+        x,
+        ε,
+        ξ,
+        u,
+        v,
+        hvp_fn;
+        cholM=cholM,
+    )
+    return x_next, jvp_out
+end
+
+end # module MALA

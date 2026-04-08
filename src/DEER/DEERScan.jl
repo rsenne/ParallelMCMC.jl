@@ -1,8 +1,32 @@
 module DEERScan
 
-export solve_affine_seq!, solve_affine_seq, solve_affine_scan_diag!, solve_affine_scan_diag,
+export AffineScanWorkspace,
+       solve_affine_seq!, solve_affine_seq,
+       solve_affine_scan_diag!, solve_affine_scan_diag,
        check_affine_scan, affine_scan_residual
-       
+
+"""
+Reusable workspace for the diagonal affine scan.
+
+Buffers are allocated with the same array type / device placement as the template
+matrix used to construct the workspace, so this is GPU-compatible for `CuArray`
+inputs and CPU-compatible for standard arrays.
+"""
+struct AffineScanWorkspace{M}
+    alpha::M
+    beta::M
+    alpha_new::M
+    beta_new::M
+end
+
+function AffineScanWorkspace(A_template::AbstractMatrix)
+    alpha = similar(A_template)
+    beta = similar(A_template)
+    alpha_new = similar(A_template)
+    beta_new = similar(A_template)
+    return AffineScanWorkspace(alpha, beta, alpha_new, beta_new)
+end
+
 """
     solve_affine_seq!(S, A, B, s0)
 
@@ -44,7 +68,7 @@ function solve_affine_seq(A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVect
 end
 
 """
-    solve_affine_scan_diag!(S, A, B, s0; check_shapes=true)
+    solve_affine_scan_diag!(S, A, B, s0, ws; check_shapes=true)
 
 Parallel-doubling solver for the diagonal affine recurrence
 
@@ -68,12 +92,14 @@ Notes:
 - It performs O(log T) sweep levels, each level consisting of whole-array
   broadcast operations.
 - `S` may alias neither `A` nor `B`.
+- `ws` allows the scan to run without warm-path allocations.
 """
 function solve_affine_scan_diag!(
     S::AbstractMatrix,
     A::AbstractMatrix,
     B::AbstractMatrix,
-    s0::AbstractVector;
+    s0::AbstractVector,
+    ws::AffineScanWorkspace;
     check_shapes::Bool=true,
 )
     D, T = size(A)
@@ -82,50 +108,62 @@ function solve_affine_scan_diag!(
         size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
         size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
         length(s0) == D || throw(DimensionMismatch("length(s0) must equal size(A,1)"))
+        size(ws.alpha) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.beta) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.alpha_new) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.beta_new) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
         Base.mightalias(S, A) && throw(ArgumentError("S must not alias A"))
         Base.mightalias(S, B) && throw(ArgumentError("S must not alias B"))
     end
 
     T == 0 && return S
 
-    # Work buffers for the composed affine maps up to each time index.
-    α = copy(A)
-    β = copy(B)
-    αnew = similar(α)
-    βnew = similar(β)
+    alpha = ws.alpha
+    beta = ws.beta
+    alpha_new = ws.alpha_new
+    beta_new = ws.beta_new
+
+    copyto!(alpha, A)
+    copyto!(beta, B)
 
     offset = 1
     while offset < T
         @views begin
-            # Unchanged prefix.
-            αnew[:, 1:offset] .= α[:, 1:offset]
-            βnew[:, 1:offset] .= β[:, 1:offset]
+            alpha_new[:, 1:offset] .= alpha[:, 1:offset]
+            beta_new[:, 1:offset] .= beta[:, 1:offset]
 
-            # Compose map at t with map at t-offset:
-            #   αnew[:, t] = α[:, t] .* α[:, t-offset]
-            #   βnew[:, t] = α[:, t] .* β[:, t-offset] .+ β[:, t]
             if offset < T
-                αnew[:, (offset + 1):T] .= α[:, (offset + 1):T] .* α[:, 1:(T - offset)]
-                βnew[:, (offset + 1):T] .=
-                    α[:, (offset + 1):T] .* β[:, 1:(T - offset)] .+ β[:, (offset + 1):T]
+                alpha_new[:, (offset + 1):T] .= alpha[:, (offset + 1):T] .* alpha[:, 1:(T - offset)]
+                beta_new[:, (offset + 1):T] .=
+                    alpha[:, (offset + 1):T] .* beta[:, 1:(T - offset)] .+ beta[:, (offset + 1):T]
             end
         end
 
-        α, αnew = αnew, α
-        β, βnew = βnew, β
+        alpha, alpha_new = alpha_new, alpha
+        beta, beta_new = beta_new, beta
         offset <<= 1
     end
 
-    # Apply the initial condition:
-    #   s_t = α[:, t] .* s0 + β[:, t]
-    S .= α .* reshape(s0, D, 1) .+ β
+    S .= alpha .* reshape(s0, D, 1) .+ beta
     return S
+end
+
+function solve_affine_scan_diag!(
+    S::AbstractMatrix,
+    A::AbstractMatrix,
+    B::AbstractMatrix,
+    s0::AbstractVector;
+    check_shapes::Bool=true,
+)
+    ws = AffineScanWorkspace(A)
+    return solve_affine_scan_diag!(S, A, B, s0, ws; check_shapes=check_shapes)
 end
 
 function solve_affine_scan_diag(A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector)
     T = promote_type(eltype(A), eltype(B), eltype(s0))
     S = similar(A, T, size(A))
-    return solve_affine_scan_diag!(S, A, B, s0)
+    ws = AffineScanWorkspace(A)
+    return solve_affine_scan_diag!(S, A, B, s0, ws)
 end
 
 """
