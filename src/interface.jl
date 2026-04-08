@@ -6,12 +6,16 @@ Defines model/sampler/state/transition types and implements
 =#
 
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch)
+    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp)
 
-Wraps a log-density function and its gradient for use with ParallelMCMC samplers.
+Wraps a log-density function, its gradient, and an optional Hessian-vector
+product helper for use with ParallelMCMC samplers.
 
 - `logdensity(x::AbstractVector) -> Real`
 - `grad_logdensity(x::AbstractVector) -> AbstractVector`
+- `hvp(x::AbstractVector, v::AbstractVector) -> AbstractVector` — optional
+  model-specific Hessian-vector product used by DEER to avoid AD through
+  problematic kernels when available.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional `Vector{Symbol}` of parameter names used in `MCMCChains` output.
   If `nothing` (the default), names fall back to `x[1], x[2], ...`.
@@ -21,9 +25,10 @@ Optional batched functions may still be stored on the model, but the current
 batched DEER update path. This keeps the codebase on the sequential/fused DEER
 path until batching is reintroduced consistently.
 """
-struct DensityModel{F,G,FB,GB} <: AbstractMCMC.AbstractModel
+struct DensityModel{F,G,H,FB,GB} <: AbstractMCMC.AbstractModel
     logdensity::F
     grad_logdensity::G
+    hvp::H
     logdensity_batch::FB
     grad_logdensity_batch::GB
     dim::Int
@@ -38,11 +43,12 @@ function DensityModel(
     grad_logdensity,
     dim::Int;
     param_names=nothing,
+    hvp=nothing,
     logdensity_batch=nothing,
     grad_logdensity_batch=nothing,
 )
     return DensityModel(
-        logdensity, grad_logdensity,
+        logdensity, grad_logdensity, hvp,
         logdensity_batch, grad_logdensity_batch,
         dim, param_names,
     )
@@ -249,9 +255,13 @@ function _build_mala_deer_rec(
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    # Prepare once and reuse for all HVPs/JVPs in this DEER block.
-    prep_hvp = DEER._prepare_hvp(gradlogp, backend, x0_like)
-    hvp_fn = (pt, dir) -> DEER._hvp_prepared(gradlogp, prep_hvp, backend, pt, dir)
+    # Use a model-provided HVP when available; otherwise fall back to AD.
+    hvp_fn = if model.hvp !== nothing
+        model.hvp
+    else
+        prep_hvp = DEER._prepare_hvp(gradlogp, backend, x0_like)
+        (pt, dir) -> DEER._hvp_prepared(gradlogp, prep_hvp, backend, pt, dir)
+    end
 
     # Exact forward step.
     step_fwd =

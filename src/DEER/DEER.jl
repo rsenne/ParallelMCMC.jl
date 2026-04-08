@@ -6,6 +6,9 @@ using ADTypes: ADTypes, AbstractADType
 import Enzyme: Enzyme
 using Random
 
+include("DEERScan.jl")
+using .DEERScan
+
 const DI = DifferentiationInterface
 # Enzyme forward-mode is optimal for JVPs used in :stoch_diag.
 # NOTE: On Windows, Enzyme CPU has a known LLVM unwinding issue (pinned v0.13.131).
