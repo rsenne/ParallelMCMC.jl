@@ -116,8 +116,15 @@ if _cuda_ok
     X_gpu = CUDA.CuMatrix(X_f32)
     y_gpu = CUDA.CuVector(y_f32)
     _logp_gpu, _gradlogp_gpu = BayesLogReg.make_problem(X_gpu, y_gpu)
+    _logp_gpu_batch, _gradlogp_gpu_batch = BayesLogReg.make_problem_batched(X_gpu, y_gpu)
 
-    model_gpu = DensityModel(_logp_gpu, _gradlogp_gpu, D)
+    # Provide batched functions so deer_update uses the GPU-efficient batched path
+    # (all T trajectory steps processed simultaneously via D×T matrix ops).
+    model_gpu = DensityModel(
+        _logp_gpu, _gradlogp_gpu, D;
+        logdensity_batch=_logp_gpu_batch,
+        grad_logdensity_batch=_gradlogp_gpu_batch,
+    )
 
     deer_gpu = ParallelMALASampler(
         0.1f0;
@@ -131,7 +138,7 @@ if _cuda_ok
     x0_gpu = CUDA.CuArray(zeros(Float32, D))
 
     println("=" ^ 65)
-    println("GPU ParallelMALASampler  (T=16, AutoEnzyme, Float32, CuArrays)")
+    println("GPU ParallelMALASampler  (T=16, batched, Float32, CuArrays)")
     println("Model: Bayesian logistic regression  D=$D  N_data=$N_data")
     println("=" ^ 65, "\n")
 

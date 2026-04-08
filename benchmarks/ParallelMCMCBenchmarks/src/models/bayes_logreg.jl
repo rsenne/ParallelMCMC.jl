@@ -47,4 +47,36 @@ function make_problem(X::AbstractMatrix, y::AbstractVector)
     return logp, gradlogp
 end
 
+
+"""
+    make_problem_batched(X, y) -> (logp_batch, gradlogp_batch)
+
+Batched counterparts of `make_problem` that accept D×M matrices and return M-vectors
+or D×M matrices.  Used by `ParallelMALASampler` GPU path for efficient matrix-level
+parallelism across trajectory steps.
+
+- `logp_batch(B::AbstractMatrix)` — `B` is D×M; returns M-vector of log-posteriors.
+- `gradlogp_batch(B::AbstractMatrix)` — returns D×M gradient matrix.
+
+Both closures are GPU-compatible: if X and y are CuArrays, all operations
+(`X*B`, broadcasts, sums) dispatch to CUDA kernels.
+"""
+function make_problem_batched(X::AbstractMatrix, y::AbstractVector)
+    function logp_batch(B::AbstractMatrix)
+        logits = X * B                                              # N×M
+        ll_mat = @. y * (-log1p(exp(-logits))) +
+                    (one(eltype(logits)) - y) * (-log1p(exp(logits)))  # N×M
+        ll = vec(sum(ll_mat; dims=1))                              # M
+        return ll .- oftype(eltype(ll), 0.5) .* vec(sum(abs2, B; dims=1))
+    end
+
+    function gradlogp_batch(B::AbstractMatrix)
+        logits = X * B                                              # N×M
+        p = @. one(eltype(logits)) / (one(eltype(logits)) + exp(-logits))  # N×M
+        return X' * (y .- p) .- B                                  # D×M
+    end
+
+    return logp_batch, gradlogp_batch
+end
+
 end # module

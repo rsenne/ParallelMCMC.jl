@@ -432,4 +432,130 @@ function mala_step_taped_and_jvp(
     return x_next, jvp_out
 end
 
+
+# ---------------------------------------------------------------------------
+# Batched MALA: process all T time steps simultaneously (GPU-efficient).
+#
+# The sequential deer_update loop calls step_fwd/JVP T times per DEER
+# iteration.  On GPU, T sequential kernel launches dominate wall time.
+# The batched path below maps a D×T matrix of previous states to the
+# next D×T matrix in one shot, replacing 6T gradient calls with ~8 batched
+# calls (each over the full T-column matrix).
+#
+# JVP of the sigmoid surrogate is computed via central-difference FD:
+#   JVP[z] ≈ (f_surr(x + h z) - f_surr(x - h z)) / (2h)
+# This avoids nested AD and GPU-incompatible HVP computation.
+# ---------------------------------------------------------------------------
+
+"""
+    _mala_surrogate_step_batched(logp_batch, gradlogp_batch, X, ε, Ξ, U; cholM=nothing)
+
+Sigmoid-surrogate MALA step for N chains simultaneously.
+
+- `X`  :: D×N — current states
+- `Ξ`  :: D×N — N(0,I) noise
+- `U`  :: N   — Uniform(0,1) draws
+
+`logp_batch(X) -> N` and `gradlogp_batch(X) -> D×N` operate on the full matrix.
+
+Returns `G .* Y + (1-G) .* X` (D×N) where G = sigmoid(logα - log u), the
+differentiable approximation of the binary accept indicator.
+"""
+function _mala_surrogate_step_batched(
+    logp_batch,
+    gradlogp_batch,
+    X::AbstractMatrix,
+    ε::Real,
+    Ξ::AbstractMatrix,
+    U::AbstractVector;
+    cholM=nothing,
+)
+    ε_T = eltype(X)(ε)
+    sqrt2ε = sqrt(2 * ε_T)
+    N = size(X, 2)
+
+    G_X = gradlogp_batch(X)
+    Y = X .+ ε_T .* _apply_M_batched(G_X, cholM) .+ sqrt2ε .* _apply_L_batched(Ξ, cholM)
+    G_Y = gradlogp_batch(Y)
+    Lp_X = logp_batch(X)
+    Lp_Y = logp_batch(Y)
+    LogQ_YX = logq_mala_batched(Y, X, G_X, ε_T; cholM=cholM)
+    LogQ_XY = logq_mala_batched(X, Y, G_Y, ε_T; cholM=cholM)
+
+    Logα = @. (Lp_Y + LogQ_XY) - (Lp_X + LogQ_YX)
+    G̃ = @. Logα - log(U)
+    G_sig = @. one(eltype(G̃)) / (one(eltype(G̃)) + exp(-G̃))
+    G_row = reshape(G_sig, 1, N)
+    return @. G_row * Y + (one(eltype(G_row)) - G_row) * X
+end
+
+"""
+    mala_fwd_and_jvp_batched(logp_batch, gradlogp_batch, Xbar, ε, Ξ, U, Z; cholM, fd_step)
+
+Batched forward step + Hutchinson Jacobian diagonal estimate for T chains.
+
+**Arguments**
+- `logp_batch(X::AbstractMatrix)` → length-T vector of log-densities.
+- `gradlogp_batch(X::AbstractMatrix)` → D×T gradient matrix.
+- `Xbar` :: D×T — previous states (Xbar[:,1] = s₀, Xbar[:,t] = S[:,t-1]).
+- `ε`    :: step size.
+- `Ξ`    :: D×T — noise tape.
+- `U`    :: T   — uniform tape.
+- `Z`    :: D×T — Rademacher probes (one per time step).
+- `fd_step` — FD step h for surrogate JVP (default `cbrt(eps(eltype(Xbar)))`).
+
+**Returns** `(FT, Jt)`:
+- `FT` :: D×T — exact MALA transitions (binary accept/reject per column).
+- `Jt` :: D×T — `Z .⊙ JVP_surrogate[Z]`, the Hutchinson diagonal estimate.
+
+**How it works**: the JVP of the sigmoid surrogate w.r.t. xbar is approximated
+by central differences:
+    `JVP[z] ≈ (f_surr(Xbar + h z) - f_surr(Xbar - h z)) / (2h)`
+
+This needs 2 extra `gradlogp_batch` calls (at Xbar±hZ) — each batched over all T
+columns — replacing `6T` sequential per-step gradient calls with `~8` batched calls.
+"""
+function mala_fwd_and_jvp_batched(
+    logp_batch,
+    gradlogp_batch,
+    Xbar::AbstractMatrix,
+    ε::Real,
+    Ξ::AbstractMatrix,
+    U::AbstractVector,
+    Z::AbstractMatrix;
+    cholM=nothing,
+    fd_step=nothing,
+)
+    ε_T = eltype(Xbar)(ε)
+    sqrt2ε = sqrt(2 * ε_T)
+    h = fd_step !== nothing ? eltype(Xbar)(fd_step) : cbrt(eps(eltype(Xbar)))
+    T = size(Xbar, 2)
+
+    # --- Exact forward step (binary accept/reject) ---
+    G_X = gradlogp_batch(Xbar)
+    Y = Xbar .+ ε_T .* _apply_M_batched(G_X, cholM) .+ sqrt2ε .* _apply_L_batched(Ξ, cholM)
+    G_Y = gradlogp_batch(Y)
+    Lp_X = logp_batch(Xbar)
+    Lp_Y = logp_batch(Y)
+    LogQ_YX = logq_mala_batched(Y, Xbar, G_X, ε_T; cholM=cholM)
+    LogQ_XY = logq_mala_batched(Xbar, Y, G_Y, ε_T; cholM=cholM)
+    Logα = @. (Lp_Y + LogQ_XY) - (Lp_X + LogQ_YX)
+    log_U = log.(U)
+    accepted = @. log_U < Logα
+    FT = ifelse.(reshape(accepted, 1, T), Y, Xbar)
+
+    # --- JVP of sigmoid surrogate via central-difference FD ---
+    # f_surr(Xbar + h Z) and f_surr(Xbar - h Z) use the same tape (Ξ, U).
+    F_plus = _mala_surrogate_step_batched(
+        logp_batch, gradlogp_batch, Xbar .+ h .* Z, ε_T, Ξ, U; cholM=cholM
+    )
+    F_minus = _mala_surrogate_step_batched(
+        logp_batch, gradlogp_batch, Xbar .- h .* Z, ε_T, Ξ, U; cholM=cholM
+    )
+    Jvp = (F_plus .- F_minus) ./ (2 * h)
+    Jt = Z .* Jvp
+
+    return FT, Jt
+end
+
 end # module

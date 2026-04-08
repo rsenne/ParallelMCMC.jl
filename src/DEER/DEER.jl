@@ -22,11 +22,18 @@ Deterministic recursion driven by a pre-generated tape.
   shares primal computation between the forward step and the JVP.  When provided,
   `deer_update` uses it for the first (or only) Hutchinson probe, halving the number
   of `gradlogp` and `logp` evaluations per time step.  Defaults to `nothing`.
+- `fwd_and_jvp_batch(Xbar, Z)`: optional batched function `-> (FT, Jt)` that
+  processes all T time steps simultaneously (GPU-efficient).  When provided,
+  `deer_update` uses this path instead of the sequential loop for `:stoch_diag`.
+  `Xbar` is D×T (previous states), `Z` is D×T (Rademacher probes), returns
+  `FT` (D×T, exact forward steps) and `Jt` (D×T, Hutchinson diagonal estimates).
+  Defaults to `nothing`.
 """
-struct TapedRecursion{Ff,Fj,Ffj,Tt}
+struct TapedRecursion{Ff,Fj,Ffj,Ffb,Tt}
     step_fwd::Ff        # (x, tape_t) -> x_next
     jvp::Fj             # (x, tape_t, v) -> J·v  (explicit, required)
     fwd_and_jvp::Ffj    # (x, tape_t, v) -> (x_next, J·v), or Nothing
+    fwd_and_jvp_batch::Ffb  # (Xbar::D×T, Z::D×T) -> (FT::D×T, Jt::D×T), or Nothing
     tape::Vector{Tt}
 end
 
@@ -36,8 +43,9 @@ function TapedRecursion(
     jvp,
     tape::Vector;
     fwd_and_jvp=nothing,
+    fwd_and_jvp_batch=nothing,
 )
-    return TapedRecursion(step_fwd, jvp, fwd_and_jvp, tape)
+    return TapedRecursion(step_fwd, jvp, fwd_and_jvp, fwd_and_jvp_batch, tape)
 end
 
 """
@@ -62,6 +70,22 @@ end
     end
     copyto!(z, vals)   # host-to-device when z is a CuVector; plain copy otherwise
     return z
+end
+
+"""
+Fill the D×T matrix `Z` with ±1 Rademacher entries.
+
+Generates the full D×T matrix on CPU then transfers in a single
+`copyto!`, avoiding T separate host-to-device copies.
+GPU-compatible: `copyto!(CuMatrix, Matrix)` is a single H→D transfer.
+"""
+@inline function _rademacher_matrix!(Z::AbstractMatrix{T}, rng::AbstractRNG) where {T}
+    D, n = size(Z)
+    bits = rand(rng, Bool, D, n)
+    vals = Matrix{T}(undef, D, n)
+    @. vals = ifelse(bits, one(T), -one(T))
+    copyto!(Z, vals)
+    return Z
 end
 
 """
@@ -183,10 +207,17 @@ Keywords:
 - `jacobian`: `:stoch_diag` (Hutchinson, 1 JVP per step — GPU default) or
   `:diag` (exact diagonal, D JVPs per step — useful for debugging on small problems).
 - `damping`: in (0,1]
-- `probes`: Hutchinson probes for `:stoch_diag`
+- `probes`: Hutchinson probes for `:stoch_diag` (sequential path only)
 
-When `rec.fwd_and_jvp` is set, the first (or only) Hutchinson probe fuses the
-forward-step evaluation with the JVP, avoiding redundant primal `gradlogp` calls.
+**Batched path** (GPU-efficient): when `rec.fwd_and_jvp_batch !== nothing` and
+`jacobian === :stoch_diag`, all T time steps are processed simultaneously using
+matrix operations.  A single D×T Rademacher matrix replaces T separate
+host-to-device transfers.  This mirrors the `jax.vmap` pattern in the Python
+reference implementation and eliminates T sequential kernel-launch overheads.
+
+**Sequential path** (fallback): used when no batch function is available or
+`jacobian === :diag`.  When `rec.fwd_and_jvp` is set, the first (or only)
+Hutchinson probe fuses the forward-step evaluation with the JVP.
 """
 function deer_update(
     rec::TapedRecursion,
@@ -206,40 +237,66 @@ function deer_update(
 
     A = similar(S)
     B = similar(S)
-    zbuf = similar(s0, D)
 
-    for t in 1:T
-        xbar = t == 1 ? s0 : S[:, t - 1]
+    # ------------------------------------------------------------------
+    # Batched path: process all T steps at once.
+    # Uses fwd_and_jvp_batch(Xbar, Z) -> (FT, Jt) where Xbar and Z are
+    # D×T matrices.  One call replaces T sequential fwd_and_jvp calls,
+    # enabling GPU parallelism across time steps.
+    # ------------------------------------------------------------------
+    if rec.fwd_and_jvp_batch !== nothing && jacobian === :stoch_diag
+        # Build D×T matrix of previous states: Xbar[:,1] = s0, Xbar[:,t] = S[:,t-1]
+        Xbar = similar(S)
+        copyto!(view(Xbar, :, 1), s0)
+        T > 1 && (Xbar[:, 2:end] .= S[:, 1:(T - 1)])
 
-        if jacobian === :stoch_diag
-            _rademacher!(zbuf, rng)
+        # Generate all T Rademacher probes in one host-to-device transfer.
+        Z = similar(S)
+        _rademacher_matrix!(Z, rng)
 
-            # First probe: fuse forward pass and JVP when possible.
-            ft, jvp1 = if rec.fwd_and_jvp !== nothing
-                rec.fwd_and_jvp(xbar, rec.tape[t], zbuf)
-            else
-                (rec.step_fwd(xbar, rec.tape[t]), rec.jvp(xbar, rec.tape[t], zbuf))
-            end
-            jt = zbuf .* jvp1
+        FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
+        A .= Jt
+        @. B = FT - Jt * Xbar
 
-            # Additional probes: only JVP needed (ft already computed above).
-            for _ in 2:probes
+    # ------------------------------------------------------------------
+    # Sequential path: iterate over t = 1 … T.
+    # ------------------------------------------------------------------
+    else
+        zbuf = similar(s0, D)
+
+        for t in 1:T
+            xbar = t == 1 ? s0 : S[:, t - 1]
+
+            if jacobian === :stoch_diag
                 _rademacher!(zbuf, rng)
-                jvp_k = rec.jvp(xbar, rec.tape[t], zbuf)
-                jt .+= zbuf .* jvp_k
+
+                # First probe: fuse forward pass and JVP when possible.
+                ft, jvp1 = if rec.fwd_and_jvp !== nothing
+                    rec.fwd_and_jvp(xbar, rec.tape[t], zbuf)
+                else
+                    (rec.step_fwd(xbar, rec.tape[t]), rec.jvp(xbar, rec.tape[t], zbuf))
+                end
+                jt = zbuf .* jvp1
+
+                # Additional probes: only JVP needed (ft already computed above).
+                for _ in 2:probes
+                    _rademacher!(zbuf, rng)
+                    jvp_k = rec.jvp(xbar, rec.tape[t], zbuf)
+                    jt .+= zbuf .* jvp_k
+                end
+                probes > 1 && (jt .*= one(eltype(jt)) / probes)
+
+            elseif jacobian === :diag
+                ft = rec.step_fwd(xbar, rec.tape[t])
+                jt = jac_diag_via_jvps(rec, xbar, t)
+
+            else
+                throw(ArgumentError("jacobian must be :diag or :stoch_diag"))
             end
-            probes > 1 && (jt .*= one(eltype(jt)) / probes)
 
-        elseif jacobian === :diag
-            ft = rec.step_fwd(xbar, rec.tape[t])
-            jt = jac_diag_via_jvps(rec, xbar, t)
-
-        else
-            throw(ArgumentError("jacobian must be :diag or :stoch_diag"))
+            view(A, :, t) .= jt
+            view(B, :, t) .= ft .- jt .* xbar
         end
-
-        view(A, :, t) .= jt
-        view(B, :, t) .= ft .- jt .* xbar
     end
 
     S_new = solve_affine_scan_diag(A, B, s0)

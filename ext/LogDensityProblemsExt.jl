@@ -58,7 +58,7 @@ function ParallelMCMC.DensityModel(ld; param_names=nothing)
         return g
     end
 
-    return ParallelMCMC.DensityModel(logp, gradlogp, dim, param_names)
+    return ParallelMCMC.DensityModel(logp, gradlogp, dim; param_names=param_names)
 end
 
 end # module

@@ -6,8 +6,7 @@ Defines model/sampler/state/transition types and implements
 =#
 
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names=nothing)
-    DensityModel(logdensity, grad_logdensity, dim, param_names)
+    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch)
 
 Wraps a log-density function and its gradient for use with ParallelMCMC samplers.
 
@@ -17,19 +16,58 @@ Wraps a log-density function and its gradient for use with ParallelMCMC samplers
 - `param_names` — optional `Vector{Symbol}` of parameter names used in `MCMCChains` output.
   If `nothing` (the default), names fall back to `x[1], x[2], ...`.
 
+# Optional batched functions (required for GPU-efficient `ParallelMALASampler`)
+
+- `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — evaluates `logdensity` on
+  every column of `X` (D×N) and returns a length-N vector.
+- `grad_logdensity_batch(X::AbstractMatrix) -> AbstractMatrix` — evaluates
+  `grad_logdensity` on every column of `X` and returns a D×N matrix.
+
+When both batched functions are provided, `ParallelMALASampler` switches to a
+**batched DEER update** that processes all T trajectory steps simultaneously using
+D×T matrix operations instead of a sequential loop.  This is the key for GPU
+efficiency: it replaces 6T sequential gradient calls with ~8 batched calls over
+the full matrix, mirroring JAX's `jax.vmap` pattern.
+
+For GPU (CuArray inputs), implement the batched functions via vectorised operations:
+
+```julia
+logp_batch(X) = map(t -> logp(X[:,t]), 1:size(X,2))           # CPU only
+gradlogp_batch(X) = hcat([gradlogp(X[:,t]) for t in 1:size(X,2)]...)   # CPU only
+
+# GPU: implement as true matrix operations, e.g. for a Gaussian target:
+logp_batch(X)        = -0.5f0 .* vec(sum(abs2, X; dims=1))
+gradlogp_batch(X)    = -X
+```
+
 Parameter names can also be overridden at sampling time via the `param_names` keyword
 argument of `sample(...)`.
 """
-struct DensityModel{F,G} <: AbstractMCMC.AbstractModel
+struct DensityModel{F,G,FB,GB} <: AbstractMCMC.AbstractModel
     logdensity::F
     grad_logdensity::G
+    logdensity_batch::FB          # (D×N AbstractMatrix) -> N-AbstractVector, or Nothing
+    grad_logdensity_batch::GB     # (D×N AbstractMatrix) -> D×N AbstractMatrix, or Nothing
     dim::Int
     param_names::Union{Nothing,Vector{Symbol}}
 end
 
-# Backward-compatible 3-argument constructor
-function DensityModel(logdensity, grad_logdensity, dim)
-    DensityModel(logdensity, grad_logdensity, dim, nothing)
+"""
+Primary constructor — accepts optional batched functions as keyword arguments.
+"""
+function DensityModel(
+    logdensity,
+    grad_logdensity,
+    dim::Int;
+    param_names=nothing,
+    logdensity_batch=nothing,
+    grad_logdensity_batch=nothing,
+)
+    return DensityModel(
+        logdensity, grad_logdensity,
+        logdensity_batch, grad_logdensity_batch,
+        dim, param_names,
+    )
 end
 
 """
@@ -263,7 +301,8 @@ end
 function _build_mala_deer_rec(
     model::DensityModel,
     ε::Real,
-    tape::Vector{<:MALATapeElement};
+    tape::Vector{<:MALATapeElement},
+    x0_like::AbstractVector;
     cholM=nothing,
     backend=DEER.DEFAULT_BACKEND,
 )
@@ -289,7 +328,39 @@ function _build_mala_deer_rec(
         logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
     )
 
-    return DEER.TapedRecursion(step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp)
+    # fwd_and_jvp_batch: GPU-efficient batched path.
+    # Pre-stacks the tape (Ξ, U) into device-appropriate matrices so that
+    # each deer_update call pays only one small host-to-device transfer for U
+    # instead of T transfers.  Requires model.logdensity_batch /
+    # model.grad_logdensity_batch to be provided by the user.
+    fwd_and_jvp_batch = if model.logdensity_batch !== nothing &&
+                           model.grad_logdensity_batch !== nothing
+        logp_batch = model.logdensity_batch
+        gradlogp_batch = model.grad_logdensity_batch
+        T = length(tape)
+        D = length(x0_like)
+
+        # Pre-stack noise vectors into a D×T matrix on the same device as x0_like.
+        Ξ_stacked = similar(x0_like, D, T)
+        for t in 1:T
+            copyto!(view(Ξ_stacked, :, t), tape[t].ξ)
+        end
+        # Uniforms are CPU scalars; stack and transfer once.
+        U_stacked = copyto!(similar(x0_like, T), [tape[t].u for t in 1:T])
+
+        # The actual batch function captures the pre-stacked tape.
+        (Xbar, Z) -> MALA.mala_fwd_and_jvp_batched(
+            logp_batch, gradlogp_batch, Xbar, ε, Ξ_stacked, U_stacked, Z; cholM=cholM
+        )
+    else
+        nothing
+    end
+
+    return DEER.TapedRecursion(
+        step_fwd, jvp, tape;
+        fwd_and_jvp=fwd_and_jvp,
+        fwd_and_jvp_batch=fwd_and_jvp_batch,
+    )
 end
 
 function _deer_solve_new_tape(
@@ -308,7 +379,7 @@ function _deer_solve_new_tape(
         MALATapeElement(ξ, FP(rand(rng)))
     end
     rec = _build_mala_deer_rec(
-        model, sampler.epsilon, tape; cholM=sampler.cholM, backend=sampler.backend
+        model, sampler.epsilon, tape, x0; cholM=sampler.cholM, backend=sampler.backend
     )
     S = DEER.solve(
         rec,
@@ -369,6 +440,7 @@ function AbstractMCMC.step(
         logp_new = model.logdensity(x_new)
         trans = ParallelMALATransition(x_new, logp_new)
         new_state = ParallelMALAState(x_new, logp_new, S_new, tape, 1)
+
         return trans, new_state
     end
 end
