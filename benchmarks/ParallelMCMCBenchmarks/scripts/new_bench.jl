@@ -41,7 +41,8 @@ y_gpu = CUDA.CuVector(y_f32)
 
 logp_cpu, gradlogp_cpu = BayesLogReg.make_problem(X_cpu, y_cpu)
 logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-logp_gpu_batch, gradlogp_gpu_batch = BayesLogReg.make_problem_batched(X_gpu, y_gpu)
+logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
+    BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
 
 model_gpu = DensityModel(
     logp_gpu,
@@ -50,6 +51,7 @@ model_gpu = DensityModel(
     hvp=hvp_gpu,
     logdensity_batch=logp_gpu_batch,
     grad_logdensity_batch=gradlogp_gpu_batch,
+    hvp_batch=hvp_gpu_batch,
 )
 
 T_vals = [8, 16, 32, 64]
@@ -186,7 +188,7 @@ function bench_raw_deer_build(model, x0; T, reps)
     end samples=reps evals=1
 
     show(stdout, MIME("text/plain"), b)
-    println("\n")
+    println()
 
     t_ms = median(b).time / 1e6
     @printf "    median build time: %.3f ms\n\n" t_ms
@@ -240,7 +242,7 @@ function bench_raw_deer_solve_only(model, x0; T, reps)
     end samples=reps evals=1
 
     show(stdout, MIME("text/plain"), b)
-    println("\n")
+    println()
 
     t_ms = median(b).time / 1e6
     samples_per_sec = T / (median(b).time / 1e9)
@@ -275,7 +277,7 @@ function bench_seq_mala_cpu(logp, gradlogp, x0; T, reps)
     end samples=reps evals=1
 
     show(stdout, MIME("text/plain"), b)
-    println("\n")
+    println()
 
     t_ms = median(b).time / 1e6
     samples_per_sec = T / (median(b).time / 1e9)
@@ -313,7 +315,7 @@ function bench_block_logdensity(model, rec, x0, ws; T, reps)
     end samples=reps evals=1
 
     show(stdout, MIME("text/plain"), b)
-    println("\n")
+    println()
 
     t_ms = median(b).time / 1e6
     @printf "    median block logdensity time: %.3f ms\n\n" t_ms
@@ -361,7 +363,7 @@ for T in T_vals
     t_logp_ms = median(logp_results[T]).time / 1e6
     speedup = t_cpu_ms / t_gpu_ms
 
-    @printf "% -8d  %12.3f  %14.3f  %14.1f  %12.3f  %12.1f  %14.3f  %10.2f\n" T t_build_ms t_gpu_ms gpu_rate t_cpu_ms cpu_rate t_logp_ms speedup
+    @printf "%-8d  %12.3f  %14.3f  %14.1f  %12.3f  %12.1f  %14.3f  %10.2f\n" T t_build_ms t_gpu_ms gpu_rate t_cpu_ms cpu_rate t_logp_ms speedup
 end
 
 println()

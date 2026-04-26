@@ -6,31 +6,38 @@ Defines model/sampler/state/transition types and implements
 =#
 
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp)
+    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp, hvp_batch)
 
-Wraps a log-density function, its gradient, and an optional Hessian-vector
-product helper for use with ParallelMCMC samplers.
+Wraps a log-density function, its gradient, and optional Hessian-vector
+product helpers for use with ParallelMCMC samplers.
 
 - `logdensity(x::AbstractVector) -> Real`
 - `grad_logdensity(x::AbstractVector) -> AbstractVector`
 - `hvp(x::AbstractVector, v::AbstractVector) -> AbstractVector` — optional
   model-specific Hessian-vector product used by DEER to avoid AD through
-  problematic kernels when available.
+  problematic kernels when available. If omitted, the sampler differentiates
+  `logdensity` directly via DifferentiationInterface.
+- `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
+  log-density over columns.
+- `grad_logdensity_batch(X::AbstractMatrix) -> AbstractMatrix` — optional batched
+  gradient over columns.
+- `hvp_batch(X::AbstractMatrix, V::AbstractMatrix) -> AbstractMatrix` — optional
+  batched Hessian-vector product over columns. If omitted, the sampler can
+  differentiate `grad_logdensity_batch` to keep the batched DEER path enabled.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional `Vector{Symbol}` of parameter names used in `MCMCChains` output.
   If `nothing` (the default), names fall back to `x[1], x[2], ...`.
 
-Optional batched functions may still be stored on the model, but the current
-`ParallelMALASampler` implementation below intentionally does **not** use the
-batched DEER update path. This keeps the codebase on the sequential/fused DEER
-path until batching is reintroduced consistently.
+When `logdensity_batch` and `grad_logdensity_batch` are provided,
+`ParallelMALASampler` enables the batched DEER update path.
 """
-struct DensityModel{F,G,H,FB,GB} <: AbstractMCMC.AbstractModel
+struct DensityModel{F,G,H,FB,GB,HB} <: AbstractMCMC.AbstractModel
     logdensity::F
     grad_logdensity::G
     hvp::H
     logdensity_batch::FB
     grad_logdensity_batch::GB
+    hvp_batch::HB
     dim::Int
     param_names::Union{Nothing,Vector{Symbol}}
 end
@@ -46,10 +53,11 @@ function DensityModel(
     hvp=nothing,
     logdensity_batch=nothing,
     grad_logdensity_batch=nothing,
+    hvp_batch=nothing,
 )
     return DensityModel(
         logdensity, grad_logdensity, hvp,
-        logdensity_batch, grad_logdensity_batch,
+        logdensity_batch, grad_logdensity_batch, hvp_batch,
         dim, param_names,
     )
 end
@@ -228,10 +236,12 @@ end
 """
 State for a `ParallelMALASampler` chain.
 """
-struct ParallelMALAState{V<:AbstractVector,L<:Real,M<:AbstractMatrix}
+struct ParallelMALAState{V<:AbstractVector,L<:Real,M<:AbstractMatrix,LV<:AbstractVector,W}
     x::V
     logp::L
     trajectory::M
+    logps::LV
+    workspace::W
     tape::Vector{<:MALATapeElement}
     t::Int
 end
@@ -255,12 +265,16 @@ function _build_mala_deer_rec(
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    # Use a model-provided HVP when available; otherwise fall back to AD.
+    # Use a model-provided HVP when available. Otherwise differentiate the
+    # scalar logdensity directly
     hvp_fn = if model.hvp !== nothing
         model.hvp
     else
-        prep_hvp = DEER._prepare_hvp(gradlogp, backend, x0_like)
-        (pt, dir) -> DEER._hvp_prepared(gradlogp, prep_hvp, backend, pt, dir)
+        hvp_backend = DEER._hvp_second_order_backend(backend)
+        prep_hvp = DEER._prepare_logdensity_hvp(logp, hvp_backend, x0_like)
+        (pt, dir) -> DEER._logdensity_hvp_prepared(
+            logp, prep_hvp, hvp_backend, pt, dir
+        )
     end
 
     # Exact forward step.
@@ -277,8 +291,49 @@ function _build_mala_deer_rec(
         logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
     )
 
-    # Batched path intentionally disabled for now.
-    fwd_and_jvp_batch = nothing
+    fwd_and_jvp_batch = if model.logdensity_batch !== nothing &&
+                           model.grad_logdensity_batch !== nothing
+        D = length(x0_like)
+        T = length(tape)
+
+        Ξ = similar(x0_like, D, T)
+        U_host = Vector{typeof(tape[1].u)}(undef, T)
+        U = similar(x0_like, typeof(tape[1].u), T)
+
+        for t in 1:T
+            copyto!(view(Ξ, :, t), tape[t].ξ)
+            U_host[t] = tape[t].u
+        end
+        copyto!(U, U_host)
+
+        X_template = similar(x0_like, D, T)
+        fill!(X_template, zero(eltype(X_template)))
+        hvp_batch = if model.hvp_batch !== nothing
+            model.hvp_batch
+        else
+            hvp_batch_backend = DEER._hvp_backend(backend)
+            prep_hvp_batch = DEER._prepare_batch_hvp_from_grad(
+                model.grad_logdensity_batch, hvp_batch_backend, X_template
+            )
+            (X, V) -> DEER._batch_hvp_from_grad_prepared(
+                model.grad_logdensity_batch, prep_hvp_batch, hvp_batch_backend, X, V
+            )
+        end
+
+        (Xbar, Z) -> MALA.mala_step_batched_fwd_and_jvp(
+            model.logdensity_batch,
+            model.grad_logdensity_batch,
+            hvp_batch,
+            Xbar,
+            ε,
+            Ξ,
+            U,
+            Z;
+            cholM=cholM,
+        )
+    else
+        nothing
+    end
 
     return DEER.TapedRecursion(
         step_fwd, jvp, tape;
@@ -291,7 +346,8 @@ function _deer_solve_new_tape(
     rng::Random.AbstractRNG,
     model::DensityModel,
     sampler::ParallelMALASampler,
-    x0::AbstractVector,
+    x0::AbstractVector;
+    workspace=nothing,
 )
     D = model.dim
     T = sampler.T
@@ -306,6 +362,8 @@ function _deer_solve_new_tape(
         model, sampler.epsilon, tape, x0; cholM=sampler.cholM, backend=sampler.backend
     )
 
+    ws = workspace === nothing ? DEER.DEERWorkspace(x0, T) : workspace
+
     S = DEER.solve(
         rec,
         x0;
@@ -316,8 +374,18 @@ function _deer_solve_new_tape(
         damping=sampler.damping,
         probes=sampler.probes,
         rng=rng,
+        workspace=ws,
     )
-    return S, tape
+    return S, tape, ws
+end
+
+function _trajectory_logps(model::DensityModel, S::AbstractMatrix)
+    if model.logdensity_batch !== nothing
+        return Array(model.logdensity_batch(S))
+    end
+
+    T = size(S, 2)
+    return [model.logdensity(S[:, t]) for t in 1:T]
 end
 
 function AbstractMCMC.step(
@@ -333,11 +401,12 @@ function AbstractMCMC.step(
         randn(rng, FP, model.dim)
     end
 
-    S, tape = _deer_solve_new_tape(rng, model, sampler, x0)
+    S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0)
+    logps = _trajectory_logps(model, S)
     x1 = S[:, 1]
-    logp1 = model.logdensity(x1)
+    logp1 = logps[1]
     trans = ParallelMALATransition(x1, logp1)
-    state = ParallelMALAState(x1, logp1, S, tape, 1)
+    state = ParallelMALAState(x1, logp1, S, logps, ws, tape, 1)
     return trans, state
 end
 
@@ -353,17 +422,28 @@ function AbstractMCMC.step(
 
     if t_next <= T
         x_new = state.trajectory[:, t_next]
-        logp_new = model.logdensity(x_new)
+        logp_new = state.logps[t_next]
         trans = ParallelMALATransition(x_new, logp_new)
-        new_state = ParallelMALAState(x_new, logp_new, state.trajectory, state.tape, t_next)
+        new_state = ParallelMALAState(
+            x_new,
+            logp_new,
+            state.trajectory,
+            state.logps,
+            state.workspace,
+            state.tape,
+            t_next,
+        )
         return trans, new_state
     else
         x0 = state.trajectory[:, T]
-        S_new, tape = _deer_solve_new_tape(rng, model, sampler, x0)
+        S_new, tape, ws = _deer_solve_new_tape(
+            rng, model, sampler, x0; workspace=state.workspace
+        )
+        logps = _trajectory_logps(model, S_new)
         x_new = S_new[:, 1]
-        logp_new = model.logdensity(x_new)
+        logp_new = logps[1]
         trans = ParallelMALATransition(x_new, logp_new)
-        new_state = ParallelMALAState(x_new, logp_new, S_new, tape, 1)
+        new_state = ParallelMALAState(x_new, logp_new, S_new, logps, ws, tape, 1)
         return trans, new_state
     end
 end

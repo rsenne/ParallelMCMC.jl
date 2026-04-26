@@ -14,7 +14,8 @@ export MALAWorkspace,
        mala_step_surrogate_sigmoid,
        mala_step_surrogate_sigmoid_jvp,
        mala_step_taped_and_jvp,
-       mala_step_taped_and_jvp!
+       mala_step_taped_and_jvp!,
+       mala_step_batched_fwd_and_jvp
 
 # Preconditioner dispatch helpers. cholM is either nothing (identity) or a Cholesky factor.
 _apply_M(g, ::Nothing) = g
@@ -414,6 +415,75 @@ function mala_step_batched(
 end
 
 """
+Batched fused surrogate forward step and JVP over columns.
+
+`X`, `Ξ`, and `Z` are all D×T, and `u` has length T.
+Returns `(FT, Jt)` where both outputs are D×T.
+"""
+function mala_step_batched_fwd_and_jvp(
+    logp_batch,
+    gradlogp_batch,
+    hvp_batch,
+    X::AbstractMatrix,
+    ε::Real,
+    Ξ::AbstractMatrix,
+    u::AbstractVector,
+    Z::AbstractMatrix;
+    cholM=nothing,
+)
+    D, T = size(X)
+    size(Ξ) == (D, T) || throw(DimensionMismatch("X and Ξ must have the same size"))
+    size(Z) == (D, T) || throw(DimensionMismatch("X and Z must have the same size"))
+    length(u) == T || throw(DimensionMismatch("u must have length T"))
+
+    εT = convert(eltype(X), ε)
+    oneT = one(eltype(X))
+    sqrt2εT = sqrt(2 * εT)
+
+    G_X = gradlogp_batch(X)
+    Y = X .+ εT .* _apply_M_batched(G_X, cholM) .+ sqrt2εT .* _apply_L_batched(Ξ, cholM)
+
+    lp_X = logp_batch(X)
+    lp_Y = logp_batch(Y)
+    G_Y = gradlogp_batch(Y)
+
+    lq_YX = logq_mala_batched(Y, X, G_X, εT; cholM=cholM)
+    lq_XY = logq_mala_batched(X, Y, G_Y, εT; cholM=cholM)
+    logα = @. (lp_Y + lq_XY) - (lp_X + lq_YX)
+
+    u_like = similar(logα, eltype(logα), T)
+    copyto!(u_like, u)
+    logu = log.(u_like)
+
+    g̃ = logα .- logu
+    g = @. oneT / (oneT + exp(-g̃))
+    g_row = reshape(g, 1, T)
+
+    accepted = @. logu < logα
+    accepted_row = reshape(accepted, 1, T)
+    FT = @. ifelse(accepted_row, Y, X)
+
+    Hv_X = hvp_batch(X, Z)
+    W = Z .+ εT .* _apply_M_batched(Hv_X, cholM)
+
+    Hv_Y = hvp_batch(Y, W)
+    R = X .- Y .- εT .* _apply_M_batched(G_Y, cholM)
+    dR = Z .- W .- εT .* _apply_M_batched(Hv_Y, cholM)
+
+    Minv_R = cholM === nothing ? R : (cholM \ R)
+
+    dlogα = vec(sum(G_Y .* W; dims=1)) .-
+            vec(sum(G_X .* Z; dims=1)) .-
+            inv(2 * εT) .* vec(sum(Minv_R .* dR; dims=1))
+
+    dg = g .* (oneT .- g) .* dlogα
+    dg_row = reshape(dg, 1, T)
+
+    Jt = @. ifelse(accepted_row, W, Z) + (Y - X) * dg_row
+    return FT, Jt
+end
+
+"""
 Explicit JVP (pushforward) of `mala_step_surrogate_sigmoid` w.r.t. `x`.
 """
 function mala_step_surrogate_sigmoid_jvp(
@@ -439,6 +509,7 @@ function mala_step_surrogate_sigmoid_jvp(
     logα = (logp_y + logq_xy) - (logp_x + logq_yx)
     g̃ = logα - log(u)
     g = one(g̃) / (one(g̃) + exp(-g̃))
+    a = log(u) < logα ? one(g) : zero(g)
 
     copyto!(ws.Hv_x, hvp_fn(x, v))
     if cholM === nothing
@@ -464,7 +535,7 @@ function mala_step_surrogate_sigmoid_jvp(
     dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
     dg = g * (one(g) - g) * dlogα
 
-    @. ws.jvp_out = g * ws.w + (ws.y - x) * dg + (one(g) - g) * v
+    @. ws.jvp_out = a * ws.w + (ws.y - x) * dg + (one(a) - a) * v
     return copy(ws.jvp_out)
 end
 
@@ -498,7 +569,8 @@ function mala_step_taped_and_jvp!(
     logq_xy = logq_mala!(ws, x, ws.y, ws.g_y, ε; cholM=cholM)
     logα = (logp_y + logq_xy) - (logp_x + logq_yx)
 
-    if log(u) < logα
+    accepted = log(u) < logα
+    if accepted
         copyto!(x_next, ws.y)
     else
         copyto!(x_next, x)
@@ -506,6 +578,7 @@ function mala_step_taped_and_jvp!(
 
     g̃ = logα - log(u)
     g = one(g̃) / (one(g̃) + exp(-g̃))
+    a = accepted ? one(g) : zero(g)
 
     copyto!(ws.Hv_x, hvp_fn(x, v))
     if cholM === nothing
@@ -531,7 +604,7 @@ function mala_step_taped_and_jvp!(
     dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
     dg = g * (one(g) - g) * dlogα
 
-    @. jvp_out = g * ws.w + (ws.y - x) * dg + (one(g) - g) * v
+    @. jvp_out = a * ws.w + (ws.y - x) * dg + (one(a) - a) * v
     return x_next, jvp_out
 end
 

@@ -105,4 +105,28 @@ function make_problem_batched(X::AbstractMatrix, y::AbstractVector)
     return logp_batch, gradlogp_batch
 end
 
+"""
+    make_problem_batched_with_hvp(X, y) -> (logp_batch, gradlogp_batch, hvp_batch)
+
+Batched log-posterior, gradient, and analytic Hessian-vector product for
+Bayesian logistic regression. Inputs `B` and `V` are both D×M matrices.
+"""
+function make_problem_batched_with_hvp(X::AbstractMatrix, y::AbstractVector)
+    logp_batch, gradlogp_batch = make_problem_batched(X, y)
+
+    function hvp_batch(B::AbstractMatrix, V::AbstractMatrix)
+        size(B) == size(V) || throw(DimensionMismatch("B and V must have the same size"))
+        logits = X * B
+        T = eltype(logits)
+        oneT = one(T)
+        p = oneT ./ (oneT .+ exp.(logits .* (-oneT)))
+        w = p .* (oneT .- p)
+        Xv = X * V
+        tmp = w .* Xv
+        return -(X' * tmp) .- V
+    end
+
+    return logp_batch, gradlogp_batch, hvp_batch
+end
+
 end # module

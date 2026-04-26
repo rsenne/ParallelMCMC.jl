@@ -79,6 +79,39 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         @test mse64 < mse8
     end
 
+    @testset "batched stoch_diag uses z .* Jz in DEER update" begin
+        rng = MersenneTwister(20251231)
+        D, T = 7, 13
+
+        Atrue = 0.65 .+ 0.1 .* randn(rng, D, T)
+        Btrue = 0.2 .* randn(rng, D, T)
+        s0 = randn(rng, D)
+        S_in = randn(rng, D, T)
+
+        step_fwd = (x, t) -> view(Atrue, :, t) .* x .+ view(Btrue, :, t)
+        jvp = (x, t, v) -> view(Atrue, :, t) .* v
+        fwd_and_jvp_batch = (Xbar, Z) -> (Atrue .* Xbar .+ Btrue, Atrue .* Z)
+        rec = DEER.TapedRecursion(
+            step_fwd, jvp, collect(1:T); fwd_and_jvp_batch=fwd_and_jvp_batch
+        )
+
+        ws = DEER.DEERWorkspace(S_in, s0)
+        S_out = similar(S_in)
+        DEER.deer_update!(
+            ws,
+            S_out,
+            rec,
+            s0,
+            S_in;
+            jacobian=:stoch_diag,
+            probes=1,
+            rng=MersenneTwister(1),
+        )
+
+        S_ref = DEER.solve_affine_seq(Atrue, Btrue, s0)
+        @test S_out ≈ S_ref atol=1e-12 rtol=1e-12
+    end
+
     @testset "DEER solution satisfies recursion defects (MALA taped, :diag)" begin
         rng = MersenneTwister(20251231)
         D, T = 6, 80

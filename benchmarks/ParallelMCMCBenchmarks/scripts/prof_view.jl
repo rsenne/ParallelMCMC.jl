@@ -22,12 +22,6 @@ You can then call:
     run_profview()
 or:
     run_profview_allocs()
-
-Notes
------
-- Uses a deliberately smaller problem than the big benchmark.
-- Times only the solve path: rec + workspace are prebuilt.
-- Assumes your local DEER workspace patch is already loaded in your package.
 """
 
 using Random
@@ -90,7 +84,8 @@ function build_problem(; seed=20251231)
     y_gpu = CUDA.CuVector(y_f32)
 
     logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-    logp_gpu_batch, gradlogp_gpu_batch = BayesLogReg.make_problem_batched(X_gpu, y_gpu)
+    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
+        BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
 
     model_gpu = DensityModel(
         logp_gpu,
@@ -99,6 +94,7 @@ function build_problem(; seed=20251231)
         hvp=hvp_gpu,
         logdensity_batch=logp_gpu_batch,
         grad_logdensity_batch=gradlogp_gpu_batch,
+        hvp_batch=hvp_gpu_batch,
     )
 
     x0_gpu = CUDA.zeros(Float32, D)

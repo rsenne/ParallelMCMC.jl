@@ -3,11 +3,12 @@ module DynamicPPLExt
 using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
+using Enzyme: Enzyme
 using LogDensityProblems: LogDensityProblems
 using LogDensityProblemsAD: LogDensityProblemsAD
 
 """
-    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme())
+    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)))
 
 Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
@@ -37,7 +38,8 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
   constructor falls back to generic `x[1], x[2], ...` names with a warning.
 """
 function ParallelMCMC.DensityModel(
-    turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme()
+    turing_model::DynamicPPL.Model;
+    ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)),
 )
     # Build the LogDensityProblems-compatible gradient object
     ld = DynamicPPL.LogDensityFunction(turing_model)

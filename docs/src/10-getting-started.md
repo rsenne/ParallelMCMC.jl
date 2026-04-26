@@ -8,6 +8,7 @@ All samplers take a [`DensityModel`](@ref) as their first argument.  A `DensityM
 
 - `logdensity(x) -> Real` — log-density of the target (up to a constant)
 - `grad_logdensity(x) -> AbstractVector` — its gradient
+- optional `hvp`, `logdensity_batch`, `grad_logdensity_batch`, and `hvp_batch` helpers for faster DEER Jacobian updates
 - `dim::Int` — dimension of the parameter space
 
 ```julia

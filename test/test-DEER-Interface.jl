@@ -8,6 +8,8 @@ using ParallelMCMC
 
 logp_deer(x) = -0.5 * dot(x, x)
 gradlogp_deer(x) = -x
+logp_batch_deer(X) = vec(-0.5 .* sum(abs2, X; dims=1))
+gradlogp_batch_deer(X) = -X
 
 @testset "ParallelMALASampler construction" begin
     s = ParallelMALASampler(0.05)
@@ -38,6 +40,8 @@ end
     @test trans.logp ≈ logp_deer(trans.x)
     @test state.t == 1
     @test size(state.trajectory) == (3, 16)
+    @test length(state.logps) == 16
+    @test state.workspace isa ParallelMCMC.DEER.DEERWorkspace
     @test length(state.tape) == 16
 end
 
@@ -57,6 +61,48 @@ end
     @test isfinite(trans.logp)
 end
 
+@testset "batched DEER path can AD the batched gradient when hvp_batch is omitted" begin
+    rng = MersenneTwister(2026)
+    D, T = 3, 6
+    ε = 0.05
+
+    tape = [
+        ParallelMCMC.MALATapeElement(randn(rng, D), rand(rng))
+        for _ in 1:T
+    ]
+    model = DensityModel(
+        logp_deer,
+        gradlogp_deer,
+        D;
+        logdensity_batch=logp_batch_deer,
+        grad_logdensity_batch=gradlogp_batch_deer,
+    )
+
+    rec = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D))
+    @test rec.fwd_and_jvp_batch !== nothing
+
+    X = randn(rng, D, T)
+    Z = randn(rng, D, T)
+    FT_ad, Jt_ad = rec.fwd_and_jvp_batch(X, Z)
+
+    Ξ = reduce(hcat, (te.ξ for te in tape))
+    U = [te.u for te in tape]
+    hvp_batch_ref = (X, V) -> -V
+    FT_ref, Jt_ref = ParallelMCMC.MALA.mala_step_batched_fwd_and_jvp(
+        logp_batch_deer,
+        gradlogp_batch_deer,
+        hvp_batch_ref,
+        X,
+        ε,
+        Ξ,
+        U,
+        Z,
+    )
+
+    @test FT_ad ≈ FT_ref atol=1e-10 rtol=1e-10
+    @test Jt_ad ≈ Jt_ref atol=1e-10 rtol=1e-10
+end
+
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin
     rng = MersenneTwister(7)
     model = DensityModel(logp_deer, gradlogp_deer, 2)
@@ -73,6 +119,45 @@ end
     @test state3.t == 3
 end
 
+@testset "ParallelMALASampler reuses cached batched logps within a block" begin
+    rng = MersenneTwister(11)
+    scalar_calls = Ref(0)
+    batch_calls = Ref(0)
+
+    logp_counted = x -> begin
+        scalar_calls[] += 1
+        logp_deer(x)
+    end
+    logp_batch_counted = X -> begin
+        batch_calls[] += 1
+        logp_batch_deer(X)
+    end
+
+    model = DensityModel(
+        logp_counted,
+        gradlogp_deer,
+        2;
+        logdensity_batch=logp_batch_counted,
+        grad_logdensity_batch=gradlogp_batch_deer,
+        hvp_batch=(X, V) -> -V,
+    )
+    sampler = ParallelMALASampler(0.05; T=8)
+
+    _, state = ParallelMCMC.AbstractMCMC.step(
+        rng, model, sampler; initial_params=zeros(2)
+    )
+    @test batch_calls[] ≥ 1
+
+    scalar_after_solve = scalar_calls[]
+    batch_after_solve = batch_calls[]
+
+    trans2, state2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
+    @test trans2.logp == state.logps[2]
+    @test state2.logps === state.logps
+    @test scalar_calls[] == scalar_after_solve
+    @test batch_calls[] == batch_after_solve
+end
+
 @testset "ParallelMALASampler re-solves at trajectory boundary" begin
     rng = MersenneTwister(99)
     model = DensityModel(logp_deer, gradlogp_deer, 2)
@@ -87,11 +172,12 @@ end
     end
     @test state.t == T
 
-    # next step should trigger re-solve: t resets to 1 with a new trajectory
+    # next step should trigger re-solve: t resets to 1 and reuses workspace
     _, state_new = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
     @test state_new.t == 1
-    # new trajectory should differ from old (different tape)
-    @test state_new.trajectory !== state.trajectory
+    @test state_new.workspace === state.workspace
+    @test length(state_new.tape) == T
+    @test length(state_new.logps) == T
 end
 
 @testset "ParallelMALASampler sample() end-to-end" begin

@@ -11,13 +11,17 @@ using .DEERScan
 
 const DI = DifferentiationInterface
 const DEFAULT_BACKEND = ADTypes.AutoEnzyme(; mode=Enzyme.Forward, function_annotation=Enzyme.Duplicated)
+const DEFAULT_HVP_BACKEND = DI.SecondOrder(
+    DEFAULT_BACKEND,
+    ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)),
+)
 
 export TapedRecursion,
        DEERWorkspace,
        deer_update!, deer_update,
        solve,
        _prepare_hvp, _hvp_prepared, _hvp_nopre,
-       DEFAULT_BACKEND
+       DEFAULT_BACKEND, DEFAULT_HVP_BACKEND
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -56,6 +60,7 @@ struct DEERWorkspace{M,V,SW}
     diff_buf::M
     zbuf::V
     jt_buf::V
+    xbar_buf::V
     scan::SW
 end
 
@@ -68,8 +73,9 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     diff_buf = similar(S_template)
     zbuf = similar(s0_template)
     jt_buf = similar(s0_template)
+    xbar_buf = similar(s0_template)
     scan = DEERScan.AffineScanWorkspace(S_template)
-    return DEERWorkspace(A, B, Xbar, Z, S_tmp, diff_buf, zbuf, jt_buf, scan)
+    return DEERWorkspace(A, B, Xbar, Z, S_tmp, diff_buf, zbuf, jt_buf, xbar_buf, scan)
 end
 
 function DEERWorkspace(s0_template::AbstractVector, T::Integer)
@@ -81,17 +87,101 @@ end
 function _prepare_hvp(f, backend::AbstractADType, x_template::AbstractVector)
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
-    return DI.prepare_pushforward(f, backend, x_template, (v_template,))
+    return DI.prepare_pushforward(f, backend, x_template, (v_template,); strict=Val(false))
+end
+
+function _materialize_ad_array(x::AbstractArray)
+    return x isa SubArray ? copy(x) : x
+end
+
+_materialize_ad_vector(x::AbstractVector) = _materialize_ad_array(x)
+_materialize_ad_matrix(x::AbstractMatrix) = _materialize_ad_array(x)
+
+function _tangent_like(x::AbstractArray, v::AbstractArray)
+    typeof(v) === typeof(x) && return v
+    v_copy = similar(x)
+    copyto!(v_copy, v)
+    return v_copy
 end
 
 function _hvp_prepared(f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
-    res = DI.pushforward(f, prep, backend, x, (v,))
+    x_exec = _materialize_ad_vector(x)
+    v_exec = _tangent_like(x_exec, v)
+    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
 function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
-    prep = DI.prepare_pushforward(f, backend, x, (v,))
-    res = DI.pushforward(f, prep, backend, x, (v,))
+    x_exec = _materialize_ad_vector(x)
+    v_exec = _tangent_like(x_exec, v)
+    prep = DI.prepare_pushforward(f, backend, x_exec, (v_exec,); strict=Val(false))
+    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
+    return res isa Tuple ? first(res) : res
+end
+
+_hvp_backend(backend::AbstractADType) = backend
+
+_hvp_second_order_backend(backend::AbstractADType) = DI.SecondOrder(backend, backend)
+_hvp_second_order_backend(backend::DI.SecondOrder) = backend
+
+_hvp_backend(::ADTypes.AutoEnzyme) = DEFAULT_BACKEND
+
+_hvp_second_order_backend(::ADTypes.AutoEnzyme) = DEFAULT_HVP_BACKEND
+
+function _prepare_logdensity_hvp(f, backend::AbstractADType, x_template::AbstractVector)
+    v_template = similar(x_template)
+    fill!(v_template, zero(eltype(x_template)))
+    return DI.prepare_hvp(f, backend, x_template, (v_template,); strict=Val(false))
+end
+
+function _logdensity_hvp_prepared(
+    f,
+    prep,
+    backend::AbstractADType,
+    x::AbstractVector,
+    v::AbstractVector,
+)
+    x_exec = _materialize_ad_vector(x)
+    v_exec = _tangent_like(x_exec, v)
+    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
+    return res isa Tuple ? first(res) : res
+end
+
+function _logdensity_hvp_nopre(
+    f,
+    backend::AbstractADType,
+    x::AbstractVector,
+    v::AbstractVector,
+)
+    x_exec = _materialize_ad_vector(x)
+    v_exec = _tangent_like(x_exec, v)
+    prep = DI.prepare_hvp(f, backend, x_exec, (v_exec,); strict=Val(false))
+    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
+    return res isa Tuple ? first(res) : res
+end
+
+function _prepare_batch_hvp_from_grad(
+    grad_batch,
+    backend::AbstractADType,
+    X_template::AbstractMatrix,
+)
+    V_template = similar(X_template)
+    fill!(V_template, zero(eltype(X_template)))
+    return DI.prepare_pushforward(
+        grad_batch, backend, X_template, (V_template,); strict=Val(false)
+    )
+end
+
+function _batch_hvp_from_grad_prepared(
+    grad_batch,
+    prep,
+    backend::AbstractADType,
+    X::AbstractMatrix,
+    V::AbstractMatrix,
+)
+    X_exec = _materialize_ad_matrix(X)
+    V_exec = _tangent_like(X_exec, V)
+    res = DI.pushforward(grad_batch, prep, backend, X_exec, (V_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -118,12 +208,14 @@ end
 function jac_diag_via_jvps(rec::TapedRecursion, x::AbstractVector, t::Int)
     D = length(x)
     FT = eltype(x)
-    I_buf = similar(x, D, D)
-    copyto!(I_buf, Matrix{FT}(I, D, D))
+    ei_host = Vector{FT}(undef, D)
+    ei = similar(x)
     d = similar(x)
     fill!(d, zero(FT))
     for i in 1:D
-        ei = view(I_buf, :, i)
+        fill!(ei_host, zero(FT))
+        ei_host[i] = one(FT)
+        copyto!(ei, ei_host)
         jv = rec.jvp(x, rec.tape[t], ei)
         d .+= ei .* jv
     end
@@ -196,14 +288,28 @@ function deer_update!(
         _rademacher_matrix!(Z, rng)
 
         FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
-        A .= Jt
-        @. B = FT - Jt * Xbar
+        @. A = Z * Jt
+        for _ in 2:probes
+            _rademacher_matrix!(Z, rng)
+            _, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
+            @. A += Z * Jt
+        end
+        if probes > 1
+            A .*= one(eltype(A)) / probes
+        end
+        @. B = FT - A * Xbar
     else
         zbuf = ws.zbuf
         jt_buf = ws.jt_buf
+        xbar_buf = ws.xbar_buf
 
         for t in 1:T
-            xbar = t == 1 ? s0 : view(S_in, :, t - 1)
+            xbar = if t == 1
+                s0
+            else
+                copyto!(xbar_buf, view(S_in, :, t - 1))
+                xbar_buf
+            end
 
             if jacobian === :stoch_diag
                 _rademacher!(zbuf, rng)

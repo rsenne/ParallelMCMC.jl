@@ -138,6 +138,8 @@ else
         @test isfinite(Float32(trans.logp))
         @test size(state.trajectory) == (D, 8)
         @test state.trajectory isa CUDA.CuMatrix
+        @test length(state.logps) == 8
+        @test state.workspace isa DEER.DEERWorkspace
         @test state.t == 1
     end
 
@@ -181,11 +183,12 @@ else
         end
         @test state.t == T
 
-        # t == T triggers a re-solve; t resets to 1 with a fresh trajectory
+        # t == T triggers a re-solve; t resets to 1 and reuses workspace
         _, state_new = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
         @test state_new.t == 1
         @test state_new.trajectory isa CUDA.CuMatrix
-        @test state_new.trajectory !== state.trajectory
+        @test state_new.workspace === state.workspace
+        @test length(state_new.logps) == T
     end
 
     @testset "ParallelMALASampler stationary distribution on GPU (standard normal)" begin
