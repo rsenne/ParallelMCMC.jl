@@ -10,6 +10,51 @@
 [![All Contributors](https://img.shields.io/github/all-contributors/rsenne/ParallelMCMC.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
 [![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
 
+## What this package does
+
+**ParallelMCMC.jl** implements *parallel-across-the-sequence* MCMC in Julia: instead of generating samples one at a time, an entire trajectory of $T$ correlated steps is solved *simultaneously*. This makes wall-clock time per sample sublinear in chain length on multi-core CPUs and GPUs, where conventional sequential MCMC scales linearly.
+
+The flagship algorithm is **DEER** (Lim et al. 2024; Gonzalez et al. 2024), which reformulates a chain of $T$ MALA steps as a fixed-point problem and solves it with Newton iterations. Each iteration linearizes the per-step transition around the current trajectory guess and resolves the resulting linear recursion in $O(\log T)$ parallel work via an associative prefix scan. With shared input randomness, DEER converges to the exact sequential MALA trace up to a numerical tolerance — typically in tens of iterations even for chains of tens of thousands of samples.
+
+The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, damping, sliding windows) are described in:
+
+> Zoltowski, D., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025).
+> **Parallelizing MCMC Across the Sequence Length.** *NeurIPS 2025.*
+> [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
+
+### Samplers
+
+| Sampler | Role |
+|---|---|
+| [`ParallelMALASampler`](src/interface.jl) | **Primary** — parallel-across-sequence MALA via DEER; $O(\log T)$ per solve |
+| [`MALASampler`](src/interface.jl) | Baseline — sequential MALA with a fixed step size |
+| [`AdaptiveMALASampler`](src/interface.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
+
+All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`MCMCChains.Chains`](https://github.com/TuringLang/MCMCChains.jl) objects, so they slot into existing Turing.jl / AbstractMCMC workflows.
+
+### Key features
+
+- **Stochastic quasi-DEER Jacobian** — single-probe Hutchinson diagonal estimator avoids the $D$ JVPs needed for an exact diagonal, making the algorithm scalable to high-dimensional targets.
+- **GPU-ready** — the Newton update and prefix scan are pure array broadcasts and run on `CuArray`s without code changes.
+- **Turing.jl / `LogDensityProblems` integration** — load `DynamicPPL` and `DensityModel(@model(...))` extracts parameter names automatically; arbitrary `LogDensityProblems`-compatible objects are also accepted.
+- **Tape replay** — DEER consumes a fixed noise tape, so a parallel run reproduces its sequential counterpart bit-for-bit at convergence.
+
+### Quick start
+
+```julia
+using ParallelMCMC, MCMCChains
+
+logp(x)      = -0.5 * sum(abs2, x)            # 2-D standard normal
+grad_logp(x) = -x
+
+model   = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag)
+
+chain = sample(model, sampler, 500; chain_type=MCMCChains.Chains)
+```
+
+See the [Getting Started guide](docs/src/10-getting-started.md) for worked examples, GPU usage, Turing.jl integration, and step-size tuning.
+
 ## How to Cite
 
 If you use ParallelMCMC.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CITATION.cff).
