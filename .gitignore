@@ -6,6 +6,9 @@
 .benchmarkci
 Manifest.toml
 benchmark/*.json
+benchmarks/ParallelMCMCBenchmarks/*-benchmarks.toml
+benchmarks/ParallelMCMCBenchmarks/*-benchmarks.md
+benchmarks/ParallelMCMCBenchmarks/benchmark-comparison.md
 coverage
 docs/build/
 env
