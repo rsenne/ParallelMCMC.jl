@@ -1072,11 +1072,3 @@ function AbstractMCMC.bundle_samples(
         Dict(:parameters => names, :internals => internal_names),
     )
 end
-
-"""
-    DensityModel(ld)
-
-Construct a `DensityModel` from any object `ld` that implements the
-LogDensityProblems interface.
-"""
-function DensityModel end

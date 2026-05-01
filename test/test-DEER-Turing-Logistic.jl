@@ -54,6 +54,13 @@ function _gradlogp_lr(β, X, y)
     return X' * (y .- p) .- β
 end
 
+function _hvp_lr(β, v, X, y)
+    logits = X * β
+    p = @. 1 / (1 + exp(-logits))
+    w = @. p * (1 - p)
+    return -(X' * (w .* (X * v))) .- v
+end
+
 @model function _deer_logistic_regression(X, y)
     D = size(X, 2)
     β ~ MvNormal(zeros(D), I)
@@ -63,10 +70,17 @@ end
     end
 end
 
+function _deer_logistic_turing_density_model()
+    return DensityModel(
+        _deer_logistic_regression(_LR_X, _LR_y);
+        hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y),
+    )
+end
+
 # Turing integration tests (CPU)
 
 @testset "ParallelMALASampler Turing logistic: param names extracted correctly" begin
-    model = DensityModel(_deer_logistic_regression(_LR_X, _LR_y))
+    model = _deer_logistic_turing_density_model()
 
     @test model.dim == _LR_D
     @test model.param_names == [Symbol("β[1]"), Symbol("β[2]")]
@@ -75,9 +89,9 @@ end
 end
 
 @testset "ParallelMALASampler Turing logistic: chains output well-formed" begin
-    model = DensityModel(_deer_logistic_regression(_LR_X, _LR_y))
+    model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.1; T=16, maxiter=50, tol_abs=1e-4, tol_rel=1e-3, damping=0.5
+        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
     )
 
     chain = sample(
@@ -85,6 +99,7 @@ end
         model,
         sampler,
         400;
+        initial_params=zeros(_LR_D),
         chain_type=MCMCChains.Chains,
         progress=false,
     )
@@ -97,9 +112,9 @@ end
 end
 
 @testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
-    model = DensityModel(_deer_logistic_regression(_LR_X, _LR_y))
+    model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.1; T=16, maxiter=50, tol_abs=1e-4, tol_rel=1e-3, damping=0.5
+        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
     )
 
     chain = sample(
@@ -107,6 +122,7 @@ end
         model,
         sampler,
         800;
+        initial_params=zeros(_LR_D),
         chain_type=MCMCChains.Chains,
         progress=false,
     )
@@ -124,7 +140,12 @@ end
 
 @testset "ParallelMALASampler logistic: posterior mean matches AdaptiveMALA reference" begin
     X64, y64 = Float64.(_LR_X), Float64.(_LR_y)
-    model = DensityModel(β -> _logp_lr(β, X64, y64), β -> _gradlogp_lr(β, X64, y64), _LR_D)
+    model = DensityModel(
+        β -> _logp_lr(β, X64, y64),
+        β -> _gradlogp_lr(β, X64, y64),
+        _LR_D;
+        hvp=(β, v) -> _hvp_lr(β, v, X64, y64),
+    )
 
     mala_chain = sample(
         MersenneTwister(2025),
@@ -198,12 +219,10 @@ else
         gradlogp_gpu = β -> _gradlogp_lr(β, X_gpu, y_gpu)
 
         tape = [(ξ=CUDA.CuArray(ξs_cpu[t]), u=us[t]) for t in 1:T]
-        _backend = ADTypes.AutoEnzyme()
         step_fwd =
             (x, te) ->
                 ParallelMCMC.MALA.mala_step_taped(logp_gpu, gradlogp_gpu, x, ε, te.ξ, te.u)
-        hvp_fn_gpu =
-            (pt, dir) -> ParallelMCMC.DEER._hvp_nopre(gradlogp_gpu, _backend, pt, dir)
+        hvp_fn_gpu = (pt, dir) -> _hvp_lr(pt, dir, X_gpu, y_gpu)
         jvp =
             (x, te, v) -> ParallelMCMC.MALA.mala_step_surrogate_sigmoid_jvp(
                 logp_gpu, gradlogp_gpu, x, ε, te.ξ, te.u, v, hvp_fn_gpu
@@ -250,10 +269,16 @@ else
         )
 
         model_cpu = DensityModel(
-            β -> _logp_lr(β, _X_f32, _y_f32), β -> _gradlogp_lr(β, _X_f32, _y_f32), _LR_D
+            β -> _logp_lr(β, _X_f32, _y_f32),
+            β -> _gradlogp_lr(β, _X_f32, _y_f32),
+            _LR_D;
+            hvp=(β, v) -> _hvp_lr(β, v, _X_f32, _y_f32),
         )
         model_gpu = DensityModel(
-            β -> _logp_lr(β, X_gpu, y_gpu), β -> _gradlogp_lr(β, X_gpu, y_gpu), _LR_D
+            β -> _logp_lr(β, X_gpu, y_gpu),
+            β -> _gradlogp_lr(β, X_gpu, y_gpu),
+            _LR_D;
+            hvp=(β, v) -> _hvp_lr(β, v, X_gpu, y_gpu),
         )
 
         n_samples, n_burn = 400, 100

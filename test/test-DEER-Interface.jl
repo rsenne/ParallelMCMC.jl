@@ -11,6 +11,10 @@ gradlogp_deer(x) = -x
 logp_batch_deer(X) = vec(-0.5 .* sum(abs2, X; dims=1))
 gradlogp_batch_deer(X) = -X
 
+logp_quartic_deer(x) = -0.5 * dot(x, x) - 0.1 * sum(abs2.(x) .^ 2)
+gradlogp_quartic_deer(x) = @. -x - 0.4 * x^3
+hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
+
 @testset "ParallelMALASampler construction" begin
     s = ParallelMALASampler(0.05)
     @test s isa ParallelMCMC.AbstractMCMC.AbstractSampler
@@ -60,6 +64,37 @@ end
     # first sample should differ from x0 (DEER solves the trajectory)
     @test length(trans.x) == 3
     @test isfinite(trans.logp)
+end
+
+@testset "scalar DEER path can AD the logdensity HVP with Enzyme when hvp is omitted" begin
+    rng = MersenneTwister(2027)
+    D, T = 3, 5
+    ε = 0.03
+
+    tape = [ParallelMCMC.MALATapeElement(randn(rng, D), rand(rng)) for _ in 1:T]
+    model = DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D)
+
+    rec_ad = ParallelMCMC._build_mala_deer_rec(
+        model, ε, tape, zeros(D); backend=ParallelMCMC.DEER.DEFAULT_BACKEND
+    )
+    x = randn(rng, D)
+    v = randn(rng, D)
+    te = tape[1]
+
+    f_ad, jvp_ad = rec_ad.fwd_and_jvp(x, te, v)
+    f_ref, jvp_ref = ParallelMCMC.MALA.mala_step_taped_and_jvp(
+        logp_quartic_deer,
+        gradlogp_quartic_deer,
+        x,
+        ε,
+        te.ξ,
+        te.u,
+        v,
+        hvp_quartic_deer,
+    )
+
+    @test f_ad ≈ f_ref atol=1e-10 rtol=1e-10
+    @test jvp_ad ≈ jvp_ref atol=1e-10 rtol=1e-10
 end
 
 @testset "batched DEER path can AD the batched gradient when hvp_batch is omitted" begin

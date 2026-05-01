@@ -37,6 +37,14 @@ function _stdnormal_hvp(x, v)
     return -v
 end
 
+function _quartic_logp(x)
+    return -0.5 * dot(x, x) - 0.05 * sum(abs2.(x) .^ 2)
+end
+
+function _quartic_grad(x)
+    return @. -x - 0.2 * x^3
+end
+
 function _make_stdnormal_rec(rng::AbstractRNG, dim::Int, steps::Int, epsilon::Float64)
     tape = [(noise=randn(rng, dim), u=rand(rng)) for _ in 1:steps]
 
@@ -181,12 +189,44 @@ function _parallel_mala_sample_case()
     )
 end
 
+function _parallel_mala_sample_no_hvp_case()
+    rng = MersenneTwister(9005)
+    dim = 4
+    model = ParallelMCMC.DensityModel(_quartic_logp, _quartic_grad, dim)
+    sampler = ParallelMCMC.ParallelMALASampler(
+        0.04;
+        T=16,
+        maxiter=60,
+        tol_abs=1e-6,
+        tol_rel=1e-5,
+        jacobian=:diag,
+        damping=0.5,
+    )
+    initial_params = zeros(dim)
+
+    bench = @benchmarkable sample(
+        rng,
+        $model,
+        $sampler,
+        64;
+        initial_params=$initial_params,
+        progress=false,
+    ) setup = (rng = MersenneTwister(42)) evals = 1
+
+    return BenchmarkCase(
+        "sampler.parallel_mala_quartic_no_hvp_4d_64samples",
+        "Public ParallelMALASampler path on a non-Gaussian target with no model-provided HVP.",
+        bench,
+    )
+end
+
 function make_pr_benchmarks()
     return [
         _mala_step_case(),
         _affine_scan_case(),
         _deer_solve_case(),
         _parallel_mala_sample_case(),
+        _parallel_mala_sample_no_hvp_case(),
     ]
 end
 

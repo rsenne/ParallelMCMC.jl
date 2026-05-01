@@ -15,7 +15,11 @@ const DEFAULT_BACKEND = ADTypes.AutoEnzyme(;
     mode=Enzyme.Forward, function_annotation=Enzyme.Duplicated
 )
 const DEFAULT_HVP_BACKEND = DI.SecondOrder(
-    DEFAULT_BACKEND, ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse))
+    DEFAULT_BACKEND,
+    ADTypes.AutoEnzyme(;
+        mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
+        function_annotation=Enzyme.Duplicated,
+    ),
 )
 
 export TapedRecursion,
