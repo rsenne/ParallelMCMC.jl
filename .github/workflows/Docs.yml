@@ -12,7 +12,7 @@ on:
       - "docs/**"
       - "src/**"
       - "*.toml"
-      - ".github/workflows/docs.yml"
+      - ".github/workflows/Docs.yml"
 
   pull_request:
     branches:
@@ -21,7 +21,7 @@ on:
       - "docs/**"
       - "src/**"
       - "*.toml"
-      - ".github/workflows/docs.yml"
+      - ".github/workflows/Docs.yml"
     types: [opened, synchronize, reopened]
 
 permissions:
