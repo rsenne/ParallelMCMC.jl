@@ -30,9 +30,9 @@ end
 
 function _make_rec(tape, ε)
     step_fwd =
-        (x, tt) -> MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ε, tt.ξ, tt.u)
-    hvp_fn =
-        (pt, dir) -> DEER._hvp_nopre(gradlogp_stdnormal, DEER.DEFAULT_BACKEND, pt, dir)
+        (x, tt) ->
+            MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ε, tt.ξ, tt.u)
+    hvp_fn = (pt, dir) -> DEER._hvp_nopre(gradlogp_stdnormal, DEER.DEFAULT_BACKEND, pt, dir)
     jvp =
         (x, tt, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
             logp_stdnormal, gradlogp_stdnormal, x, ε, tt.ξ, tt.u, v, hvp_fn
@@ -133,6 +133,28 @@ end
     @test isapprox(S_scan, S_ref; rtol=1e-12, atol=1e-12)
 end
 
+@testset "DEER.solve copies workspace result by default" begin
+    D, T = 2, 4
+    tape = collect(1:T)
+    step_fwd = (x, t) -> x
+    jvp = (x, t, v) -> v
+    rec = DEER.TapedRecursion(step_fwd, jvp, tape)
+
+    s0 = [1.0, -1.0]
+    ws = DEER.DEERWorkspace(s0, T)
+
+    S = DEER.solve(rec, s0; jacobian=:diag, workspace=ws)
+    S_saved = copy(S)
+
+    @test S !== ws.S_tmp
+
+    DEER.solve(rec, [2.0, 3.0]; jacobian=:diag, workspace=ws)
+    @test S == S_saved
+
+    S_alias = DEER.solve(rec, s0; jacobian=:diag, workspace=ws, copy_result=false)
+    @test S_alias === ws.S_tmp
+end
+
 @testset "DEER stochastic diagonal (Hutchinson) recovers MALA trajectory" begin
     rng = MersenneTwister(777)
 
@@ -182,7 +204,7 @@ end
     xbar = xs_seq[tcheck]
 
     diag_exact = DEER.jac_diag_via_jvps(rec, xbar, tcheck)
-    diag_est   = DEER.jac_diag_stoch(
+    diag_est = DEER.jac_diag_stoch(
         rec, xbar, tcheck; probes=200, rng=MersenneTwister(123), zbuf=zeros(D)
     )
 

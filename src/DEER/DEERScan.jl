@@ -1,9 +1,12 @@
 module DEERScan
 
 export AffineScanWorkspace,
-       solve_affine_seq!, solve_affine_seq,
-       solve_affine_scan_diag!, solve_affine_scan_diag,
-       check_affine_scan, affine_scan_residual
+    solve_affine_seq!,
+    solve_affine_seq,
+    solve_affine_scan_diag!,
+    solve_affine_scan_diag,
+    check_affine_scan,
+    affine_scan_residual
 
 """
 Reusable workspace for the diagonal affine scan.
@@ -45,7 +48,9 @@ Inputs:
 This is the ground-truth implementation to compare against the parallel scan path.
 It is intentionally simple and should be used in tests.
 """
-function solve_affine_seq!(S::AbstractMatrix, A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector)
+function solve_affine_seq!(
+    S::AbstractMatrix, A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector
+)
     D, T = size(A)
     size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
     size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
@@ -108,10 +113,14 @@ function solve_affine_scan_diag!(
         size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
         size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
         length(s0) == D || throw(DimensionMismatch("length(s0) must equal size(A,1)"))
-        size(ws.alpha) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.beta) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.alpha_new) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.beta_new) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.alpha) == (D, T) ||
+            throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.beta) == (D, T) ||
+            throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.alpha_new) == (D, T) ||
+            throw(DimensionMismatch("workspace has wrong matrix size"))
+        size(ws.beta_new) == (D, T) ||
+            throw(DimensionMismatch("workspace has wrong matrix size"))
         Base.mightalias(S, A) && throw(ArgumentError("S must not alias A"))
         Base.mightalias(S, B) && throw(ArgumentError("S must not alias B"))
     end
@@ -128,14 +137,27 @@ function solve_affine_scan_diag!(
 
     offset = 1
     while offset < T
+        last_level = (offset << 1) >= T
         @views begin
-            alpha_new[:, 1:offset] .= alpha[:, 1:offset]
-            beta_new[:, 1:offset] .= beta[:, 1:offset]
+            if !last_level
+                # The destination already has the older prefix up to offset ÷ 2;
+                # only the newly exposed unchanged segment needs refreshing.
+                copy_start = offset == 1 ? 1 : (offset >> 1) + 1
+                alpha_new[:, copy_start:offset] .= alpha[:, copy_start:offset]
+                beta_new[:, copy_start:offset] .= beta[:, copy_start:offset]
+            end
 
-            if offset < T
-                alpha_new[:, (offset + 1):T] .= alpha[:, (offset + 1):T] .* alpha[:, 1:(T - offset)]
-                beta_new[:, (offset + 1):T] .=
-                    alpha[:, (offset + 1):T] .* beta[:, 1:(T - offset)] .+ beta[:, (offset + 1):T]
+            alpha_new[:, (offset + 1):T] .=
+                alpha[:, (offset + 1):T] .* alpha[:, 1:(T - offset)]
+            beta_new[:, (offset + 1):T] .=
+                alpha[:, (offset + 1):T] .* beta[:, 1:(T - offset)] .+
+                beta[:, (offset + 1):T]
+
+            if last_level
+                S[:, 1:offset] .= alpha[:, 1:offset] .* s0 .+ beta[:, 1:offset]
+                S[:, (offset + 1):T] .=
+                    alpha_new[:, (offset + 1):T] .* s0 .+ beta_new[:, (offset + 1):T]
+                return S
             end
         end
 
@@ -144,7 +166,7 @@ function solve_affine_scan_diag!(
         offset <<= 1
     end
 
-    S .= alpha .* reshape(s0, D, 1) .+ beta
+    S .= alpha .* s0 .+ beta
     return S
 end
 
@@ -176,7 +198,9 @@ Return the maximum absolute residual of the recurrence
 
 Useful for debugging scan correctness independent of DEER.
 """
-function affine_scan_residual(S::AbstractMatrix, A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector)
+function affine_scan_residual(
+    S::AbstractMatrix, A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector
+)
     D, T = size(A)
     size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
     size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
@@ -207,25 +231,27 @@ Returns a named tuple with:
 
 This is intended as a lightweight validation helper when plugging the scan into DEER.
 """
-function check_affine_scan(A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector; atol=1e-6, rtol=1e-6)
+function check_affine_scan(
+    A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector; atol=1e-6, rtol=1e-6
+)
     S_seq = solve_affine_seq(A, B, s0)
     S_scan = solve_affine_scan_diag(A, B, s0)
 
     diff = abs.(S_seq .- S_scan)
     scale = atol .+ rtol .* abs.(S_seq)
-    max_abs_err = maximum(diff)
-    max_rel_err = maximum(diff ./ scale)
+    max_abs_err = isempty(diff) ? zero(eltype(diff)) : maximum(diff)
+    max_rel_err = isempty(diff) ? zero(eltype(diff)) : maximum(diff ./ scale)
     residual_seq = affine_scan_residual(S_seq, A, B, s0)
     residual_scan = affine_scan_residual(S_scan, A, B, s0)
 
     return (
-        ok = all(diff .<= scale),
-        max_abs_err = max_abs_err,
-        max_rel_err = max_rel_err,
-        residual_seq = residual_seq,
-        residual_scan = residual_scan,
-        S_seq = S_seq,
-        S_scan = S_scan,
+        ok=all(diff .<= scale),
+        max_abs_err=max_abs_err,
+        max_rel_err=max_rel_err,
+        residual_seq=residual_seq,
+        residual_scan=residual_scan,
+        S_seq=S_seq,
+        S_scan=S_scan,
     )
 end
 

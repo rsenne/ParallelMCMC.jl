@@ -1,25 +1,25 @@
 # [Contributing guidelines](@id contributing)
 
-First of all, thanks for the interest!
+Thanks for your interest in improving ParallelMCMC.jl.
 
-We welcome all kinds of contribution, including, but not limited to code, documentation, examples, configuration, issue creating, etc.
+We welcome contributions of all kinds: code, documentation, examples, benchmarks, issue reports, and review feedback.
 
-Be polite and respectful, and follow the code of conduct.
+Please be respectful and follow the [Code of Conduct](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CODE_OF_CONDUCT.md).
 
 ## Bug reports and discussions
 
 If you think you found a bug, feel free to open an [issue](https://github.com/rsenne/ParallelMCMC.jl/issues).
-Focused suggestions and requests can also be opened as issues.
-Before opening a pull request, start an issue or a discussion on the topic, please.
+Focused suggestions and feature requests are also welcome there.
+For larger changes, please start with an issue or discussion before opening a pull request.
 
 ## Working on an issue
 
-If you found an issue that interests you, comment on that issue what your plans are.
+If you found an issue that interests you, leave a comment describing what you plan to work on.
 If the solution to the issue is clear, you can immediately create a pull request (see below).
 Otherwise, say what your proposed solution is and wait for a discussion around it.
 
 !!! tip
     Feel free to ping us after a few days if there are no responses.
 
-If your solution involves code (or something that requires running the package locally), check the [developer documentation](91-developer.md).
+If your solution involves code, tests, benchmarks, or documentation builds, check the [developer documentation](91-developer.md).
 Otherwise, you can use the GitHub interface directly to create your pull request.

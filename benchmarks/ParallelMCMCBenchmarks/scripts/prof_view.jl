@@ -63,12 +63,7 @@ function build_raw_deer_problem(
     end
 
     rec = ParallelMCMC._build_mala_deer_rec(
-        model,
-        epsilon,
-        tape,
-        x0;
-        cholM=cholM,
-        backend=backend,
+        model, epsilon, tape, x0; cholM=cholM, backend=backend
     )
     return rec
 end
@@ -84,8 +79,9 @@ function build_problem(; seed=20251231)
     y_gpu = CUDA.CuVector(y_f32)
 
     logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
-        BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
+    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch = BayesLogReg.make_problem_batched_with_hvp(
+        X_gpu, y_gpu
+    )
 
     model_gpu = DensityModel(
         logp_gpu,
@@ -100,11 +96,7 @@ function build_problem(; seed=20251231)
     x0_gpu = CUDA.zeros(Float32, D)
 
     rec = build_raw_deer_problem(
-        MersenneTwister(42),
-        model_gpu,
-        x0_gpu;
-        epsilon=epsilon,
-        T=T,
+        MersenneTwister(42), model_gpu, x0_gpu; epsilon=epsilon, T=T
     )
 
     ws = DEER.DEERWorkspace(x0_gpu, T)
@@ -127,6 +119,7 @@ function solve_once(; seed=42)
         probes=probes,
         rng=rng,
         workspace=PROF_STATE.ws,
+        copy_result=false,
     )
     CUDA.synchronize()
     return S

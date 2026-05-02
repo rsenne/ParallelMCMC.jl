@@ -56,9 +56,14 @@ function DensityModel(
     hvp_batch=nothing,
 )
     return DensityModel(
-        logdensity, grad_logdensity, hvp,
-        logdensity_batch, grad_logdensity_batch, hvp_batch,
-        dim, param_names,
+        logdensity,
+        grad_logdensity,
+        hvp,
+        logdensity_batch,
+        grad_logdensity_batch,
+        hvp_batch,
+        dim,
+        param_names,
     )
 end
 
@@ -82,15 +87,44 @@ function MALASampler(epsilon::Real; cholM=nothing)
     return MALASampler{typeof(eps_f),typeof(cholM)}(eps_f, cholM)
 end
 
-struct MALAState{V<:AbstractVector,L<:Real}
+"""
+State for a `MALASampler` chain.
+"""
+struct MALAState{V<:AbstractVector,L<:Real,W,NV<:AbstractVector,H}
     x::V
     logp::L
+    workspace::W
+    noise::NV
+    noise_host::H
 end
 
+"""
+One `MALASampler` sample: parameter vector `x`, its log-density `logp`, and an
+accept/reject flag.
+"""
 struct MALATransition{V<:AbstractVector,L<:Real}
     x::V
     logp::L
     accepted::Bool
+end
+
+function _make_noise_buffer(x::AbstractVector, ::Type{FP}, D::Int) where {FP}
+    ξ = similar(x, FP, D)
+    host = ξ isa CUDA.CuArray ? Vector{FP}(undef, D) : nothing
+    return ξ, host
+end
+
+function _randn_like!(
+    rng::Random.AbstractRNG, ξ::AbstractVector{FP}, host::Union{Nothing,AbstractVector{FP}}
+) where {FP}
+    if ξ isa CUDA.CuArray
+        host === nothing && error("CuArray normal noise requires a reusable host buffer")
+        randn!(rng, host)
+        copyto!(ξ, host)
+    else
+        randn!(rng, ξ)
+    end
+    return ξ
 end
 
 function AbstractMCMC.step(
@@ -106,8 +140,10 @@ function AbstractMCMC.step(
         randn(rng, FP, model.dim)
     end
     logp_val = model.logdensity(x)
+    ws = MALA.MALAWorkspace(x)
+    noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     t = MALATransition(x, logp_val, true)
-    s = MALAState(x, logp_val)
+    s = MALAState(x, logp_val, ws, noise, noise_host)
     return t, s
 end
 
@@ -122,16 +158,25 @@ function AbstractMCMC.step(
     ϵ = sampler.epsilon
     D = model.dim
 
-    ξ = randn(rng, eltype(x), D)
+    ξ = _randn_like!(rng, state.noise, state.noise_host)
     u = rand(rng)
 
-    x_next, accepted = MALA.mala_step_full(
-        model.logdensity, model.grad_logdensity, x, ϵ, ξ, u; cholM=sampler.cholM
+    x_next = similar(x)
+    x_next, accepted, _ = MALA.mala_step_with_logα!(
+        x_next,
+        state.workspace,
+        model.logdensity,
+        model.grad_logdensity,
+        x,
+        ϵ,
+        ξ,
+        u;
+        cholM=sampler.cholM,
     )
 
     logp_val = accepted ? model.logdensity(x_next) : state.logp
     t = MALATransition(x_next, logp_val, accepted)
-    s = MALAState(x_next, logp_val)
+    s = MALAState(x_next, logp_val, state.workspace, state.noise, state.noise_host)
     return t, s
 end
 
@@ -190,6 +235,9 @@ end
     ParallelMALASampler(epsilon; T, maxiter, tol_abs, tol_rel, jacobian, damping, probes, cholM, backend)
 
 DEER-parallelized MALA sampler.
+
+Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
+estimator) and `:diag` (exact diagonal via `D` JVPs).
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -217,6 +265,8 @@ function ParallelMALASampler(
     backend=DEER.DEFAULT_BACKEND,
 )
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
+    (jacobian === :stoch_diag || jacobian === :diag) ||
+        throw(ArgumentError("jacobian must be :stoch_diag or :diag"))
     eps_f = float(epsilon)
     FP = typeof(eps_f)
     return ParallelMALASampler{FP,typeof(cholM),typeof(backend)}(
@@ -254,6 +304,53 @@ struct ParallelMALATransition{V<:AbstractVector,L<:Real}
     logp::L
 end
 
+struct ParallelMALABlockSamples{B<:AbstractVector,L<:AbstractVector} <:
+       AbstractVector{ParallelMALATransition}
+    blocks::B
+    logps::L
+    n::Int
+    T::Int
+end
+
+Base.size(samples::ParallelMALABlockSamples) = (samples.n,)
+Base.length(samples::ParallelMALABlockSamples) = samples.n
+Base.IndexStyle(::Type{<:ParallelMALABlockSamples}) = IndexLinear()
+
+function Base.getindex(samples::ParallelMALABlockSamples, i::Int)
+    1 <= i <= samples.n || throw(BoundsError(samples, i))
+    block_idx = fld(i - 1, samples.T) + 1
+    t = mod(i - 1, samples.T) + 1
+    return ParallelMALATransition(
+        samples.blocks[block_idx][:, t], samples.logps[block_idx][t]
+    )
+end
+
+function _make_mala_tape_block(
+    rng::Random.AbstractRNG, x0::AbstractVector, ::Type{FP}, D::Int, T::Int
+) where {FP}
+    Xi = similar(x0, FP, D, T)
+    U_host = Vector{FP}(undef, T)
+
+    if Xi isa CUDA.CuArray
+        Xi_host = Matrix{FP}(undef, D, T)
+        for t in 1:T
+            randn!(rng, view(Xi_host, :, t))
+            U_host[t] = FP(rand(rng))
+        end
+        copyto!(Xi, Xi_host)
+    else
+        for t in 1:T
+            randn!(rng, view(Xi, :, t))
+            U_host[t] = FP(rand(rng))
+        end
+    end
+
+    U = similar(x0, FP, T)
+    copyto!(U, U_host)
+    tape = [MALATapeElement(view(Xi, :, t), U_host[t]) for t in 1:T]
+    return tape, Xi, U
+end
+
 function _build_mala_deer_rec(
     model::DensityModel,
     ε::Real,
@@ -261,6 +358,8 @@ function _build_mala_deer_rec(
     x0_like::AbstractVector;
     cholM=nothing,
     backend=DEER.DEFAULT_BACKEND,
+    tape_noise=nothing,
+    tape_uniforms=nothing,
 )
     logp = model.logdensity
     gradlogp = model.grad_logdensity
@@ -272,9 +371,7 @@ function _build_mala_deer_rec(
     else
         hvp_backend = DEER._hvp_second_order_backend(backend)
         prep_hvp = DEER._prepare_logdensity_hvp(logp, hvp_backend, x0_like)
-        (pt, dir) -> DEER._logdensity_hvp_prepared(
-            logp, prep_hvp, hvp_backend, pt, dir
-        )
+        (pt, dir) -> DEER._logdensity_hvp_prepared(logp, prep_hvp, hvp_backend, pt, dir)
     end
 
     # Exact forward step.
@@ -282,63 +379,85 @@ function _build_mala_deer_rec(
         (x, te) -> MALA.mala_step_taped(logp, gradlogp, x, ε, te.ξ, te.u; cholM=cholM)
 
     # Explicit analytical JVP of the surrogate step.
-    jvp = (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
-        logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
-    )
+    jvp =
+        (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
+            logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
+        )
 
     # Fused forward step + JVP.
-    fwd_and_jvp = (x, te, v) -> MALA.mala_step_taped_and_jvp(
-        logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
-    )
-
-    fwd_and_jvp_batch = if model.logdensity_batch !== nothing &&
-                           model.grad_logdensity_batch !== nothing
-        D = length(x0_like)
-        T = length(tape)
-
-        Ξ = similar(x0_like, D, T)
-        U_host = Vector{typeof(tape[1].u)}(undef, T)
-        U = similar(x0_like, typeof(tape[1].u), T)
-
-        for t in 1:T
-            copyto!(view(Ξ, :, t), tape[t].ξ)
-            U_host[t] = tape[t].u
-        end
-        copyto!(U, U_host)
-
-        X_template = similar(x0_like, D, T)
-        fill!(X_template, zero(eltype(X_template)))
-        hvp_batch = if model.hvp_batch !== nothing
-            model.hvp_batch
-        else
-            hvp_batch_backend = DEER._hvp_backend(backend)
-            prep_hvp_batch = DEER._prepare_batch_hvp_from_grad(
-                model.grad_logdensity_batch, hvp_batch_backend, X_template
-            )
-            (X, V) -> DEER._batch_hvp_from_grad_prepared(
-                model.grad_logdensity_batch, prep_hvp_batch, hvp_batch_backend, X, V
-            )
-        end
-
-        (Xbar, Z) -> MALA.mala_step_batched_fwd_and_jvp(
-            model.logdensity_batch,
-            model.grad_logdensity_batch,
-            hvp_batch,
-            Xbar,
-            ε,
-            Ξ,
-            U,
-            Z;
-            cholM=cholM,
+    fwd_and_jvp =
+        (x, te, v) -> MALA.mala_step_taped_and_jvp(
+            logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
         )
-    else
-        nothing
-    end
+
+    fwd_and_jvp_batch =
+        if model.logdensity_batch !== nothing && model.grad_logdensity_batch !== nothing
+            D = length(x0_like)
+            T = length(tape)
+
+            (tape_noise === nothing) == (tape_uniforms === nothing) || throw(
+                ArgumentError("tape_noise and tape_uniforms must be provided together")
+            )
+            Xi, U = if tape_noise === nothing
+                Xi_local = similar(x0_like, D, T)
+                U_host = Vector{typeof(tape[1].u)}(undef, T)
+                U_local = similar(x0_like, typeof(tape[1].u), T)
+
+                for t in 1:T
+                    copyto!(Xi_local, (t - 1) * D + 1, tape[t].ξ, 1, D)
+                    U_host[t] = tape[t].u
+                end
+                copyto!(U_local, U_host)
+                Xi_local, U_local
+            else
+                size(tape_noise) == (D, T) ||
+                    throw(DimensionMismatch("tape_noise must have size (D, T)"))
+                length(tape_uniforms) == T ||
+                    throw(DimensionMismatch("tape_uniforms must have length T"))
+                tape_noise, tape_uniforms
+            end
+
+            X_template = similar(x0_like, D, T)
+            fill!(X_template, zero(eltype(X_template)))
+            batch_ws = MALA.MALABatchedWorkspace(X_template)
+            FT = similar(X_template)
+            Jt = similar(X_template)
+            hvp_batch = if model.hvp_batch !== nothing
+                model.hvp_batch
+            else
+                hvp_batch_backend = DEER._hvp_backend(backend)
+                prep_hvp_batch = DEER._prepare_batch_hvp_from_grad(
+                    model.grad_logdensity_batch, hvp_batch_backend, X_template
+                )
+                (X, V) -> DEER._batch_hvp_from_grad_prepared(
+                    model.grad_logdensity_batch,
+                    prep_hvp_batch,
+                    hvp_batch_backend,
+                    X,
+                    V,
+                )
+            end
+
+            (Xbar, Z) -> MALA.mala_step_batched_fwd_and_jvp!(
+                FT,
+                Jt,
+                batch_ws,
+                model.logdensity_batch,
+                model.grad_logdensity_batch,
+                hvp_batch,
+                Xbar,
+                ε,
+                Xi,
+                U,
+                Z;
+                cholM=cholM,
+            )
+        else
+            nothing
+        end
 
     return DEER.TapedRecursion(
-        step_fwd, jvp, tape;
-        fwd_and_jvp=fwd_and_jvp,
-        fwd_and_jvp_batch=fwd_and_jvp_batch,
+        step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp, fwd_and_jvp_batch=fwd_and_jvp_batch
     )
 end
 
@@ -353,13 +472,17 @@ function _deer_solve_new_tape(
     T = sampler.T
     FP = typeof(sampler.epsilon)
 
-    tape = map(1:T) do _
-        ξ = copyto!(similar(x0, D), randn(rng, FP, D))
-        MALATapeElement(ξ, FP(rand(rng)))
-    end
+    tape, Xi, U = _make_mala_tape_block(rng, x0, FP, D, T)
 
     rec = _build_mala_deer_rec(
-        model, sampler.epsilon, tape, x0; cholM=sampler.cholM, backend=sampler.backend
+        model,
+        sampler.epsilon,
+        tape,
+        x0;
+        cholM=sampler.cholM,
+        backend=sampler.backend,
+        tape_noise=Xi,
+        tape_uniforms=U,
     )
 
     ws = workspace === nothing ? DEER.DEERWorkspace(x0, T) : workspace
@@ -375,6 +498,7 @@ function _deer_solve_new_tape(
         probes=sampler.probes,
         rng=rng,
         workspace=ws,
+        copy_result=false,
     )
     return S, tape, ws
 end
@@ -386,6 +510,251 @@ function _trajectory_logps(model::DensityModel, S::AbstractMatrix)
 
     T = size(S, 2)
     return [model.logdensity(S[:, t]) for t in 1:T]
+end
+
+function _parallel_mala_param_names(model::DensityModel, D::Int, param_names)
+    if param_names !== nothing
+        return param_names
+    elseif model.param_names !== nothing
+        return model.param_names
+    else
+        return [Symbol("x[$i]") for i in 1:D]
+    end
+end
+
+function _parallel_mala_initial_x(
+    rng::Random.AbstractRNG, model::DensityModel, ::ParallelMALASampler{FP}, initial_params
+) where {FP}
+    return initial_params !== nothing ? copy(initial_params) : randn(rng, FP, model.dim)
+end
+
+function _parallel_mala_progress(progress, progressname)
+    progress === true && return AbstractMCMC.CreateNewProgressBar(progressname)
+    progress === false && return AbstractMCMC.NoLogging()
+    return progress
+end
+
+function _parallel_mala_update_progress!(
+    progress, nsteps::Int, Ntotal::Int, next_update::Real, threshold::Real
+)
+    if nsteps >= next_update && next_update <= Ntotal
+        AbstractMCMC.update_progress!(progress, min(nsteps / Ntotal, 1))
+        next_update += threshold
+    end
+    return next_update
+end
+
+function _copy_trajectory_rows!(
+    vals::AbstractMatrix{Float64}, first_row::Int, S::AbstractMatrix, ncols::Int
+)
+    rows = first_row:(first_row + ncols - 1)
+    S_host = Array(view(S, :, 1:ncols))
+    vals[rows, :] .= transpose(S_host)
+    return vals
+end
+
+function _sample_parallel_mala_chain(
+    rng::Random.AbstractRNG,
+    model::DensityModel,
+    sampler::ParallelMALASampler,
+    N::Int;
+    initial_params=nothing,
+    param_names=nothing,
+    progress=AbstractMCMC.PROGRESS[],
+    progressname="Sampling",
+)
+    D = model.dim
+    names = _parallel_mala_param_names(model, D, param_names)
+    internal_names = [:logp]
+
+    vals = Matrix{Float64}(undef, N, D)
+    internals = Matrix{Float64}(undef, N, 1)
+
+    progress = _parallel_mala_progress(progress, progressname)
+    x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
+    ws = nothing
+    nsteps = 0
+    next_update = N / AbstractMCMC.get_n_updates(progress)
+    threshold = next_update
+
+    AbstractMCMC.@maybewithricherlogger begin
+        AbstractMCMC.init_progress!(progress)
+        try
+            while nsteps < N
+                S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0; workspace=ws)
+                logps = _trajectory_logps(model, S)
+                nkeep = min(sampler.T, N - nsteps)
+                first_row = nsteps + 1
+                rows = first_row:(first_row + nkeep - 1)
+
+                _copy_trajectory_rows!(vals, first_row, S, nkeep)
+                internals[rows, 1] .= view(logps, 1:nkeep)
+
+                x0 = copy(view(S, :, nkeep))
+                nsteps += nkeep
+                next_update = _parallel_mala_update_progress!(
+                    progress, nsteps, N, next_update, threshold
+                )
+            end
+        finally
+            AbstractMCMC.finish_progress!(progress)
+        end
+    end
+
+    return MCMCChains.Chains(
+        hcat(vals, internals),
+        vcat(names, internal_names),
+        Dict(:parameters => names, :internals => internal_names),
+    )
+end
+
+function _sample_parallel_mala_blocks(
+    rng::Random.AbstractRNG,
+    model::DensityModel,
+    sampler::ParallelMALASampler,
+    N::Int;
+    initial_params=nothing,
+    progress=AbstractMCMC.PROGRESS[],
+    progressname="Sampling",
+)
+    blocks = Vector{AbstractMatrix}(undef, 0)
+    logp_blocks = Vector{AbstractVector}(undef, 0)
+    sizehint!(blocks, cld(N, sampler.T))
+    sizehint!(logp_blocks, cld(N, sampler.T))
+
+    progress = _parallel_mala_progress(progress, progressname)
+    x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
+    ws = nothing
+    nsteps = 0
+    next_update = N / AbstractMCMC.get_n_updates(progress)
+    threshold = next_update
+    final_state = nothing
+
+    AbstractMCMC.@maybewithricherlogger begin
+        AbstractMCMC.init_progress!(progress)
+        try
+            while nsteps < N
+                S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0; workspace=ws)
+                logps = _trajectory_logps(model, S)
+                nkeep = min(sampler.T, N - nsteps)
+                S_keep = copy(view(S, :, 1:nkeep))
+                logps_keep = collect(view(logps, 1:nkeep))
+                x0 = copy(view(S_keep, :, nkeep))
+
+                push!(blocks, S_keep)
+                push!(logp_blocks, logps_keep)
+                final_state = ParallelMALAState(
+                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep
+                )
+
+                nsteps += nkeep
+                next_update = _parallel_mala_update_progress!(
+                    progress, nsteps, N, next_update, threshold
+                )
+            end
+        finally
+            AbstractMCMC.finish_progress!(progress)
+        end
+    end
+
+    return ParallelMALABlockSamples(blocks, logp_blocks, N, sampler.T), final_state
+end
+
+function _default_parallel_mala_mcmcsample(
+    rng::Random.AbstractRNG,
+    model::DensityModel,
+    sampler::ParallelMALASampler,
+    N::Integer;
+    kwargs...,
+)
+    return invoke(
+        AbstractMCMC.mcmcsample,
+        Tuple{
+            Random.AbstractRNG,
+            AbstractMCMC.AbstractModel,
+            AbstractMCMC.AbstractSampler,
+            Integer,
+        },
+        rng,
+        model,
+        sampler,
+        N;
+        kwargs...,
+    )
+end
+
+function AbstractMCMC.mcmcsample(
+    rng::Random.AbstractRNG,
+    model::DensityModel,
+    sampler::ParallelMALASampler,
+    N::Integer;
+    progress=AbstractMCMC.PROGRESS[],
+    progressname="Sampling",
+    callback=nothing,
+    num_warmup::Int=0,
+    discard_initial::Int=num_warmup,
+    thinning=1,
+    chain_type::Type=Any,
+    initial_state=nothing,
+    initial_params=nothing,
+    param_names=nothing,
+    kwargs...,
+)
+    if callback !== nothing ||
+        num_warmup != 0 ||
+        discard_initial != 0 ||
+        thinning != 1 ||
+        initial_state !== nothing
+        return _default_parallel_mala_mcmcsample(
+            rng,
+            model,
+            sampler,
+            N;
+            progress=progress,
+            progressname=progressname,
+            callback=callback,
+            num_warmup=num_warmup,
+            discard_initial=discard_initial,
+            thinning=thinning,
+            chain_type=chain_type,
+            initial_state=initial_state,
+            initial_params=initial_params,
+            param_names=param_names,
+            kwargs...,
+        )
+    end
+
+    N > 0 || error("the number of samples must be ≥ 1")
+    N_int = Int(N)
+
+    if chain_type === MCMCChains.Chains
+        return _sample_parallel_mala_chain(
+            rng,
+            model,
+            sampler,
+            N_int;
+            initial_params=initial_params,
+            param_names=param_names,
+            progress=progress,
+            progressname=progressname,
+        )
+    end
+
+    samples, state = _sample_parallel_mala_blocks(
+        rng,
+        model,
+        sampler,
+        N_int;
+        initial_params=initial_params,
+        progress=progress,
+        progressname=progressname,
+    )
+    chain_type === Any && return samples
+
+    sample_vec = [samples[i] for i in 1:length(samples)]
+    return AbstractMCMC.bundle_samples(
+        sample_vec, model, sampler, state, chain_type; param_names=param_names, kwargs...
+    )
 end
 
 function AbstractMCMC.step(
@@ -521,15 +890,26 @@ function AdaptiveMALASampler(
     )
 end
 
-struct AdaptiveMALAState{V<:AbstractVector,FP<:AbstractFloat}
+"""
+State for an `AdaptiveMALASampler` chain, including dual-averaging adaptation
+statistics.
+"""
+struct AdaptiveMALAState{V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVector,H}
     x::V
     logp::FP
     epsilon::FP
     epsilon_bar::FP
     H_bar::FP
     step::Int
+    workspace::W
+    noise::NV
+    noise_host::H
 end
 
+"""
+One `AdaptiveMALASampler` sample: parameter vector `x`, its log-density `logp`,
+the step size used for that transition, and whether the sample came from warmup.
+"""
 struct AdaptiveMALATransition{V<:AbstractVector,FP<:AbstractFloat}
     x::V
     logp::FP
@@ -575,9 +955,19 @@ function AbstractMCMC.step(
         randn(rng, FP, model.dim)
     end
     logp_val = FP(model.logdensity(x))
+    ws = MALA.MALAWorkspace(x)
+    noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     trans = AdaptiveMALATransition(x, logp_val, true, sampler.epsilon_init, true)
     state = AdaptiveMALAState(
-        x, logp_val, sampler.epsilon_init, sampler.epsilon_init, zero(FP), 0
+        x,
+        logp_val,
+        sampler.epsilon_init,
+        sampler.epsilon_init,
+        zero(FP),
+        0,
+        ws,
+        noise,
+        noise_host,
     )
     return trans, state
 end
@@ -593,11 +983,20 @@ function AbstractMCMC.step(
     in_warmup = state.step < sampler.n_warmup
     ε = in_warmup ? state.epsilon : state.epsilon_bar
 
-    ξ = randn(rng, eltype(state.x), D)
+    ξ = _randn_like!(rng, state.noise, state.noise_host)
     u = rand(rng)
 
-    x_next, accepted, logα = MALA.mala_step_with_logα(
-        model.logdensity, model.grad_logdensity, state.x, ε, ξ, u; cholM=sampler.cholM
+    x_next = similar(state.x)
+    x_next, accepted, logα = MALA.mala_step_with_logα!(
+        x_next,
+        state.workspace,
+        model.logdensity,
+        model.grad_logdensity,
+        state.x,
+        ε,
+        ξ,
+        u;
+        cholM=sampler.cholM,
     )
 
     logp_next = accepted ? FP(model.logdensity(x_next)) : state.logp
@@ -617,7 +1016,17 @@ function AbstractMCMC.step(
     end
 
     trans = AdaptiveMALATransition(x_next, logp_next, accepted, ε, in_warmup)
-    new_state = AdaptiveMALAState(x_next, logp_next, ε_new, ε_bar_new, H_bar_new, m_new)
+    new_state = AdaptiveMALAState(
+        x_next,
+        logp_next,
+        ε_new,
+        ε_bar_new,
+        H_bar_new,
+        m_new,
+        state.workspace,
+        state.noise,
+        state.noise_host,
+    )
     return trans, new_state
 end
 
@@ -663,11 +1072,3 @@ function AbstractMCMC.bundle_samples(
         Dict(:parameters => names, :internals => internal_names),
     )
 end
-
-"""
-    DensityModel(ld)
-
-Construct a `DensityModel` from any object `ld` that implements the
-LogDensityProblems interface.
-"""
-function DensityModel end

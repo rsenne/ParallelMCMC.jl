@@ -39,6 +39,8 @@ function tune_stepsize_mala(
     ξs, us = make_tape(rng, D, Twarm)
 
     x = copy(x0)
+    x_next = similar(x)
+    ws = MALA.MALAWorkspace(x)
     logϵ = log(ϵ0)
 
     # Step size schedule; keep conservative to avoid oscillation
@@ -47,10 +49,13 @@ function tune_stepsize_mala(
     for t in 1:Twarm
         ϵ = exp(logϵ)
         # mala_step_with_logα shares primal computation with the step: 2 gradlogp evals total.
-        x, accepted, _ = MALA.mala_step_with_logα(logp, gradlogp, x, ϵ, ξs[t], us[t])
+        x_next, accepted, _ = MALA.mala_step_with_logα!(
+            x_next, ws, logp, gradlogp, x, ϵ, ξs[t], us[t]
+        )
         # Robbins–Monro update on log ϵ
         η = η0 / sqrt(t)
         logϵ += η * (Float64(accepted) - target_accept)
+        x, x_next = x_next, x
     end
 
     return x, exp(logϵ)
@@ -78,12 +83,17 @@ function run_taped_mala_with_accepts(
     accepts = Vector{Float64}(undef, T)
 
     xs[1] = copy(x0)
-    x = x0
+    x = copy(x0)
+    x_next = similar(x)
+    ws = MALA.MALAWorkspace(x)
     for t in 1:T
         # mala_step_full shares primal computation: 2 gradlogp evals instead of 5.
-        x, accepted = MALA.mala_step_full(logp, gradlogp, x, ϵ, ξs[t], us[t])
+        x_next, accepted, _ = MALA.mala_step_with_logα!(
+            x_next, ws, logp, gradlogp, x, ϵ, ξs[t], us[t]
+        )
         accepts[t] = Float64(accepted)
-        xs[t + 1] = x
+        xs[t + 1] = copy(x_next)
+        x, x_next = x_next, x
     end
 
     return xs, accepts

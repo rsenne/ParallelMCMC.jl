@@ -4,13 +4,29 @@ CurrentModule = ParallelMCMC
 
 # ParallelMCMC.jl
 
+```@raw html
+<p align="center">
+  <img src="assets/logo.png" alt="ParallelMCMC logo" width="220">
+</p>
+```
+
 **ParallelMCMC.jl** is a Julia package for **parallel-across-the-sequence** MCMC — algorithms that solve an entire trajectory of $T$ correlated steps *simultaneously* rather than one at a time.
+
+```@raw html
+<p align="center">
+  <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
+</p>
+
+<p align="center">
+  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+</p>
+```
 
 The flagship algorithm is **DEER** (Deterministic Equivalent-Expectation Recursion), which reformulates a chain of $T$ MALA steps as a fixed-point problem and solves it via Newton iterations, each costing $O(\log T)$ parallel work via an associative prefix scan.  The result is that wall-clock time per sample is *sublinear* in chain length on multi-core CPUs and GPUs.
 
 The algorithm is described in:
 
-> Zoltowski, D., Wu, Y., Gonzalez, D., Kozachkov, L., & Linderman, S. (2025).
+> Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025).
 > **Parallelizing MCMC Across the Sequence Length.**
 > *NeurIPS 2025.* [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
 
@@ -28,10 +44,10 @@ All samplers implement the [AbstractMCMC](https://github.com/TuringLang/Abstract
 
 ## Installation
 
-ParallelMCMC.jl is a registered Julia package:
+To install the package into your current environment:
 
 ```julia-repl
-julia> ] add ParallelMCMC
+pkg> add https://github.com/rsenne/ParallelMCMC.jl
 ```
 
 ## Quick start
@@ -54,7 +70,7 @@ model = DensityModel(logp, grad_logp, 2;
 ### DEER — parallel-across-sequence (primary algorithm)
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:diag)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag)
 
 chain = sample(model, sampler, 500;
                chain_type=MCMCChains.Chains)

@@ -1,0 +1,109 @@
+name: Benchmarks
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/Benchmarks.yml"
+      - "Project.toml"
+      - "src/**"
+      - "ext/**"
+      - "benchmarks/**"
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: PR benchmark comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      PMCMC_BENCH_SECONDS: "0.5"
+      PMCMC_BENCH_SAMPLES: "8"
+      PMCMC_BENCH_WARN_RATIO: "1.25"
+      PMCMC_BENCH_FAIL_RATIO: "1.75"
+      JULIA_NUM_PRECOMPILE_TASKS: "1"
+
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+          arch: x64
+
+      - name: Use Julia cache
+        uses: julia-actions/cache@v3
+
+      - name: Instantiate base package in benchmark environment
+        working-directory: head/benchmarks/ParallelMCMCBenchmarks
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.develop(PackageSpec(path=joinpath(ENV["GITHUB_WORKSPACE"], "base"))); Pkg.instantiate()'
+
+      - name: Run base benchmarks
+        run: |
+          julia --project="$GITHUB_WORKSPACE/head/benchmarks/ParallelMCMCBenchmarks" \
+            "$GITHUB_WORKSPACE/head/benchmarks/ParallelMCMCBenchmarks/scripts/pr_benchmarks.jl" \
+            --seconds "$PMCMC_BENCH_SECONDS" \
+            --samples "$PMCMC_BENCH_SAMPLES" \
+            --output "$GITHUB_WORKSPACE/base-benchmarks.toml" \
+            --markdown "$GITHUB_WORKSPACE/base-benchmarks.md"
+
+      - name: Instantiate PR package in benchmark environment
+        working-directory: head/benchmarks/ParallelMCMCBenchmarks
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.develop(PackageSpec(path=joinpath(ENV["GITHUB_WORKSPACE"], "head"))); Pkg.instantiate()'
+
+      - name: Run PR benchmarks
+        run: |
+          julia --project="$GITHUB_WORKSPACE/head/benchmarks/ParallelMCMCBenchmarks" \
+            "$GITHUB_WORKSPACE/head/benchmarks/ParallelMCMCBenchmarks/scripts/pr_benchmarks.jl" \
+            --seconds "$PMCMC_BENCH_SECONDS" \
+            --samples "$PMCMC_BENCH_SAMPLES" \
+            --output "$GITHUB_WORKSPACE/head-benchmarks.toml" \
+            --markdown "$GITHUB_WORKSPACE/head-benchmarks.md"
+
+      - name: Compare benchmarks
+        run: |
+          set +e
+          julia "$GITHUB_WORKSPACE/head/benchmarks/ParallelMCMCBenchmarks/scripts/compare_pr_benchmarks.jl" \
+            --base "$GITHUB_WORKSPACE/base-benchmarks.toml" \
+            --head "$GITHUB_WORKSPACE/head-benchmarks.toml" \
+            --warn-ratio "$PMCMC_BENCH_WARN_RATIO" \
+            --fail-ratio "$PMCMC_BENCH_FAIL_RATIO" \
+            --markdown "$GITHUB_WORKSPACE/benchmark-comparison.md"
+          status=$?
+          cat "$GITHUB_WORKSPACE/benchmark-comparison.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-benchmark-results
+          path: |
+            base-benchmarks.toml
+            base-benchmarks.md
+            head-benchmarks.toml
+            head-benchmarks.md
+            benchmark-comparison.md

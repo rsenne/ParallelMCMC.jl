@@ -29,6 +29,29 @@ gradlogp_adapt(x) = -x
     end
 end
 
+@testset "mala_step_with_logα! matches allocating wrapper" begin
+    rng = MersenneTwister(2)
+    D = 4
+    x = randn(rng, D)
+    ξ = randn(rng, D)
+    u = rand(rng)
+
+    x_ref, accepted_ref, logα_ref = MALA.mala_step_with_logα(
+        logp_adapt, gradlogp_adapt, x, 0.1, ξ, u
+    )
+
+    ws = MALA.MALAWorkspace(x)
+    x_next = similar(x)
+    x_out, accepted, logα = MALA.mala_step_with_logα!(
+        x_next, ws, logp_adapt, gradlogp_adapt, x, 0.1, ξ, u
+    )
+
+    @test x_out === x_next
+    @test x_next == x_ref
+    @test accepted == accepted_ref
+    @test logα ≈ logα_ref
+end
+
 @testset "AdaptiveMALASampler construction" begin
     s = AdaptiveMALASampler(0.1)
     @test s isa ParallelMCMC.AbstractMCMC.AbstractSampler
@@ -61,6 +84,7 @@ end
     @test state.step == 0
     @test state.epsilon == sampler.epsilon_init
     @test state.epsilon_bar == sampler.epsilon_init
+    @test state.workspace isa MALA.MALAWorkspace
 end
 
 @testset "AdaptiveMALASampler initial step respects initial_params" begin

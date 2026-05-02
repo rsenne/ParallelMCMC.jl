@@ -41,8 +41,9 @@ y_gpu = CUDA.CuVector(y_f32)
 
 logp_cpu, gradlogp_cpu = BayesLogReg.make_problem(X_cpu, y_cpu)
 logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
-    BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
+logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch = BayesLogReg.make_problem_batched_with_hvp(
+    X_gpu, y_gpu
+)
 
 model_gpu = DensityModel(
     logp_gpu,
@@ -89,12 +90,7 @@ function build_raw_deer_problem(
     end
 
     rec = ParallelMCMC._build_mala_deer_rec(
-        model,
-        epsilon,
-        tape,
-        x0;
-        cholM=cholM,
-        backend=backend,
+        model, epsilon, tape, x0; cholM=cholM, backend=backend
     )
 
     return rec
@@ -126,6 +122,7 @@ function solve_raw_deer_block_prebuilt(
         probes=probes,
         rng=rng,
         workspace=ws,
+        copy_result=false,
     )
 end
 
@@ -143,13 +140,7 @@ function solve_seq_mala_block(
     ξs = [randn(rng, FP, D) for _ in 1:T]
     us = rand(rng, FP, T)
     return ParallelMCMC.MALA.run_mala_sequential_taped(
-        logp,
-        gradlogp,
-        x0,
-        epsilon,
-        ξs,
-        us;
-        cholM=cholM,
+        logp, gradlogp, x0, epsilon, ξs, us; cholM=cholM
     )
 end
 
@@ -175,13 +166,13 @@ function bench_raw_deer_build(model, x0; T, reps)
             MersenneTwister(42),
             $model,
             $x0;
-            epsilon=$epsilon,
-            T=$T,
-            maxiter=$maxiter,
-            tol_abs=$tol_abs,
-            tol_rel=$tol_rel,
-            damping=$damping,
-            probes=$probes,
+            epsilon=($epsilon),
+            T=($T),
+            maxiter=($maxiter),
+            tol_abs=($tol_abs),
+            tol_rel=($tol_rel),
+            damping=($damping),
+            probes=($probes),
         )
         CUDA.synchronize()
         rec
@@ -231,11 +222,11 @@ function bench_raw_deer_solve_only(model, x0; T, reps)
             $rec,
             $x0,
             $ws;
-            tol_abs=$tol_abs,
-            tol_rel=$tol_rel,
-            maxiter=$maxiter,
-            damping=$damping,
-            probes=$probes,
+            tol_abs=($tol_abs),
+            tol_rel=($tol_rel),
+            maxiter=($maxiter),
+            damping=($damping),
+            probes=($probes),
         )
         CUDA.synchronize()
         S
@@ -256,22 +247,12 @@ function bench_seq_mala_cpu(logp, gradlogp, x0; T, reps)
     println("  [CPU] sequential taped MALA, T=$T")
 
     xs_warm = solve_seq_mala_block(
-        MersenneTwister(42),
-        logp,
-        gradlogp,
-        x0;
-        epsilon=epsilon,
-        T=T,
+        MersenneTwister(42), logp, gradlogp, x0; epsilon=epsilon, T=T
     )
 
     b = @benchmark begin
         xs = solve_seq_mala_block(
-            MersenneTwister(42),
-            $logp,
-            $gradlogp,
-            $x0;
-            epsilon=$epsilon,
-            T=$T,
+            MersenneTwister(42), $logp, $gradlogp, $x0; epsilon=($epsilon), T=($T)
         )
         xs
     end samples=reps evals=1
@@ -337,7 +318,13 @@ seq_results = Dict{Int,BenchmarkTools.Trial}()
 logp_results = Dict{Int,BenchmarkTools.Trial}()
 
 for T in T_vals
-    reps = T <= 16 ? 8 : T <= 32 ? 6 : 4
+    reps = if T <= 16
+        8
+    elseif T <= 32
+        6
+    else
+        4
+    end
     build_results[T] = bench_raw_deer_build(model_gpu, x0_gpu; T=T, reps=reps)
     solve_results[T], rec, ws = bench_raw_deer_solve_only(model_gpu, x0_gpu; T=T, reps=reps)
     seq_results[T] = bench_seq_mala_cpu(logp_cpu, gradlogp_cpu, x0_cpu; T=T, reps=reps)

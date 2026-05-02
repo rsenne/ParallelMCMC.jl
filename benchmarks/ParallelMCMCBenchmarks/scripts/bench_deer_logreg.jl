@@ -29,7 +29,7 @@ const BayesLogReg = ParallelMCMCBenchmarks.BayesLogReg
 
 function _parse_t_vals()
     raw = get(ENV, "PMCMC_T_VALS", "")
-    isempty(strip(raw)) && return [128, 256, 512, 1024, 2048]
+    isempty(strip(raw)) && return [512, 1024, 2048, 4096, 8192]
     return parse.(Int, strip.(split(raw, ",")))
 end
 
@@ -109,8 +109,9 @@ if _cuda_ok
     y_gpu = CUDA.CuVector(y_f32)
 
     logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
-        BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
+    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch = BayesLogReg.make_problem_batched_with_hvp(
+        X_gpu, y_gpu
+    )
 
     model_gpu = DensityModel(
         logp_gpu,

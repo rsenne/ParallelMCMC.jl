@@ -6,8 +6,19 @@
 .benchmarkci
 Manifest.toml
 benchmark/*.json
+benchmarks/ParallelMCMCBenchmarks/*-benchmarks.toml
+benchmarks/ParallelMCMCBenchmarks/*-benchmarks.md
+benchmarks/ParallelMCMCBenchmarks/benchmark-comparison.md
 coverage
 docs/build/
 env
 node_modules
 LocalPreferences.toml
+
+# ignore any AI files a contributor may have
+.codex
+.claude
+CLAUDE.md
+AGENTS.md
+CODEX.md
+.gemini

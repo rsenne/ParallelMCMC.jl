@@ -1,5 +1,6 @@
 using ParallelMCMC
 using Documenter
+using Documenter.Remotes: GitHub
 
 DocMeta.setdocmeta!(ParallelMCMC, :DocTestSetup, :(using ParallelMCMC); recursive=true)
 
@@ -61,10 +62,15 @@ end
 makedocs(;
     modules=[ParallelMCMC],
     authors="Ryan Senne <rsenne@bu.edu>",
-    repo="https://github.com/rsenne/ParallelMCMC.jl/blob/{commit}{path}#{line}",
+    repo=GitHub("rsenne", "ParallelMCMC.jl"),
     sitename="ParallelMCMC.jl",
-    format=Documenter.HTML(; canonical="https://rsenne.github.io/ParallelMCMC.jl"),
+    checkdocs=:none,
+    format=Documenter.HTML(;
+        canonical="https://rsenne.github.io/ParallelMCMC.jl",
+        repolink="https://github.com/rsenne/ParallelMCMC.jl",
+        edit_link="main",
+    ),
     pages=list_pages(),
 )
 
-deploydocs(; repo="github.com/rsenne/ParallelMCMC.jl")
+deploydocs(; repo="github.com/rsenne/ParallelMCMC.jl", devbranch="main")

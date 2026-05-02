@@ -10,6 +10,27 @@ const MALA = ParallelMCMC.MALA
 logp_stdnormal_B(x) = -0.5 * dot(x, x)
 gradlogp_stdnormal_B(x) = -x
 
+struct TaggedVector{T} <: AbstractVector{T}
+    data::Vector{T}
+end
+
+Base.IndexStyle(::Type{<:TaggedVector}) = IndexLinear()
+Base.size(x::TaggedVector) = size(x.data)
+Base.axes(x::TaggedVector) = axes(x.data)
+Base.getindex(x::TaggedVector, i::Int) = x.data[i]
+Base.setindex!(x::TaggedVector, v, i::Int) = setindex!(x.data, v, i)
+function Base.similar(x::TaggedVector, ::Type{T}, dims::Dims{1}) where {T}
+    TaggedVector(Vector{T}(undef, dims[1]))
+end
+function Base.similar(x::TaggedVector, ::Type{T}, n::Int) where {T}
+    TaggedVector(Vector{T}(undef, n))
+end
+function Base.similar(x::TaggedVector, dims::Dims{1})
+    TaggedVector(Vector{eltype(x)}(undef, dims[1]))
+end
+Base.similar(x::TaggedVector, n::Int) = TaggedVector(Vector{eltype(x)}(undef, n))
+Base.copy(x::TaggedVector) = TaggedVector(copy(x.data))
+
 # Reference log q(y|x) for MALA:
 # y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
 function logq_mala_ref_B(
@@ -71,12 +92,73 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
             return mean(mses)
         end
 
-        mse1  = mse_for_probes(1;  nrep=25)
-        mse8  = mse_for_probes(8;  nrep=25)
+        mse1 = mse_for_probes(1; nrep=25)
+        mse8 = mse_for_probes(8; nrep=25)
         mse64 = mse_for_probes(64; nrep=25)
 
-        @test mse8  < mse1
+        @test mse8 < mse1
         @test mse64 < mse8
+    end
+
+    @testset "jac_diag_stoch default probe uses x-like storage" begin
+        x = TaggedVector([1.0, 2.0, 3.0])
+        tape = [1]
+        step_fwd = (x, t) -> x
+        jvp = function (x, t, v)
+            v isa TaggedVector || throw(ArgumentError("expected TaggedVector tangent"))
+            return copy(v)
+        end
+        rec = DEER.TapedRecursion(step_fwd, jvp, tape)
+
+        d = DEER.jac_diag_stoch(rec, x, 1; rng=MersenneTwister(1))
+
+        @test d isa TaggedVector
+        @test collect(d) == ones(3)
+    end
+
+    @testset "Rademacher and DEER argument validation paths" begin
+        rng = MersenneTwister(20260203)
+        z = zeros(Float64, 12)
+        out = DEER._rademacher!(z, rng)
+        @test out === z
+        @test all(abs.(z) .== 1)
+
+        D, T = 3, 4
+        tape = collect(1:T)
+        step_fwd = (x, t) -> 0.8 .* x .+ t
+        jvp = (x, t, v) -> 0.8 .* v
+        rec = DEER.TapedRecursion(step_fwd, jvp, tape)
+        x = randn(rng, D)
+
+        @test_throws ArgumentError DEER.jac_diag_stoch(
+            rec, x, 1; probes=0, rng=MersenneTwister(1)
+        )
+        @test_throws ArgumentError DEER.jac_diag_stoch(
+            rec, x, 1; zbuf=zeros(D + 1), rng=MersenneTwister(1)
+        )
+
+        S = randn(rng, D, T)
+        S_out = similar(S)
+        s0 = randn(rng, D)
+        ws = DEER.DEERWorkspace(S, s0)
+
+        @test_throws ArgumentError DEER.deer_update!(
+            ws, S_out, rec, s0, S; jacobian=:full
+        )
+        @test_throws ArgumentError DEER.deer_update!(
+            ws, S_out, rec, s0, S; damping=0.0
+        )
+        @test_throws ArgumentError DEER.deer_update!(
+            ws, S_out, rec, s0, S; probes=0
+        )
+        @test_throws ArgumentError DEER.deer_update!(
+            ws, randn(rng, D, T + 1), rec, s0, S
+        )
+
+        @test_throws ArgumentError DEER.solve(rec, s0; maxiter=0)
+        @test_throws ArgumentError DEER.solve(rec, s0; tol_abs=-1.0)
+        @test_throws ArgumentError DEER.solve(rec, s0; tol_rel=-1.0)
+        @test_throws ArgumentError DEER.solve(rec, s0; init=randn(rng, D, T + 1))
     end
 
     @testset "batched stoch_diag uses z .* Jz in DEER update" begin
@@ -98,14 +180,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         ws = DEER.DEERWorkspace(S_in, s0)
         S_out = similar(S_in)
         DEER.deer_update!(
-            ws,
-            S_out,
-            rec,
-            s0,
-            S_in;
-            jacobian=:stoch_diag,
-            probes=1,
-            rng=MersenneTwister(1),
+            ws, S_out, rec, s0, S_in; jacobian=:stoch_diag, probes=1, rng=MersenneTwister(1)
         )
 
         S_ref = DEER.solve_affine_seq(Atrue, Btrue, s0)

@@ -19,16 +19,16 @@ using AbstractMCMC: sample
 using ParallelMCMC
 using ParallelMCMCBenchmarks
 const BayesLinReg = ParallelMCMCBenchmarks.BayesLinReg
-const MALARunner  = ParallelMCMCBenchmarks.MALARunner
+const MALARunner = ParallelMCMCBenchmarks.MALARunner
 
 # Problem setup
 
 rng = MersenneTwister(20251231)
 n, p = 200, 16
-X      = randn(rng, n, p)
+X = randn(rng, n, p)
 β_true = randn(rng, p)
-σ      = 1.0
-y      = X * β_true .+ σ .* randn(rng, n)
+σ = 1.0
+y = X * β_true .+ σ .* randn(rng, n)
 
 logpost, gradlogpost, μ_post, _ = BayesLinReg.make_problem(X, y; σ=σ, τ=10.0)
 model = DensityModel(logpost, gradlogpost, p)
@@ -46,12 +46,7 @@ x_warm, ϵ_tuned = MALARunner.tune_stepsize_mala(
 mala_sampler = AdaptiveMALASampler(ϵ_tuned; n_warmup=500)
 
 deer_sampler = ParallelMALASampler(
-    ϵ_tuned;
-    T=64,
-    maxiter=200,
-    tol_abs=1e-6,
-    tol_rel=1e-5,
-    damping=0.5,
+    ϵ_tuned; T=64, maxiter=200, tol_abs=1e-6, tol_rel=1e-5, damping=0.5
 )
 
 # Benchmark helper
@@ -79,7 +74,9 @@ println("AdaptiveMALASampler  (n_warmup=500, Float64)")
 println("Model: Bayesian linear regression  n=$n  p=$p")
 println("=" ^ 60, "\n")
 for (n_samples, reps, label) in configs
-    results[("MALA", label)] = run_bench(model, mala_sampler, n_samples; reps, label, sampler_name="MALA")
+    results[("MALA", label)] = run_bench(
+        model, mala_sampler, n_samples; reps, label, sampler_name="MALA"
+    )
 end
 
 # ParallelMALA (DEER)
@@ -89,7 +86,9 @@ println("ParallelMALASampler  (T=64, AutoEnzyme, Float64)")
 println("Model: Bayesian linear regression  n=$n  p=$p")
 println("=" ^ 60, "\n")
 for (n_samples, reps, label) in configs
-    results[("DEER", label)] = run_bench(model, deer_sampler, n_samples; reps, label, sampler_name="DEER")
+    results[("DEER", label)] = run_bench(
+        model, deer_sampler, n_samples; reps, label, sampler_name="DEER"
+    )
 end
 
 # Summary table

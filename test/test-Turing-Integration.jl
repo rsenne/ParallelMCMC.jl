@@ -60,6 +60,34 @@ end
     @test isfinite(model.grad_logdensity([0.0])[1])
 end
 
+@testset "DynamicPPLExt: generic Turing model works with ParallelMALA and default Enzyme HVP" begin
+    model = DensityModel(normal_model(TRUE_OBS))
+
+    @test model.hvp === nothing
+
+    for jacobian in (:diag, :stoch_diag)
+        sampler = ParallelMALASampler(
+            0.03;
+            T=4,
+            maxiter=80,
+            tol_abs=1e-5,
+            tol_rel=1e-4,
+            jacobian=jacobian,
+            damping=0.5,
+        )
+
+        trans, state = ParallelMCMC.AbstractMCMC.step(
+            MersenneTwister(11), model, sampler; initial_params=[0.0]
+        )
+
+        @test trans isa ParallelMALATransition
+        @test state isa ParallelMALAState
+        @test length(trans.x) == 1
+        @test isfinite(trans.logp)
+        @test all(isfinite, state.trajectory)
+    end
+end
+
 @testset "DynamicPPLExt: named columns in Chains output" begin
     model = DensityModel(normal_model(TRUE_OBS))
 

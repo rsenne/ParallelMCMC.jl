@@ -8,7 +8,7 @@ using LogDensityProblems: LogDensityProblems
 using LogDensityProblemsAD: LogDensityProblemsAD
 
 """
-    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)))
+    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse), function_annotation=Enzyme.Duplicated), hvp=nothing)
 
 Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
@@ -39,7 +39,11 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
 """
 function ParallelMCMC.DensityModel(
     turing_model::DynamicPPL.Model;
-    ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)),
+    ad_backend=ADTypes.AutoEnzyme(;
+        mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
+        function_annotation=Enzyme.Duplicated,
+    ),
+    hvp=nothing,
 )
     # Build the LogDensityProblems-compatible gradient object
     ld = DynamicPPL.LogDensityFunction(turing_model)
@@ -56,13 +60,13 @@ function ParallelMCMC.DensityModel(
     # Try to extract parameter names; fall back to nothing on any error or mismatch.
     param_names = _try_extract_param_names(turing_model, dim)
 
-    logp(x) = LogDensityProblems.logdensity(ldg, x)
+    logp(x) = LogDensityProblems.logdensity(ld, x)
     function gradlogp(x)
         _, g = LogDensityProblems.logdensity_and_gradient(ldg, x)
         return g
     end
 
-    return ParallelMCMC.DensityModel(logp, gradlogp, dim; param_names=param_names)
+    return ParallelMCMC.DensityModel(logp, gradlogp, dim; hvp=hvp, param_names=param_names)
 end
 
 """

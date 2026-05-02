@@ -134,38 +134,57 @@ We try to keep a linear history in this repo, so it is important to keep your br
 
 ## Building and viewing the documentation locally
 
-Following the latest suggestions, we recommend using `LiveServer` to build the documentation.
-Here is how you do it:
+The CI workflow builds docs from the `docs/` project after developing the current checkout into that environment. To match CI locally:
 
-1. Run `julia --project=docs` to open Julia in the environment of the docs.
-1. If this is the first time building the docs
-   1. Press `]` to enter `pkg` mode
-   1. Run `pkg> dev .` to use the development version of your package
-   1. Press backspace to leave `pkg` mode
-1. Run `julia> using LiveServer`
-1. Run `julia> servedocs()`
+1. Instantiate the docs environment and develop the package into it:
+
+   ```bash
+   julia --project=docs -e '
+     using Pkg
+     Pkg.develop(Pkg.PackageSpec(path=pwd()))
+     Pkg.instantiate()'
+   ```
+
+2. Build the docs once:
+
+   ```bash
+   julia --project=docs docs/make.jl
+   ```
+
+3. For live preview while editing, start a docs Julia session and serve it:
+
+   ```bash
+   julia --project=docs
+   ```
+
+   ```julia
+   using LiveServer
+   servedocs()
+   ```
+
+4. If you want the extra CI parity check, run the doctests too:
+
+   ```bash
+   julia --project=docs -e '
+     using Documenter: DocMeta, doctest
+     using ParallelMCMC
+     DocMeta.setdocmeta!(ParallelMCMC, :DocTestSetup, :(using ParallelMCMC); recursive=true)
+     doctest(ParallelMCMC)'
+   ```
+
+If you update the landing-page animation, regenerate it with:
+
+```bash
+julia docs/src/assets/make_julia_deer_gif.jl
+```
 
 ## Making a new release
 
-To create a new release, you can follow these simple steps:
+To create a new release:
 
-- Create a branch `release-x.y.z`
-- Update `version` in `Project.toml`
-- Update the `CHANGELOG.md`:
-  - Rename the section "Unreleased" to "[x.y.z] - yyyy-mm-dd" (i.e., version under brackets, dash, and date in ISO format)
-  - Add a new section on top of it named "Unreleased"
-  - Add a new link in the bottom for version "x.y.z"
-  - Change the "[unreleased]" link to use the latest version - end of line, `vx.y.z ... HEAD`.
-- Create a commit "Release vx.y.z", push, create a PR, wait for it to pass, merge the PR.
-- Go back to main screen and click on the latest commit (link: <https://github.com/rsenne/ParallelMCMC.jl/commit/main>)
-- At the bottom, write `@JuliaRegistrator register`
-
-After that, you only need to wait and verify:
-
-- Wait for the bot to comment (should take < 1m) with a link to a PR to the registry
-- Follow the link and wait for a comment on the auto-merge
-- The comment should said all is well and auto-merge should occur shortly
-- After the merge happens, TagBot will trigger and create a new GitHub tag. Check on <https://github.com/rsenne/ParallelMCMC.jl/releases>
-- After the release is create, a "docs" GitHub action will start for the tag.
-- After it passes, a deploy action will run.
-- After that runs, the [stable docs](https://rsenne.github.io/ParallelMCMC.jl/stable) should be updated. Check them and look for the version number.
+1. Create a release branch such as `release-x.y.z`.
+2. Update `version` in `Project.toml`.
+3. Update any release-facing docs you want to ship with the tag.
+4. Open and merge the release PR after CI passes.
+5. Comment `@JuliaRegistrator register` on the merge commit or release PR, then wait for the registry PR and auto-merge.
+6. After registration, verify that TagBot creates the GitHub tag and that the docs workflow updates the [stable docs](https://rsenne.github.io/ParallelMCMC.jl/stable).

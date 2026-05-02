@@ -20,6 +20,20 @@ function logq_mala_ref(
     return -0.5 * dot(r, r) / (2ϵ) - (d / 2) * log(4π * ϵ)
 end
 
+function logq_mala_mass_ref(
+    y::AbstractVector,
+    x::AbstractVector,
+    gradlogp_x::AbstractVector,
+    ϵ::Real,
+    cholM::Cholesky,
+)
+    μ = x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_x))
+    r = y .- μ
+    d = length(x)
+    return -0.5 * dot(cholM \ r, r) / (2ϵ) -
+           (d / 2) * log(4π * ϵ) - 0.5 * logdet(cholM)
+end
+
 # Build a tape (ξs, us) deterministically
 function make_tape(rng::AbstractRNG, D::Int, T::Int)
     ξs = [randn(rng, D) for _ in 1:T]
@@ -38,10 +52,10 @@ end
         ξs, us = make_tape(rng, D, T)
 
         xs1 = MALA.run_mala_sequential_taped(
-            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
         xs2 = MALA.run_mala_sequential_taped(
-            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
 
         @test length(xs1) == T + 1
@@ -54,10 +68,10 @@ end
         x = copy(x0)
         for t in 1:T
             x_next_1 = MALA.mala_step_taped(
-                logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t]
+                logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξs[t], us[t]
             )
             x_next_2 = MALA.mala_step_taped(
-                logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξs[t], us[t]
+                logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξs[t], us[t]
             )
             @test x_next_1 == x_next_2
             x = x_next_1
@@ -77,7 +91,7 @@ end
         ξs, us = make_tape(rng, D, T)
 
         xs = MALA.run_mala_sequential_taped(
-            logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
 
         # Collect post-burn samples
@@ -159,22 +173,107 @@ end
         x = randn(rng, D)
         ξ = randn(rng, D)
 
-        y = MALA.mala_proposal(logp_stdnormal, gradlogp_stdnormal, x, ϵ, ξ)
+        y = MALA.mala_proposal(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ)
 
-        logα_impl = MALA.mala_logα(logp_stdnormal, gradlogp_stdnormal, x, y, ϵ)
+        logα_impl = MALA.mala_logα(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, y, ϵ
+        )
 
         # Independent recomputation:
-        gx = gradlogp_stdnormal(x)
-        gy = gradlogp_stdnormal(y)
+        gx = gradlogp_stdnormal_kernel(x)
+        gy = gradlogp_stdnormal_kernel(y)
 
         logq_y_given_x = logq_mala_ref(y, x, gx, ϵ)
         logq_x_given_y = logq_mala_ref(x, y, gy, ϵ)
 
         logα_ref =
-            (logp_stdnormal(y) + logq_x_given_y) - (logp_stdnormal(x) + logq_y_given_x)
+            (logp_stdnormal_kernel(y) + logq_x_given_y) -
+            (logp_stdnormal_kernel(x) + logq_y_given_x)
 
         @test isfinite(logα_impl)
         @test isfinite(logα_ref)
         @test logα_impl ≈ logα_ref atol=1e-10 rtol=1e-10
+    end
+
+    @testset "mass-matrix scalar and batched paths match columnwise references" begin
+        rng = MersenneTwister(20260201)
+        D, N = 3, 5
+        ϵ = 0.08
+        M = Symmetric([1.7 0.2 -0.1; 0.2 1.3 0.15; -0.1 0.15 1.5])
+        cholM = cholesky(M)
+
+        x = randn(rng, D)
+        ξ = randn(rng, D)
+        y = MALA.mala_proposal(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ; cholM=cholM
+        )
+        y_ref = x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_stdnormal_kernel(x))) .+
+                sqrt(2ϵ) .* (cholM.L * ξ)
+        @test y ≈ y_ref atol=1e-12 rtol=1e-12
+
+        logq_impl = MALA.logq_mala(y, x, gradlogp_stdnormal_kernel(x), ϵ; cholM=cholM)
+        logq_ref = logq_mala_mass_ref(y, x, gradlogp_stdnormal_kernel(x), ϵ, cholM)
+        @test logq_impl ≈ logq_ref atol=1e-12 rtol=1e-12
+
+        X = randn(rng, D, N)
+        Ξ = randn(rng, D, N)
+        u = range(0.1, 0.9; length=N) |> collect
+        X_next, accepted = MALA.mala_step_batched(
+            X -> vec(-0.5 .* sum(abs2, X; dims=1)),
+            X -> -X,
+            X,
+            ϵ,
+            Ξ,
+            u;
+            cholM=cholM,
+        )
+
+        @test length(accepted) == N
+        for j in 1:N
+            xj = copy(view(X, :, j))
+            ξj = copy(view(Ξ, :, j))
+            x_ref, a_ref = MALA.mala_step_full(
+                logp_stdnormal_kernel,
+                gradlogp_stdnormal_kernel,
+                xj,
+                ϵ,
+                ξj,
+                u[j];
+                cholM=cholM,
+            )
+            @test accepted[j] == a_ref
+            @test view(X_next, :, j) ≈ x_ref atol=1e-12 rtol=1e-12
+        end
+
+        Y = randn(rng, D, N)
+        G = -X
+        logq_batch = MALA.logq_mala_batched(Y, X, G, ϵ; cholM=cholM)
+        logq_cols = [
+            MALA.logq_mala(
+                copy(view(Y, :, j)), copy(view(X, :, j)), copy(view(G, :, j)), ϵ; cholM=cholM
+            ) for j in 1:N
+        ]
+        @test logq_batch ≈ logq_cols atol=1e-12 rtol=1e-12
+    end
+
+    @testset "standalone surrogate sigmoid matches explicit relaxed blend" begin
+        rng = MersenneTwister(20260202)
+        x = randn(rng, 4)
+        ξ = randn(rng, 4)
+        ϵ = 0.15
+        u = 0.37
+
+        y = MALA.mala_proposal(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ)
+        logα = MALA.mala_logα(logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, y, ϵ)
+        g = inv(1 + exp(-(logα - log(u))))
+        expected = g .* y .+ (1 - g) .* x
+
+        actual = MALA.mala_step_surrogate_sigmoid(
+            logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u
+        )
+
+        @test actual ≈ expected atol=1e-12 rtol=1e-12
+        @test all(xi -> min(xi[1], xi[2]) - 1e-12 ≤ xi[3] ≤ max(xi[1], xi[2]) + 1e-12,
+            zip(x, y, actual))
     end
 end

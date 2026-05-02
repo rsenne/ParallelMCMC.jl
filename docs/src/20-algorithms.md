@@ -70,7 +70,7 @@ The associative operator for combining two adjacent segments $(\alpha_1, \beta_1
 (\alpha_2, \beta_2) \circ (\alpha_1, \beta_1) = (\alpha_2 \odot \alpha_1,\; \alpha_2 \odot \beta_1 + \beta_2).
 ```
 
-This associativity means the recurrence can be solved by an inclusive parallel-prefix scan in $O(\log T)$ levels, each level consisting of a single broadcast over all $T$ columns — no per-timestep loops.  The implementation ([`DEER.solve_affine_scan_diag`](@ref DEER.solve_affine_scan_diag)) is array-type-agnostic and runs identically on CPU `Matrix` and GPU `CuMatrix`. Though, the CPU approach is included only for correctness testing — you will almost certainly be slower than regular sequential MCMC algorithms without a GPU.
+This associativity means the recurrence can be solved by an inclusive parallel-prefix scan in $O(\log T)$ levels, each level consisting of a single broadcast over all $T$ columns and no per-timestep loops. The implementation in `ParallelMCMC.DEERScan.solve_affine_scan_diag!` is array-type-agnostic and runs identically on CPU `Matrix` and GPU `CuMatrix`. The CPU path is mainly useful for correctness checks; without a GPU or substantial parallel hardware, sequential MCMC is usually faster wall-clock.
 
 ---
 
@@ -80,9 +80,11 @@ This associativity means the recurrence can be solved by an inclusive parallel-p
 
 Use the full $D \times D$ Jacobian $J_t$ at each timestep.  The linear recursion becomes a sequence of dense matrix multiplications, solved sequentially (no scan shortcut for the general case).  Cost per iteration: $O(TD^3)$.  Memory: $O(TD^2)$.  Accurate but impractical for large $D$.
 
+This package currently exposes the diagonal scan variants below as `jacobian` modes; full-matrix DEER is discussed here for context but is not available through the `jacobian` keyword.
+
 ### Quasi-DEER (`:diag`)
 
-Replace $J_t$ with $\mathrm{diag}(J_t)$, retaining only the diagonal.  The recursion reduces to the scalar affine scan described above, solved in $O(TD \log T)$ total work.  The exact diagonal is computed via automatic differentiation (one full Jacobian, then `diag`).  This is the default mode.
+Replace $J_t$ with $\mathrm{diag}(J_t)$, retaining only the diagonal.  The recursion reduces to the scalar affine scan described above, solved in $O(TD \log T)$ total work.  The exact diagonal is computed with `D` Jacobian-vector products.  This mode is useful for low-dimensional checks and reference runs.
 
 ### Stochastic quasi-DEER (`:stoch_diag`)
 
@@ -93,7 +95,7 @@ Computing the exact diagonal of $J_t$ requires a full Jacobian (or $D$ JVPs), wh
 \quad z^{(k)}_i \overset{\text{iid}}{\sim} \mathrm{Rademacher}(\pm 1).
 ```
 
-Each probe $z^{(k)}$ costs a single Jacobian-vector product (one forward-mode or reverse-mode pass), so the total cost is $O(KTD)$ — linear in $D$ and $T$.  In the limit $K \to \infty$ the estimate converges to the true diagonal.  See Zoltowski et al. (2025) [^1] for convergence analysis.
+Each probe $z^{(k)}$ costs a single Jacobian-vector product (one forward-mode or reverse-mode pass), so the total cost is $O(KTD)$ — linear in $D$ and $T$.  In the limit $K \to \infty$ the estimate converges to the true diagonal.  This is the default mode.  See Zoltowski et al. (2025) [^1] for convergence analysis.
 
 In practice $K=1$ or $K=2$ probes works well; controlled by the `probes` argument of [`ParallelMALASampler`](@ref).
 
@@ -126,7 +128,7 @@ x_t^\text{surrogate} = \hat{g}_t \, \tilde{x}_t + (1 - \hat{g}_t)\, x_{t-1},
 
 where $\sigma$ is the logistic function.  The stop-gradient term makes $\hat{g}_t$ equal to the exact indicator in the forward pass while routing gradients through $\sigma$ during the backward pass.  This gives a well-defined, smooth Jacobian whose value at the operating point equals that of the relaxed step.
 
-In the implementation, the accept indicator $g_t$ is pre-computed from the previous-iterate state and passed as a **frozen constant** to the surrogate ([`MALA.mala_step_surrogate`](@ref MALA.mala_step_surrogate)), so differentiation never touches the discontinuity.
+In the implementation, the accept indicator $g_t$ is pre-computed from the previous-iterate state and passed as a **frozen constant** to the surrogate ([`MALA.mala_step_surrogate_sigmoid`](@ref MALA.mala_step_surrogate_sigmoid)), so differentiation never touches the discontinuity.
 
 ### Summary of the DEER–MALA loop
 
@@ -136,8 +138,10 @@ In the implementation, the accept indicator $g_t$ is pre-computed from the previ
 4. **Convergence check.** If the change is below tolerance, return $S^{(i+1)}$; otherwise go to step 2.
 5. **Sample delivery.** Return the $T$ columns of the converged trajectory as individual MCMC samples.
 
+For low-level callers using `DEER.solve(...; workspace=ws)`, the returned trajectory is copied by default so it remains valid after later solves reuse `ws`.  Set `copy_result=false` only when you are intentionally accepting workspace-owned output that may be overwritten by a later call.
+
 ---
 
 ## References
 
-[^1]: Zoltowski, D., Wu, Y., Gonzalez, D., Kozachkov, L., & Linderman, S. (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS 2025. [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
+[^1]: Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS 2025. [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)

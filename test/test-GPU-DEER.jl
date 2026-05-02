@@ -72,16 +72,19 @@ else
     function _make_gpu_rec(tape, ε, backend)
         step_fwd = (x, te) -> MALA.mala_step_taped(_logp, _gradlogp, x, ε, te.ξ, te.u)
         hvp_fn = (pt, dir) -> DEER._hvp_nopre(_gradlogp, backend, pt, dir)
-        jvp = (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
-            _logp, _gradlogp, x, ε, te.ξ, te.u, v, hvp_fn
-        )
-        fwd_and_jvp = (x, te, v) -> MALA.mala_step_taped_and_jvp(
-            _logp, _gradlogp, x, ε, te.ξ, te.u, v, hvp_fn
-        )
+        jvp =
+            (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
+                _logp, _gradlogp, x, ε, te.ξ, te.u, v, hvp_fn
+            )
+        fwd_and_jvp =
+            (x, te, v) ->
+                MALA.mala_step_taped_and_jvp(_logp, _gradlogp, x, ε, te.ξ, te.u, v, hvp_fn)
         return DEER.TapedRecursion(step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp)
     end
 
-    @testset "DEER.solve GPU backend=$bname (stoch_diag)" for (bname, backend) in _gpu_backends
+    @testset "DEER.solve GPU backend=$bname (stoch_diag)" for (bname, backend) in
+                                                              _gpu_backends
+
         rng = MersenneTwister(7)
         D, T = 4, 32
         ε = 0.05f0

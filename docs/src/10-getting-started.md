@@ -35,7 +35,7 @@ model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 [`ParallelMALASampler`](@ref) reformulates a trajectory of `T` MALA steps as a fixed-point problem and solves it via Newton iterations, each of which costs $O(\log T)$ parallel work via an associative prefix scan.  Wall-clock time per sample is therefore sublinear in chain length on multi-core CPUs and GPUs.
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:diag, damping=0.5)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag, damping=0.5)
 
 chain = sample(model, sampler, 500;
                chain_type=MCMCChains.Chains, progress=true)
@@ -53,9 +53,8 @@ The `jacobian` keyword controls how the per-step Jacobian is approximated during
 
 | Mode | Cost per step | Notes |
 |---|---|---|
-| `:diag` (default) | 1 full Jacobian | Exact diagonal; good default |
-| `:stoch_diag` | `probes` JVPs | Hutchinson estimator; better in high dimensions |
-| `:full` | 1 full Jacobian | Full matrix step; rarely needed |
+| `:stoch_diag` (default) | `probes` JVPs | Hutchinson estimator; scalable default for high dimensions |
+| `:diag` | `D` JVPs | Exact diagonal; useful for low-dimensional checks |
 
 For high-dimensional targets, `:stoch_diag` with a small number of `probes` is a good trade-off:
 
@@ -118,7 +117,7 @@ using Turing, LogDensityProblems, LogDensityProblemsAD, ADTypes
 using ParallelMCMC, MCMCChains
 
 ld  = DynamicPPL.LogDensityFunction(normal_model(1.5))
-ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoMooncake(; config=nothing), ld)
+ldg = LogDensityProblemsAD.ADgradient(ADTypes.AutoEnzyme(), ld)
 
 model = DensityModel(ldg; param_names=[:μ])
 ```

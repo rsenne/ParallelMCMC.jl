@@ -5,6 +5,7 @@ using Statistics
 using MCMCChains
 
 using ParallelMCMC
+const MALA_iface = ParallelMCMC.MALA
 
 logp_iface(x) = -0.5 * dot(x, x)
 gradlogp_iface(x) = -x
@@ -38,6 +39,7 @@ gradlogp_iface(x) = -x
         @test transition.logp == logp_iface(transition.x)
         @test state.logp == transition.logp
         @test transition.accepted == true
+        @test state.workspace isa MALA_iface.MALAWorkspace
     end
 
     @testset "initial step respects initial_params" begin
@@ -81,6 +83,7 @@ gradlogp_iface(x) = -x
         @test isfinite(t2.logp)
         @test s2.x == t2.x
         @test s2.logp == t2.logp
+        @test s2.workspace === s1.workspace
     end
 
     @testset "step determinism with fixed rng" begin

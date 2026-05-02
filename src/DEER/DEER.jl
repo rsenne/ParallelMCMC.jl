@@ -5,23 +5,35 @@ using DifferentiationInterface
 using ADTypes: ADTypes, AbstractADType
 import Enzyme: Enzyme
 using Random
+using CUDA: CUDA
 
 include("DEERScan.jl")
 using .DEERScan
 
 const DI = DifferentiationInterface
-const DEFAULT_BACKEND = ADTypes.AutoEnzyme(; mode=Enzyme.Forward, function_annotation=Enzyme.Duplicated)
+const DEFAULT_BACKEND = ADTypes.AutoEnzyme(;
+    mode=Enzyme.Forward, function_annotation=Enzyme.Duplicated
+)
 const DEFAULT_HVP_BACKEND = DI.SecondOrder(
     DEFAULT_BACKEND,
-    ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)),
+    # The log-density function itself is non-active in the reverse pass.
+    # Marking it duplicated makes DynamicPPL closure fields look active to Enzyme.
+    ADTypes.AutoEnzyme(;
+        mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
+        function_annotation=Enzyme.Const,
+    ),
 )
 
 export TapedRecursion,
-       DEERWorkspace,
-       deer_update!, deer_update,
-       solve,
-       _prepare_hvp, _hvp_prepared, _hvp_nopre,
-       DEFAULT_BACKEND, DEFAULT_HVP_BACKEND
+    DEERWorkspace,
+    deer_update!,
+    deer_update,
+    solve,
+    _prepare_hvp,
+    _hvp_prepared,
+    _hvp_nopre,
+    DEFAULT_BACKEND,
+    DEFAULT_HVP_BACKEND
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -40,7 +52,9 @@ struct TapedRecursion{Ff,Fj,Ffj,Ffb,Tt}
     tape::Vector{Tt}
 end
 
-function TapedRecursion(step_fwd, jvp, tape::Vector; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing)
+function TapedRecursion(
+    step_fwd, jvp, tape::Vector; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing
+)
     return TapedRecursion(step_fwd, jvp, fwd_and_jvp, fwd_and_jvp_batch, tape)
 end
 
@@ -51,14 +65,17 @@ All buffers are created with the same array type / device placement as `S_templa
 (or `s0_template` for vector buffers), so the workspace is GPU-compatible when
 constructed from `CuArray` templates.
 """
-struct DEERWorkspace{M,V,SW}
+struct DEERWorkspace{M,V,SW,HZ,H}
     A::M
     B::M
     Xbar::M
     Z::M
+    Zhost::HZ
+    S_work::M
     S_tmp::M
     diff_buf::M
     zbuf::V
+    zhost::H
     jt_buf::V
     xbar_buf::V
     scan::SW
@@ -69,13 +86,18 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     B = similar(S_template)
     Xbar = similar(S_template)
     Z = similar(S_template)
+    Zhost = Z isa CUDA.CuArray ? Matrix{eltype(S_template)}(undef, size(Z)...) : nothing
+    S_work = similar(S_template)
     S_tmp = similar(S_template)
     diff_buf = similar(S_template)
     zbuf = similar(s0_template)
+    zhost = zbuf isa CUDA.CuArray ? Vector{eltype(s0_template)}(undef, length(s0_template)) : nothing
     jt_buf = similar(s0_template)
     xbar_buf = similar(s0_template)
     scan = DEERScan.AffineScanWorkspace(S_template)
-    return DEERWorkspace(A, B, Xbar, Z, S_tmp, diff_buf, zbuf, jt_buf, xbar_buf, scan)
+    return DEERWorkspace(
+        A, B, Xbar, Z, Zhost, S_work, S_tmp, diff_buf, zbuf, zhost, jt_buf, xbar_buf, scan
+    )
 end
 
 function DEERWorkspace(s0_template::AbstractVector, T::Integer)
@@ -104,7 +126,9 @@ function _tangent_like(x::AbstractArray, v::AbstractArray)
     return v_copy
 end
 
-function _hvp_prepared(f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
+function _hvp_prepared(
+    f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector
+)
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
     res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
@@ -135,11 +159,7 @@ function _prepare_logdensity_hvp(f, backend::AbstractADType, x_template::Abstrac
 end
 
 function _logdensity_hvp_prepared(
-    f,
-    prep,
-    backend::AbstractADType,
-    x::AbstractVector,
-    v::AbstractVector,
+    f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector
 )
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
@@ -148,10 +168,7 @@ function _logdensity_hvp_prepared(
 end
 
 function _logdensity_hvp_nopre(
-    f,
-    backend::AbstractADType,
-    x::AbstractVector,
-    v::AbstractVector,
+    f, backend::AbstractADType, x::AbstractVector, v::AbstractVector
 )
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
@@ -161,9 +178,7 @@ function _logdensity_hvp_nopre(
 end
 
 function _prepare_batch_hvp_from_grad(
-    grad_batch,
-    backend::AbstractADType,
-    X_template::AbstractMatrix,
+    grad_batch, backend::AbstractADType, X_template::AbstractMatrix
 )
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
@@ -173,11 +188,7 @@ function _prepare_batch_hvp_from_grad(
 end
 
 function _batch_hvp_from_grad_prepared(
-    grad_batch,
-    prep,
-    backend::AbstractADType,
-    X::AbstractMatrix,
-    V::AbstractMatrix,
+    grad_batch, prep, backend::AbstractADType, X::AbstractMatrix, V::AbstractMatrix
 )
     X_exec = _materialize_ad_matrix(X)
     V_exec = _tangent_like(X_exec, V)
@@ -185,25 +196,33 @@ function _batch_hvp_from_grad_prepared(
     return res isa Tuple ? first(res) : res
 end
 
-@inline function _rademacher!(z::AbstractVector{T}, rng::AbstractRNG) where {T}
-    D = length(z)
-    bits = rand(rng, Bool, D)
-    vals = Vector{T}(undef, D)
-    @inbounds for i in 1:D
-        vals[i] = bits[i] ? one(T) : -one(T)
+@inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}
+    @inbounds for i in eachindex(z)
+        z[i] = rand(rng, Bool) ? one(T) : -one(T)
     end
-    copyto!(z, vals)
     return z
 end
 
-@inline function _rademacher_matrix!(Z::AbstractMatrix{T}, rng::AbstractRNG) where {T}
-    D, n = size(Z)
-    bits = rand(rng, Bool, D, n)
-    vals = Matrix{T}(undef, D, n)
-    @. vals = ifelse(bits, one(T), -one(T))
-    copyto!(Z, vals)
-    return Z
+@inline function _rademacher!(z::CUDA.CuArray{T}, rng::AbstractRNG) where {T}
+    host = Vector{T}(undef, length(z))
+    _rademacher!(z, rng, host)
+    return z
 end
+
+@inline function _rademacher!(
+    z::CUDA.CuArray{T}, rng::AbstractRNG, host::AbstractArray{T}
+) where {T}
+    length(host) == length(z) || throw(DimensionMismatch("host buffer must match z"))
+    _rademacher!(host, rng)
+    copyto!(z, host)
+    return z
+end
+
+@inline _rademacher!(z::AbstractArray, rng::AbstractRNG, ::Nothing) = _rademacher!(z, rng)
+
+@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG) = _rademacher!(Z, rng)
+@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) =
+    _rademacher!(Z, rng, host)
 
 function jac_diag_via_jvps(rec::TapedRecursion, x::AbstractVector, t::Int)
     D = length(x)
@@ -234,7 +253,7 @@ function jac_diag_stoch(
     FT = float(eltype(x))
     probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
 
-    z = zbuf === nothing ? Vector{FT}(undef, D) : zbuf
+    z = zbuf === nothing ? similar(x, FT, D) : zbuf
     length(z) == D || throw(ArgumentError("zbuf must have length D"))
 
     d = fill!(similar(z, D), zero(FT))
@@ -280,17 +299,17 @@ function deer_update!(
         Xbar = ws.Xbar
         Z = ws.Z
 
-        copyto!(view(Xbar, :, 1), s0)
+        copyto!(Xbar, 1, s0, 1, D)
         if T > 1
-            @views Xbar[:, 2:end] .= S_in[:, 1:(T - 1)]
+            copyto!(Xbar, D + 1, S_in, 1, D * (T - 1))
         end
 
-        _rademacher_matrix!(Z, rng)
+        _rademacher_matrix!(Z, rng, ws.Zhost)
 
         FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
         @. A = Z * Jt
         for _ in 2:probes
-            _rademacher_matrix!(Z, rng)
+            _rademacher_matrix!(Z, rng, ws.Zhost)
             _, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
             @. A += Z * Jt
         end
@@ -307,12 +326,12 @@ function deer_update!(
             xbar = if t == 1
                 s0
             else
-                copyto!(xbar_buf, view(S_in, :, t - 1))
+                copyto!(xbar_buf, 1, S_in, (t - 2) * D + 1, D)
                 xbar_buf
             end
 
             if jacobian === :stoch_diag
-                _rademacher!(zbuf, rng)
+                _rademacher!(zbuf, rng, ws.zhost)
                 ft, jvp1 = if rec.fwd_and_jvp !== nothing
                     rec.fwd_and_jvp(xbar, rec.tape[t], zbuf)
                 else
@@ -321,7 +340,7 @@ function deer_update!(
 
                 @. jt_buf = zbuf * jvp1
                 for _ in 2:probes
-                    _rademacher!(zbuf, rng)
+                    _rademacher!(zbuf, rng, ws.zhost)
                     jvp_k = rec.jvp(xbar, rec.tape[t], zbuf)
                     @. jt_buf += zbuf * jvp_k
                 end
@@ -329,14 +348,18 @@ function deer_update!(
                     jt_buf .*= one(eltype(jt_buf)) / probes
                 end
 
-                view(A, :, t) .= jt_buf
-                @views @. B[:, t] = ft - jt_buf * xbar
+                colstart = (t - 1) * D + 1
+                copyto!(A, colstart, jt_buf, 1, D)
+                @. xbar_buf = ft - jt_buf * xbar
+                copyto!(B, colstart, xbar_buf, 1, D)
 
             elseif jacobian === :diag
                 ft = rec.step_fwd(xbar, rec.tape[t])
                 jt = jac_diag_via_jvps(rec, xbar, t)
-                view(A, :, t) .= jt
-                @views @. B[:, t] = ft - jt * xbar
+                colstart = (t - 1) * D + 1
+                copyto!(A, colstart, jt, 1, D)
+                @. xbar_buf = ft - jt * xbar
+                copyto!(B, colstart, xbar_buf, 1, D)
 
             else
                 throw(ArgumentError("jacobian must be :diag or :stoch_diag"))
@@ -362,7 +385,9 @@ function deer_update(
 )
     ws = DEERWorkspace(S, vec(s0_in))
     S_out = similar(S)
-    deer_update!(ws, S_out, rec, s0_in, S; jacobian=jacobian, damping=damping, probes=probes, rng=rng)
+    deer_update!(
+        ws, S_out, rec, s0_in, S; jacobian=jacobian, damping=damping, probes=probes, rng=rng
+    )
     return S_out
 end
 
@@ -371,6 +396,12 @@ Run DEER iterations until convergence.
 
 When no workspace is supplied, one is created automatically. Supplying a
 pre-allocated `DEERWorkspace` is the intended path for repeated GPU solves.
+
+If `workspace` is supplied, `copy_result` defaults to `true` so the returned
+trajectory is owned by the caller and will not be overwritten by a later solve
+using the same workspace. Set `copy_result=false` for allocation-sensitive
+internal loops; in that mode the returned trajectory may alias workspace-owned
+buffers such as `workspace.S_tmp`.
 """
 function solve(
     rec::TapedRecursion,
@@ -385,6 +416,7 @@ function solve(
     rng::AbstractRNG=Random.default_rng(),
     return_info::Bool=false,
     workspace::Union{Nothing,DEERWorkspace}=nothing,
+    copy_result::Union{Nothing,Bool}=nothing,
 )
     s0 = vec(s0_in)
     D = length(s0)
@@ -395,16 +427,22 @@ function solve(
     tol_rel ≥ 0 || throw(ArgumentError("tol_rel must be ≥ 0"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
 
+    copy_result === nothing && (copy_result = workspace !== nothing)
+
     ws = workspace === nothing ? DEERWorkspace(s0, T) : workspace
-    size(ws.S_tmp) == (D, T) || throw(ArgumentError("workspace state buffer has wrong size"))
+    size(ws.S_work) == (D, T) ||
+        throw(ArgumentError("workspace state buffer has wrong size"))
+    size(ws.S_tmp) == (D, T) ||
+        throw(ArgumentError("workspace state buffer has wrong size"))
 
     S = if init === nothing
-        S0 = similar(s0, D, T)
-        S0 .= reshape(s0, D, 1)
+        S0 = ws.S_work
+        S0 .= s0
         S0
     else
         size(init) == (D, T) || throw(ArgumentError("init must be size (D,T)"))
-        copy(init)
+        copyto!(ws.S_work, init)
+        ws.S_work
     end
     S_new = ws.S_tmp
 
@@ -414,7 +452,17 @@ function solve(
 
     for iter in 1:maxiter
         iters = iter
-        deer_update!(ws, S_new, rec, s0, S; jacobian=jacobian, damping=damping, probes=probes, rng=rng)
+        deer_update!(
+            ws,
+            S_new,
+            rec,
+            s0,
+            S;
+            jacobian=jacobian,
+            damping=damping,
+            probes=probes,
+            rng=rng,
+        )
 
         @. ws.diff_buf = abs(S_new - S)
         Δ_max = maximum(ws.diff_buf)
@@ -432,8 +480,10 @@ function solve(
         S, S_new = S_new, S
     end
 
-    return_info || return S
-    return S,
+    S_result = copy_result ? copy(S) : S
+
+    return_info || return S_result
+    return S_result,
     (
         converged=converged,
         iters=iters,

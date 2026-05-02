@@ -32,7 +32,7 @@ else
         scales = CUDA.CuArray(Float32.(1:D))         # D-vector on GPU
         return vec(-0.5f0 .* sum(X .^ 2 ./ scales; dims=1))
     end
-    
+
     function gradlogp_scaled(X)
         D = size(X, 1)
         scales = CUDA.CuArray(Float32.(1:D))

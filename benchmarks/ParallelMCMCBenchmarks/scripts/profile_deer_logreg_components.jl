@@ -47,8 +47,9 @@ function build_problem()
     y_gpu = CUDA.CuVector(y_f32)
 
     logp_gpu, gradlogp_gpu, hvp_gpu = BayesLogReg.make_problem_with_hvp(X_gpu, y_gpu)
-    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch =
-        BayesLogReg.make_problem_batched_with_hvp(X_gpu, y_gpu)
+    logp_gpu_batch, gradlogp_gpu_batch, hvp_gpu_batch = BayesLogReg.make_problem_batched_with_hvp(
+        X_gpu, y_gpu
+    )
 
     model_gpu = DensityModel(
         logp_gpu,
@@ -66,12 +67,7 @@ function build_problem()
 end
 
 function build_rec(model_gpu, x0_gpu, tape)
-    return ParallelMCMC._build_mala_deer_rec(
-        model_gpu,
-        epsilon,
-        tape,
-        x0_gpu;
-    )
+    return ParallelMCMC._build_mala_deer_rec(model_gpu, epsilon, tape, x0_gpu;)
 end
 
 function solve_prebuilt(rec, x0_gpu, ws; seed=42, return_info=false)
@@ -87,6 +83,7 @@ function solve_prebuilt(rec, x0_gpu, ws; seed=42, return_info=false)
         rng=MersenneTwister(seed),
         workspace=ws,
         return_info=return_info,
+        copy_result=false,
     )
     CUDA.synchronize()
     return out
@@ -110,7 +107,8 @@ end
 
 function print_trial(name, trial)
     t_ms = median(trial).time / 1e6
-    @printf "%-32s  %12.3f  %12d  %12.3f\n" name t_ms median(trial).allocs median(trial).memory / 1024^2
+    @printf "%-32s  %12.3f  %12d  %12.3f\n" name t_ms median(trial).allocs median(trial).memory /
+        1024^2
     return t_ms
 end
 
@@ -140,7 +138,9 @@ println("GPU ParallelMALA component profile")
 println("Model: Bayesian logistic regression  D=$D  N_data=$N_data")
 println("T=$T  N_samples=$N_samples  blocks=$(cld(N_samples, T))")
 println("epsilon=$epsilon  maxiter=$maxiter  tol_abs=$tol_abs  tol_rel=$tol_rel")
-println("Warmup solve converged=$(info.converged), iters=$(info.iters), metric=$(info.metric)")
+println(
+    "Warmup solve converged=$(info.converged), iters=$(info.iters), metric=$(info.metric)"
+)
 println("=" ^ 96)
 println()
 
@@ -191,7 +191,7 @@ b_sample = @benchmark begin
         $deer_gpu,
         $N_samples;
         progress=false,
-        initial_params=$x0_gpu,
+        initial_params=($x0_gpu),
     )
     CUDA.synchronize()
     xs
