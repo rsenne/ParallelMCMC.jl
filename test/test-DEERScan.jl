@@ -54,6 +54,59 @@ end
     end
 end
 
+@testset "DEERScan affine scan validation helpers" begin
+    rng = MersenneTwister(12)
+    D, T = 4, 9
+    A, B, s0 = make_affine_problem(rng, D, T; FT=Float64, stable=true)
+
+    S_seq = DEERScan.solve_affine_seq(A, B, s0)
+    S_scan = DEERScan.solve_affine_scan_diag(A, B, s0)
+
+    @test DEERScan.affine_scan_residual(S_seq, A, B, s0) ≤ 1e-12
+    @test DEERScan.affine_scan_residual(S_scan, A, B, s0) ≤ 1e-12
+
+    S_bad_first = copy(S_seq)
+    S_bad_first[2, 1] += 0.25
+    @test DEERScan.affine_scan_residual(S_bad_first, A, B, s0) ≈ 0.25
+
+    S_bad_later = copy(S_seq)
+    S_bad_later[3, 6] -= 0.5
+    @test DEERScan.affine_scan_residual(S_bad_later, A, B, s0) ≈ 0.5
+
+    chk = DEERScan.check_affine_scan(A, B, s0; atol=1e-12, rtol=1e-12)
+    @test chk.ok
+    @test chk.max_abs_err ≤ 1e-12
+    @test chk.max_rel_err ≤ 1
+    @test chk.residual_seq ≤ 1e-12
+    @test chk.residual_scan ≤ 1e-12
+    @test chk.S_seq ≈ S_seq atol=0 rtol=0
+    @test chk.S_scan ≈ S_scan atol=0 rtol=0
+
+    A0 = zeros(Float64, D, 0)
+    B0 = similar(A0)
+    s00 = randn(rng, D)
+    S0 = similar(A0)
+    chk0 = DEERScan.check_affine_scan(A0, B0, s00)
+    @test DEERScan.affine_scan_residual(S0, A0, B0, s00) == 0.0
+    @test chk0.ok
+    @test chk0.max_abs_err == 0.0
+    @test chk0.max_rel_err == 0.0
+    @test size(chk0.S_seq) == (D, 0)
+    @test size(chk0.S_scan) == (D, 0)
+end
+
+@testset "DEERScan affine scan helper shape validation" begin
+    rng = MersenneTwister(13)
+    A, B, s0 = make_affine_problem(rng, 3, 5; FT=Float64, stable=true)
+    S = DEERScan.solve_affine_seq(A, B, s0)
+
+    @test_throws DimensionMismatch DEERScan.affine_scan_residual(S, B[:, 1:4], B, s0)
+    @test_throws DimensionMismatch DEERScan.affine_scan_residual(S[:, 1:4], A, B, s0)
+    @test_throws DimensionMismatch DEERScan.affine_scan_residual(S, A, B, randn(rng, 4))
+    @test_throws DimensionMismatch DEERScan.check_affine_scan(A, B[:, 1:4], s0)
+    @test_throws DimensionMismatch DEERScan.check_affine_scan(A, B, randn(rng, 4))
+end
+
 @testset "DEERScan primitive (GPU-first)" begin
     if !CUDA_AVAILABLE
         @info "No CUDA GPU detected — skipping DEERScan GPU tests."

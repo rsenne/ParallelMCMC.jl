@@ -239,8 +239,8 @@ function check_affine_scan(
 
     diff = abs.(S_seq .- S_scan)
     scale = atol .+ rtol .* abs.(S_seq)
-    max_abs_err = maximum(diff)
-    max_rel_err = maximum(diff ./ scale)
+    max_abs_err = isempty(diff) ? zero(eltype(diff)) : maximum(diff)
+    max_rel_err = isempty(diff) ? zero(eltype(diff)) : maximum(diff ./ scale)
     residual_seq = affine_scan_residual(S_seq, A, B, s0)
     residual_scan = affine_scan_residual(S_scan, A, B, s0)
 
