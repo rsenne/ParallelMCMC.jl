@@ -1,7 +1,7 @@
 authors = ["Ryan Senne <rsenne@bu.edu>"]
 name = "ParallelMCMC"
 uuid = "1a970f40-4406-51c9-a967-cb3143c111e8"
-version = "0.1.0"
+version = "0.0.0"
 
 [compat]
 ADTypes = "1.21.0"
