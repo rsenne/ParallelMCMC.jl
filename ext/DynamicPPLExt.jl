@@ -59,7 +59,9 @@ const DensityModelLDF = ParallelMCMC.DensityModel{<:LDFPrimal,<:LDFGradient}
     postprocess_sample(model::DensityModel, sample)
 
 Converts a raw transition (e.g. `MALATransition`) into a `DynamicPPL.ParamsWithStats` object
-by reevaluating the DynamicPPL model with the vectorised parameters. This requires that the `DensityModel` object was constructed with a `LogDensityFunctionPrimal` and `LogDensityFunctionGradient` that wrap a DynamicPPL model.
+by reevaluating the DynamicPPL model with the vectorised parameters. This requires that the
+`DensityModel` object was constructed with a `LogDensityProblemPrimal` and
+`LogDensityProblemGradient` that wrap a DynamicPPL model.
 """
 function ParallelMCMC.postprocess_sample(
     model::DensityModelLDF, sample::ParallelMCMC.MALATransition
