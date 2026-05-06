@@ -629,8 +629,8 @@ end
 
 function _construct_chain(
     ::Type{MCMCChains.Chains},
-    vals::AbstractMatrix{Float64},
-    internals::AbstractMatrix{Float64},
+    vals::AbstractMatrix{Real},
+    internals::AbstractMatrix{Real},
     names::Vector{Symbol},
     internal_names::Vector{Symbol},
     model::DensityModel,
