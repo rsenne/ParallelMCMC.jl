@@ -3,6 +3,7 @@ module ParallelMCMC
 using AbstractMCMC
 using CUDA
 using Enzyme
+using Mooncake
 using MCMCChains
 using LinearAlgebra
 using Random

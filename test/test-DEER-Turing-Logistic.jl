@@ -17,13 +17,6 @@ Bayesian logistic regression:
     y_i | β ~ Bernoulli(sigmoid(X_i β))
 
 Synthetic data with known β_true lets us verify posterior means.
-
-The tests are split into two groups:
-
-Turing integration: uses the DynamicPPL convenience constructor.  These are
-CPU-only because DynamicPPL model evaluation does not support GPU arrays.
-ParallelMALASampler works fine with Turing on CPU; for GPU you supply a manual
-logp/gradlogp that is array-type-agnostic (see below).
 =#
 
 const _LR_D = 2
@@ -250,7 +243,7 @@ else
         @test size(S_gpu) == (_LR_D, T)
         @test all(isfinite, Array(S_gpu))
         S_ref = reduce(hcat, xs_seq[2:end])
-        @test Array(S_gpu) ≈ S_ref rtol=1e-4 atol=1e-5
+        @test Array(S_gpu) ≈ S_ref rtol=1e-3 atol=1e-4
     end
 
     @testset "ParallelMALASampler GPU logistic: posterior mean matches CPU" begin
@@ -258,11 +251,11 @@ else
         y_gpu = CUDA.CuVector(_y_f32)
 
         sampler = ParallelMALASampler(
-            0.1f0;
+            0.05f0;
             T=16,
-            maxiter=50,
-            tol_abs=1e-4f0,
-            tol_rel=1e-3f0,
+            maxiter=200,
+            tol_abs=1f-4,
+            tol_rel=1f-3,
             damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )

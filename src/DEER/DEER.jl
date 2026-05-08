@@ -23,6 +23,12 @@ const DEFAULT_HVP_BACKEND = DI.SecondOrder(
         function_annotation=Enzyme.Const,
     ),
 )
+# AD-HVP (CPU and GPU) goes through Mooncake reverse-on-grad. Enzyme's
+# forward mode crashes on cuBLAS / cuPointerGetAttribute gc-transition bundles
+# for composed gradients on GPU; using Mooncake everywhere keeps the AD path
+# identical across devices, which makes CPU/GPU comparisons meaningful and
+# simplifies the code. See `_prepare_hvp_via_grad_reverse`.
+const DEFAULT_AD_HVP_BACKEND = ADTypes.AutoMooncake(; config=nothing)
 
 export TapedRecursion,
     DEERWorkspace,
@@ -33,7 +39,8 @@ export TapedRecursion,
     _hvp_prepared,
     _hvp_nopre,
     DEFAULT_BACKEND,
-    DEFAULT_HVP_BACKEND
+    DEFAULT_HVP_BACKEND,
+    DEFAULT_AD_HVP_BACKEND
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -194,6 +201,61 @@ function _batch_hvp_from_grad_prepared(
     V_exec = _tangent_like(X_exec, V)
     res = DI.pushforward(grad_batch, prep, backend, X_exec, (V_exec,))
     return res isa Tuple ? first(res) : res
+end
+
+# ---------------------------------------------------------------------------
+# Reverse-on-grad HVP, used on GPU. Computes Hv as the gradient of
+# `x -> dot(gradlogp(x), v)` with `v` carried as a DI Constant context so a
+# single `prepare_gradient` covers all subsequent Newton steps. The batched
+# variant uses `B -> sum(gradlogp_batch(B) .* V)` and exploits the
+# column-independence of the user's batched gradient — its gradient w.r.t. B
+# is the columnwise HVP.
+#
+# We bundle the closure with the prep so `prepare_gradient` and `gradient`
+# see the same function instance (DI keys preparations on function identity).
+# ---------------------------------------------------------------------------
+struct _HvpReverseClosure{F}
+    grad::F
+end
+(c::_HvpReverseClosure)(x, v) = LinearAlgebra.dot(c.grad(x), v)
+
+struct _BatchHvpReverseClosure{F}
+    grad_batch::F
+end
+(c::_BatchHvpReverseClosure)(X, V) = sum(c.grad_batch(X) .* V)
+
+function _prepare_hvp_via_grad_reverse(
+    gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    v_template = similar(x_template)
+    fill!(v_template, zero(eltype(x_template)))
+    f = _HvpReverseClosure(gradlogp)
+    prep = DI.prepare_gradient(f, backend, x_template, DI.Constant(v_template))
+    return (f, prep)
+end
+
+function _hvp_via_grad_reverse_prepared(
+    prep_pair, backend::AbstractADType, x::AbstractVector, v::AbstractVector
+)
+    f, prep = prep_pair
+    return DI.gradient(f, prep, backend, x, DI.Constant(v))
+end
+
+function _prepare_batch_hvp_via_grad_reverse(
+    grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    V_template = similar(X_template)
+    fill!(V_template, zero(eltype(X_template)))
+    f = _BatchHvpReverseClosure(grad_batch)
+    prep = DI.prepare_gradient(f, backend, X_template, DI.Constant(V_template))
+    return (f, prep)
+end
+
+function _batch_hvp_via_grad_reverse_prepared(
+    prep_pair, backend::AbstractADType, X::AbstractMatrix, V::AbstractMatrix
+)
+    f, prep = prep_pair
+    return DI.gradient(f, prep, backend, X, DI.Constant(V))
 end
 
 @inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}

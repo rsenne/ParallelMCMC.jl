@@ -364,14 +364,17 @@ function _build_mala_deer_rec(
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    # Use a model-provided HVP when available. Otherwise differentiate the
-    # scalar logdensity directly
+    # Use a model-provided HVP when available. Otherwise compute Hv as the
+    # gradient of `x -> dot(gradlogp(x), v)` with Mooncake reverse-mode. We
+    # use Mooncake on both CPU and GPU: on GPU it sidesteps Enzyme's cuBLAS /
+    # `cuPointerGetAttribute` gc-transition crashes, and on CPU sharing the
+    # same AD path makes CPU/GPU runs numerically comparable.
     hvp_fn = if model.hvp !== nothing
         model.hvp
     else
-        hvp_backend = DEER._hvp_second_order_backend(backend)
-        prep_hvp = DEER._prepare_logdensity_hvp(logp, hvp_backend, x0_like)
-        (pt, dir) -> DEER._logdensity_hvp_prepared(logp, prep_hvp, hvp_backend, pt, dir)
+        hvp_backend = DEER.DEFAULT_AD_HVP_BACKEND
+        prep_hvp = DEER._prepare_hvp_via_grad_reverse(gradlogp, hvp_backend, x0_like)
+        (pt, dir) -> DEER._hvp_via_grad_reverse_prepared(prep_hvp, hvp_backend, pt, dir)
     end
 
     # Exact forward step.
@@ -425,16 +428,12 @@ function _build_mala_deer_rec(
             hvp_batch = if model.hvp_batch !== nothing
                 model.hvp_batch
             else
-                hvp_batch_backend = DEER._hvp_backend(backend)
-                prep_hvp_batch = DEER._prepare_batch_hvp_from_grad(
+                hvp_batch_backend = DEER.DEFAULT_AD_HVP_BACKEND
+                prep_hvp_batch = DEER._prepare_batch_hvp_via_grad_reverse(
                     model.grad_logdensity_batch, hvp_batch_backend, X_template
                 )
-                (X, V) -> DEER._batch_hvp_from_grad_prepared(
-                    model.grad_logdensity_batch,
-                    prep_hvp_batch,
-                    hvp_batch_backend,
-                    X,
-                    V,
+                (X, V) -> DEER._batch_hvp_via_grad_reverse_prepared(
+                    prep_hvp_batch, hvp_batch_backend, X, V
                 )
             end
 

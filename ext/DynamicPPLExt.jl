@@ -5,6 +5,7 @@ using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using Enzyme: Enzyme
 using LogDensityProblems: LogDensityProblems
+using ParallelMCMC.DEER: DEER
 
 """
     DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse), function_annotation=Enzyme.Duplicated), hvp=nothing)
@@ -67,6 +68,22 @@ function ParallelMCMC.DensityModel(
     function gradlogp(x)
         _, g = LogDensityProblems.logdensity_and_gradient(ld, x)
         return g
+    end
+
+    # The user's gradient calls Enzyme reverse-mode internally. Differentiating
+    # it again with Mooncake (the package's AD-HVP fallback) would hit Enzyme's
+    # `llvmcall` intrinsics, which Mooncake cannot trace. Provide an analytical
+    # HVP via second-order Enzyme on `logp` so the AD-HVP fallback never runs.
+    if hvp === nothing
+        hvp_backend = DEER.DEFAULT_HVP_BACKEND
+        hvp_prep_ref = Ref{Any}(nothing)
+        function _auto_hvp(x, v)
+            if hvp_prep_ref[] === nothing
+                hvp_prep_ref[] = DEER._prepare_logdensity_hvp(logp, hvp_backend, x)
+            end
+            return DEER._logdensity_hvp_prepared(logp, hvp_prep_ref[], hvp_backend, x, v)
+        end
+        hvp = _auto_hvp
     end
 
     return ParallelMCMC.DensityModel(logp, gradlogp, dim; hvp=hvp, param_names=param_names)

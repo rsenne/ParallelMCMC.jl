@@ -30,7 +30,7 @@ model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 
 ---
 
-## ParallelMALASampler — the primary algorithm
+## ParallelMALASampler
 
 [`ParallelMALASampler`](@ref) reformulates a trajectory of `T` MALA steps as a fixed-point problem and solves it via Newton iterations, each of which costs $O(\log T)$ parallel work via an associative prefix scan.  Wall-clock time per sample is therefore sublinear in chain length on multi-core CPUs and GPUs.
 
@@ -82,6 +82,29 @@ sampler = ParallelMALASampler(0.1f0; T=64, backend=ADTypes.AutoEnzyme())
 chain = sample(model, sampler, 500;
                initial_params=CUDA.randn(Float32, 2),
                chain_type=MCMCChains.Chains)
+```
+
+#### AD-HVP fallback
+
+DEER needs a Hessian-vector product (HVP) at every Newton step.  If you
+supply `hvp`/`hvp_batch` analytically, those run as plain kernels and
+nothing else is required.  If you only supply `grad_logdensity` /
+`grad_logdensity_batch`, the sampler computes the HVP via **Mooncake**
+reverse-mode applied to `x -> dot(grad_logdensity(x), v)`.
+
+```julia
+using ParallelMCMC, CUDA
+
+const X = CUDA.CuMatrix(randn(Float32, N, D))
+
+# Plain Julia / CUDA operations.
+grad_logp(β)       = -β .- (transpose(X) * (X * β))     ./ Float32(N)
+grad_logp_batch(B) = -B .- (transpose(X) * (X * B))     ./ Float32(N)
+
+model   = DensityModel(logp, grad_logp, D;
+                       logdensity_batch=logp_batch,
+                       grad_logdensity_batch=grad_logp_batch)
+sampler = ParallelMALASampler(0.05f0; T=64)
 ```
 
 ---
