@@ -32,8 +32,10 @@ end
 
 const _LR_X, _LR_y = _lr_data(MersenneTwister(1234), _LR_N, _LR_D, _LR_β_true)
 
-# Array-type-agnostic logp and gradlogp — identical math as the Turing model,
-# but expressed as plain broadcasts so they run on CPU or GPU without change.
+#=
+Array-type-agnostic logp and gradlogp — identical math as the Turing model,
+but expressed as plain broadcasts so they run on CPU or GPU without change.
+=#
 function _logp_lr(β, X, y)
     logits = X * β
     ll = sum(@. y * (-log1p(exp(-logits))) + (1 - y) * (-log1p(exp(logits))))

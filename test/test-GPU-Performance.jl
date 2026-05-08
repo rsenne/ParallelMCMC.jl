@@ -31,9 +31,11 @@ if !_PERF_GPU_AVAILABLE
     @info "GPU performance test: CUDA not functional — skipping"
 else
 
-# Multivariate Gaussian target — well-conditioned, optimal MALA acceptance from
-# any start. Lets ε be set analytically so the chain actually moves and DEER
-# does real work.
+#=
+Multivariate Gaussian target — well-conditioned, optimal MALA acceptance from
+any start. Lets ε be set analytically so the chain actually moves and DEER
+does real work.
+=#
 function _perf_logp(β, X, _)
     Xβ = X * β
     N = oftype(zero(eltype(β)), size(X, 1))
@@ -97,9 +99,11 @@ function _bench(model, sampler, N; x0, reps=2)
 end
 
 @testset "GPU performance vs sequential CPU MALA" begin
-    # Sized so each per-step Sgemm is large enough to amortize CUDA kernel-
-    # launch overhead. D<200 is launch-bound and CPU wins; this is the regime
-    # users care about for the "ParallelMCMC speeds things up" claim.
+    #=
+    Sized so each per-step Sgemm is large enough to amortize CUDA kernel-
+    launch overhead. D<200 is launch-bound and CPU wins; this is the regime
+    users care about for the "ParallelMCMC speeds things up" claim.
+    =#
     D = 300
     N_data = 4_000
     rng = MersenneTwister(20251231)
@@ -149,8 +153,10 @@ end
     speedup  = gpu_sps / cpu_sps
     @info "GPU run" gpu_sps gpu_time speedup
 
-    # The thresholds are deliberately loose so flaky shared-cluster GPUs don't
-    # red the build, but tight enough to catch a genuine perf regression.
+    #=
+    The thresholds are deliberately loose so flaky shared-cluster GPUs don't
+    red the build, but tight enough to catch a genuine perf regression.
+    =#
     @test speedup ≥ 2.0
     @test gpu_sps  ≥ 1_500.0
 end

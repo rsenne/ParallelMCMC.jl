@@ -9,8 +9,10 @@ const MALA = ParallelMCMC.MALA
 logp_stdnormal_kernel(x) = -0.5 * dot(x, x)
 gradlogp_stdnormal_kernel(x) = -x
 
-# Reference implementation of log q(y|x) for MALA proposal:
-# y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+#=
+Reference implementation of log q(y|x) for MALA proposal:
+y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+=#
 function logq_mala_ref(
     y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
 )

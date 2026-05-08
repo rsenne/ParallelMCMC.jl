@@ -156,8 +156,10 @@ end
         _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
     end
 
-    # After warmup, ε̄ should yield acceptance near target.
-    # Run 500 post-warmup steps and measure actual rate.
+    #=
+    After warmup, ε̄ should yield acceptance near target.
+    Run 500 post-warmup steps and measure actual rate.
+    =#
     n_accept = 0
     for _ in 1:500
         t, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)

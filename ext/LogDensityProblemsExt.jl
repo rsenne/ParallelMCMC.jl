@@ -62,12 +62,14 @@ function ParallelMCMC.DensityModel(ld; param_names=nothing)
         return g
     end
 
-    # LogDensityProblems wrappers (notably Turing's) compute the gradient via
-    # Enzyme reverse-mode internally. Differentiating that gradient *again*
-    # with Mooncake (the package's AD-HVP fallback) hits Enzyme's compiled
-    # `llvmcall` intrinsics, which Mooncake cannot trace. Compute the HVP
-    # analytically via second-order Enzyme on `logp` instead, lazily prepared
-    # at first call so we don't need an `x_template` here.
+    #=
+    LogDensityProblems wrappers (notably Turing's) compute the gradient via
+    Enzyme reverse-mode internally. Differentiating that gradient *again*
+    with Mooncake (the package's AD-HVP fallback) hits Enzyme's compiled
+    `llvmcall` intrinsics, which Mooncake cannot trace. Compute the HVP
+    analytically via second-order Enzyme on `logp` instead, lazily prepared
+    at first call so we don't need an `x_template` here.
+    =#
     hvp_backend = DEER.DEFAULT_HVP_BACKEND
     hvp_prep_ref = Ref{Any}(nothing)
     function hvp(x, v)

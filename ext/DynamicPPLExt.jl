@@ -4,6 +4,7 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using Enzyme: Enzyme
+using ForwardDiff: ForwardDiff
 using LogDensityProblems: LogDensityProblems
 using ParallelMCMC.DEER: DEER
 
@@ -70,12 +71,19 @@ function ParallelMCMC.DensityModel(
         return g
     end
 
-    # The user's gradient calls Enzyme reverse-mode internally. Differentiating
-    # it again with Mooncake (the package's AD-HVP fallback) would hit Enzyme's
-    # `llvmcall` intrinsics, which Mooncake cannot trace. Provide an analytical
-    # HVP via second-order Enzyme on `logp` so the AD-HVP fallback never runs.
+    #=
+    HVP backend deliberately chosen as ForwardDiff, not the package default
+    forward-over-reverse Enzyme. Forward-over-reverse Enzyme on a DPPL
+    `logdensity` crashes during compile with "broken gc calling conv fix" on
+    MvNormal/Dirichlet (and likely other distributions whose logpdf boxes
+    struct returns through Julia's sret ABI). Forward-over-forward and
+    reverse-over-reverse Enzyme fail too; Mooncake can't trace the Enzyme
+    `llvmcall` already used by the gradient. ForwardDiff over `logp` is the
+    only configuration that produces a correct HVP for these models, and
+    `logp` is a small scalar function so FD is the right cost regime anyway.
+    =#
     if hvp === nothing
-        hvp_backend = DEER.DEFAULT_HVP_BACKEND
+        hvp_backend = ADTypes.AutoForwardDiff()
         hvp_prep_ref = Ref{Any}(nothing)
         function _auto_hvp(x, v)
             if hvp_prep_ref[] === nothing

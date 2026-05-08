@@ -35,9 +35,11 @@ function make_problem(X::AbstractMatrix, y::AbstractVector; σ::Real=1.0, τ::Re
         return g
     end
 
-    # Analytic Gaussian posterior:
-    # Σ_post = (XᵀX/σ² + I/τ²)^{-1}
-    # μ_post = Σ_post * (Xᵀy/σ²)
+    #=
+    Analytic Gaussian posterior:
+    Σ_post = (XᵀX/σ² + I/τ²)^{-1}
+    μ_post = Σ_post * (Xᵀy/σ²)
+    =#
     A = (X' * X) ./ σ2
     A += Diagonal(fill(1.0 / τ2, p))
     Σ_post = inv(Symmetric(A))

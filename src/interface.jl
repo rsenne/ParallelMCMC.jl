@@ -364,11 +364,13 @@ function _build_mala_deer_rec(
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    # Use a model-provided HVP when available. Otherwise compute Hv as the
-    # gradient of `x -> dot(gradlogp(x), v)` with Mooncake reverse-mode. We
-    # use Mooncake on both CPU and GPU: on GPU it sidesteps Enzyme's cuBLAS /
-    # `cuPointerGetAttribute` gc-transition crashes, and on CPU sharing the
-    # same AD path makes CPU/GPU runs numerically comparable.
+    #=
+    Use a model-provided HVP when available. Otherwise compute Hv as the
+    gradient of `x -> dot(gradlogp(x), v)` with Mooncake reverse-mode. We
+    use Mooncake on both CPU and GPU: on GPU it sidesteps Enzyme's cuBLAS /
+    `cuPointerGetAttribute` gc-transition crashes, and on CPU sharing the
+    same AD path makes CPU/GPU runs numerically comparable.
+    =#
     hvp_fn = if model.hvp !== nothing
         model.hvp
     else

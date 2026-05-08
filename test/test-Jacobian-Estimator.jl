@@ -31,8 +31,10 @@ end
 Base.similar(x::TaggedVector, n::Int) = TaggedVector(Vector{eltype(x)}(undef, n))
 Base.copy(x::TaggedVector) = TaggedVector(copy(x.data))
 
-# Reference log q(y|x) for MALA:
-# y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+#=
+Reference log q(y|x) for MALA:
+y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+=#
 function logq_mala_ref_B(
     y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
 )

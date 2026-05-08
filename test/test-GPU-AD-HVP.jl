@@ -25,9 +25,11 @@ if !_ADHVP_GPU_AVAILABLE
     @info "GPU AD-HVP test: CUDA not functional — skipping"
 else
 
-# Multivariate Gaussian target with X'X/N perturbation:
-#   logp(β) = -0.5 (||β||^2 + ||Xβ||^2 / N)
-# True mean = 0; we'll check the posterior mean is near zero.
+#=
+Multivariate Gaussian target with X'X/N perturbation:
+  logp(β) = -0.5 (||β||^2 + ||Xβ||^2 / N)
+True mean = 0; we'll check the posterior mean is near zero.
+=#
 _logp_single(β, X) = begin
     Xβ = X * β
     N = oftype(zero(eltype(β)), size(X, 1))
@@ -85,8 +87,10 @@ end
     β_post = vec(mean(reduce(hcat, [Array(s.x) for s in raw[(n_burn + 1):end]]); dims=2))
 
     @test all(isfinite, β_post)
-    # Gaussian target → posterior mean is zero. Loose tolerance accounts for MC
-    # variance with N_eff ~ 100-200; an actual divergence would blow past this.
+    #=
+    Gaussian target → posterior mean is zero. Loose tolerance accounts for MC
+    variance with N_eff ~ 100-200; an actual divergence would blow past this.
+    =#
     @test maximum(abs, β_post) < 0.4
 end
 

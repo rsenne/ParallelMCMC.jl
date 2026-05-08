@@ -8,8 +8,10 @@ const MALA = ParallelMCMC.MALA
 
 using CUDA: CUDA
 
-# Check if a real GPU is accessible by attempting a small allocation.
-# CUDA.functional() only checks that the library loads, not that a device exists.
+#=
+Check if a real GPU is accessible by attempting a small allocation.
+CUDA.functional() only checks that the library loads, not that a device exists.
+=#
 const CUDA_AVAILABLE = try
     CUDA.CuArray([1.0f0])
     true
@@ -25,8 +27,10 @@ else
     logp_batch(X) = vec(-0.5f0 .* sum(abs2, X; dims=1))
     gradlogp_batch(X) = -X
 
-    # Scaled normal: dimension i has variance σᵢ² = i (so std = sqrt(i))
-    # logp = -0.5 sum_i x_i²/i,  grad_i = -x_i/i
+    #=
+    Scaled normal: dimension i has variance σᵢ² = i (so std = sqrt(i))
+    logp = -0.5 sum_i x_i²/i,  grad_i = -x_i/i
+    =#
     function logp_scaled(X)
         D = size(X, 1)
         scales = CUDA.CuArray(Float32.(1:D))         # D-vector on GPU
@@ -119,9 +123,11 @@ else
         D, N = 4, 64
         X = CUDA.randn(Float32, D, N)
         Ξ = CUDA.randn(Float32, D, N)
-        # u very close to 1 ⟹ log(u) ≈ 0, forces rejection whenever logα ≤ 0.
-        # Some chains may still be accepted (logα > 0 when proposal lands at higher density),
-        # but for every rejected chain X_next must exactly equal X.
+        #=
+        u very close to 1 ⟹ log(u) ≈ 0, forces rejection whenever logα ≤ 0.
+        Some chains may still be accepted (logα > 0 when proposal lands at higher density),
+        but for every rejected chain X_next must exactly equal X.
+        =#
         u = CUDA.fill(1.0f0 - 1.0f-6, N)
 
         X_next, accepted = MALA.mala_step_batched(
@@ -152,8 +158,10 @@ else
     end
 
     @testset "GPU acceptance rate in reasonable range" begin
-        # With ε=0.1 and standard normal, empirical acceptance rate should be
-        # well above 0 and below 1.
+        #=
+        With ε=0.1 and standard normal, empirical acceptance rate should be
+        well above 0 and below 1.
+        =#
         D, N, T = 5, 512, 200
 
         n_accepted = 0

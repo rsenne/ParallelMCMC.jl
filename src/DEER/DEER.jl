@@ -16,18 +16,22 @@ const DEFAULT_BACKEND = ADTypes.AutoEnzyme(;
 )
 const DEFAULT_HVP_BACKEND = DI.SecondOrder(
     DEFAULT_BACKEND,
-    # The log-density function itself is non-active in the reverse pass.
-    # Marking it duplicated makes DynamicPPL closure fields look active to Enzyme.
+    #=
+    The log-density function itself is non-active in the reverse pass.
+    Marking it duplicated makes DynamicPPL closure fields look active to Enzyme.
+    =#
     ADTypes.AutoEnzyme(;
         mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
         function_annotation=Enzyme.Const,
     ),
 )
-# AD-HVP (CPU and GPU) goes through Mooncake reverse-on-grad. Enzyme's
-# forward mode crashes on cuBLAS / cuPointerGetAttribute gc-transition bundles
-# for composed gradients on GPU; using Mooncake everywhere keeps the AD path
-# identical across devices, which makes CPU/GPU comparisons meaningful and
-# simplifies the code. See `_prepare_hvp_via_grad_reverse`.
+#=
+AD-HVP (CPU and GPU) goes through Mooncake reverse-on-grad. Enzyme's
+forward mode crashes on cuBLAS / cuPointerGetAttribute gc-transition bundles
+for composed gradients on GPU; using Mooncake everywhere keeps the AD path
+identical across devices, which makes CPU/GPU comparisons meaningful and
+simplifies the code. See `_prepare_hvp_via_grad_reverse`.
+=#
 const DEFAULT_AD_HVP_BACKEND = ADTypes.AutoMooncake(; config=nothing)
 
 export TapedRecursion,
@@ -203,17 +207,19 @@ function _batch_hvp_from_grad_prepared(
     return res isa Tuple ? first(res) : res
 end
 
-# ---------------------------------------------------------------------------
-# Reverse-on-grad HVP, used on GPU. Computes Hv as the gradient of
-# `x -> dot(gradlogp(x), v)` with `v` carried as a DI Constant context so a
-# single `prepare_gradient` covers all subsequent Newton steps. The batched
-# variant uses `B -> sum(gradlogp_batch(B) .* V)` and exploits the
-# column-independence of the user's batched gradient — its gradient w.r.t. B
-# is the columnwise HVP.
-#
-# We bundle the closure with the prep so `prepare_gradient` and `gradient`
-# see the same function instance (DI keys preparations on function identity).
-# ---------------------------------------------------------------------------
+#=
+---------------------------------------------------------------------------
+Reverse-on-grad HVP, used on GPU. Computes Hv as the gradient of
+`x -> dot(gradlogp(x), v)` with `v` carried as a DI Constant context so a
+single `prepare_gradient` covers all subsequent Newton steps. The batched
+variant uses `B -> sum(gradlogp_batch(B) .* V)` and exploits the
+column-independence of the user's batched gradient — its gradient w.r.t. B
+is the columnwise HVP.
+
+We bundle the closure with the prep so `prepare_gradient` and `gradient`
+see the same function instance (DI keys preparations on function identity).
+---------------------------------------------------------------------------
+=#
 struct _HvpReverseClosure{F}
     grad::F
 end
