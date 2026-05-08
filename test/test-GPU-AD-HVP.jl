@@ -90,12 +90,7 @@ end
     @test maximum(abs, β_post) < 0.4
 end
 
-@testset "GPU AD-HVP: matches CPU AD-HVP (same Mooncake path)" begin
-    # CPU and GPU now share the same AD-HVP path (Mooncake reverse-on-grad), so
-    # ergodic averages must agree to MC tolerance. The chains are not bit-equal
-    # because Float32 cuBLAS and OpenBLAS use different reduction orders, so
-    # tiny per-step gradient differences eventually flip an MH accept/reject —
-    # but the posterior mean both chains target is the same.
+@testset "GPU AD-HVP: matches CPU AD-HVP" begin
     D = 12
     N_data = 48
     rng = MersenneTwister(20251231)
