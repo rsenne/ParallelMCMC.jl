@@ -92,11 +92,9 @@ end
 function _prepare_hvp(f, backend::AbstractADType, x_template::AbstractVector)
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
-    eff_backend = _hvp_closure_backend(backend)
-    prep = DI.prepare_pushforward(
-        f, eff_backend, x_template, (v_template,); strict=Val(false)
+    return DI.prepare_pushforward(
+        f, _hvp_forward_backend(backend), x_template, (v_template,); strict=Val(false)
     )
-    return (prep, eff_backend)
 end
 
 function _materialize_ad_array(x::AbstractArray)
@@ -118,15 +116,16 @@ function _hvp_prepared(
 )
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
+    res = DI.pushforward(f, prep, _hvp_forward_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
 function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    prep = DI.prepare_pushforward(f, backend, x_exec, (v_exec,); strict=Val(false))
-    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
+    eff_backend = _hvp_forward_backend(backend)
+    prep = DI.prepare_pushforward(f, eff_backend, x_exec, (v_exec,); strict=Val(false))
+    res = DI.pushforward(f, prep, eff_backend, x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -166,7 +165,8 @@ function _prepare_batch_hvp_from_grad(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     return DI.prepare_pushforward(
-        grad_batch, backend, X_template, (V_template,); strict=Val(false)
+        grad_batch, _hvp_forward_backend(backend), X_template, (V_template,);
+        strict=Val(false),
     )
 end
 
@@ -175,7 +175,9 @@ function _batch_hvp_from_grad_prepared(
 )
     X_exec = _materialize_ad_matrix(X)
     V_exec = _tangent_like(X_exec, V)
-    res = DI.pushforward(grad_batch, prep, backend, X_exec, (V_exec,))
+    res = DI.pushforward(
+        grad_batch, prep, _hvp_forward_backend(backend), X_exec, (V_exec,)
+    )
     return res isa Tuple ? first(res) : res
 end
 
@@ -239,13 +241,24 @@ if isdefined(ADTypes, :AutoTracker)
 end
 
 #=
-Hook for backend-specific normalization of the user's `backend` when used
-on the read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.
-Default is identity; the EnzymeExt specializes it to fill in
-`function_annotation=Enzyme.Const` when the user passed plain
-`AutoEnzyme()` — without that, Enzyme throws `EnzymeMutabilityException`
-because it can't prove our closure (which captures `gradlogp`) is readonly.
+Hooks for backend-specific normalization of the user's `backend`.
+
+`_hvp_forward_backend` is for the forward-on-grad pushforward path
+(differentiates the user's `gradlogp` directly). EnzymeExt specializes it
+to pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const` when
+the user passed plain `AutoEnzyme()` — without pinning Forward, DI lowers
+through reverse mode and Enzyme aborts on the cuBLAS / cuPointerGetAttribute
+gc-transition bundle on GPU.
+
+`_hvp_closure_backend` is for the reverse-on-grad gradient path on the
+read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.
+EnzymeExt specializes it to set `function_annotation=Enzyme.Const` so
+Enzyme doesn't throw `EnzymeMutabilityException` on a closure that captures
+`gradlogp`.
+
+Default for both is identity.
 =#
+_hvp_forward_backend(backend::AbstractADType) = backend
 _hvp_closure_backend(backend::AbstractADType) = backend
 
 function _prepare_hvp_via_grad_reverse(
@@ -260,7 +273,7 @@ function _prepare_hvp_via_grad_reverse(
 end
 
 function _hvp_via_grad_reverse_prepared(
-    prep_pair, backend::AbstractADType, x::AbstractVector, v::AbstractVector
+    prep_pair, x::AbstractVector, v::AbstractVector
 )
     f, prep, eff_backend = prep_pair
     return DI.gradient(f, prep, eff_backend, x, DI.Constant(v))
@@ -278,7 +291,7 @@ function _prepare_batch_hvp_via_grad_reverse(
 end
 
 function _batch_hvp_via_grad_reverse_prepared(
-    prep_pair, backend::AbstractADType, X::AbstractMatrix, V::AbstractMatrix
+    prep_pair, X::AbstractMatrix, V::AbstractMatrix
 )
     f, prep, eff_backend = prep_pair
     return DI.gradient(f, prep, eff_backend, X, DI.Constant(V))

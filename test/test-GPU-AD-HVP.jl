@@ -35,6 +35,13 @@ else
     Calls go through `pmcmc_matmul` so Enzyme dispatches to the rule in
     `ext/EnzymeExt.jl` and avoids cuBLAS gc-transition bundles, which
     Enzyme's default `*` rule trips on.
+
+    Gradients are written as a sequence of single-op broadcasts rather
+    than one fused expression like `-β .- pmcmc_matmul(...) ./ N`. Julia
+    fuses the second form into one CUDA broadcast kernel whose gc-transition
+    bundle (cuPointerGetAttribute on each input) Enzyme cannot lower —
+    splitting it into stages gives Enzyme one operation at a time and
+    keeps each kernel small enough to differentiate.
     =#
     function _logp_single(β, X)
         Xβ = pmcmc_matmul(X, β)
@@ -42,10 +49,13 @@ else
         -oftype(zero(eltype(β)), 0.5) * (sum(abs2, β) + sum(abs2, Xβ) / N)
     end
 
-    _gradlogp_single(β, X) = begin
+    function _gradlogp_single(β, X)
         Xβ = pmcmc_matmul(X, β)
         N = oftype(zero(eltype(β)), size(X, 1))
-        -β .- pmcmc_matmul(transpose(X), Xβ) ./ N
+        Y = pmcmc_matmul(transpose(X), Xβ)
+        Y = Y ./ N
+        Y = Y .+ β
+        return -Y
     end
 
     function _logp_batch(B, X)
@@ -55,10 +65,13 @@ else
         (vec(sum(abs2, B; dims=1)) .+ vec(sum(abs2, XB; dims=1)) ./ N)
     end
 
-    _gradlogp_batch(B, X) = begin
+    function _gradlogp_batch(B, X)
         XB = pmcmc_matmul(X, B)
         N = oftype(zero(eltype(B)), size(X, 1))
-        -B .- pmcmc_matmul(transpose(X), XB) ./ N
+        Y = pmcmc_matmul(transpose(X), XB)
+        Y = Y ./ N
+        Y = Y .+ B
+        return -Y
     end
 
     @testset "GPU AD-HVP: ParallelMALASampler runs without analytical HVP" begin

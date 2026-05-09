@@ -387,7 +387,7 @@ function _build_mala_deer_rec(
         (pt, dir) -> DEER._hvp_prepared(gradlogp, prep_hvp, backend, pt, dir)
     else
         prep_hvp = DEER._prepare_hvp_via_grad_reverse(gradlogp, backend, x0_like)
-        (pt, dir) -> DEER._hvp_via_grad_reverse_prepared(prep_hvp, backend, pt, dir)
+        (pt, dir) -> DEER._hvp_via_grad_reverse_prepared(prep_hvp, pt, dir)
     end
 
     # Exact forward step.
@@ -452,7 +452,7 @@ function _build_mala_deer_rec(
                     model.grad_logdensity_batch, backend, X_template
                 )
                 (X, V) -> DEER._batch_hvp_via_grad_reverse_prepared(
-                    prep_hvp_batch, backend, X, V
+                    prep_hvp_batch, X, V
                 )
             end
 
