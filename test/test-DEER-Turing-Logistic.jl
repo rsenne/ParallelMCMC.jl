@@ -9,6 +9,8 @@ using ParallelMCMC
 using DynamicPPL
 using LogDensityProblems
 using ADTypes
+using Enzyme
+using ForwardDiff
 using Distributions: MvNormal, Bernoulli
 
 #=
@@ -66,8 +68,7 @@ end
 
 function _deer_logistic_turing_density_model()
     return DensityModel(
-        _deer_logistic_regression(_LR_X, _LR_y);
-        hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y),
+        _deer_logistic_regression(_LR_X, _LR_y); hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y)
     )
 end
 
@@ -85,7 +86,14 @@ end
 @testset "ParallelMALASampler Turing logistic: chains output well-formed" begin
     model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
+        0.05;
+        T=16,
+        maxiter=80,
+        tol_abs=1e-4,
+        tol_rel=1e-3,
+        jacobian=:diag,
+        damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
 
     chain = sample(
@@ -108,7 +116,14 @@ end
 @testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
     model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
+        0.05;
+        T=16,
+        maxiter=80,
+        tol_abs=1e-4,
+        tol_rel=1e-3,
+        jacobian=:diag,
+        damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
 
     chain = sample(
@@ -256,8 +271,8 @@ else
             0.05f0;
             T=16,
             maxiter=200,
-            tol_abs=1f-4,
-            tol_rel=1f-3,
+            tol_abs=1.0f-4,
+            tol_rel=1.0f-3,
             damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )

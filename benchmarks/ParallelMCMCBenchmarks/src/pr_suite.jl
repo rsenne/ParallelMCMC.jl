@@ -9,6 +9,8 @@ using Statistics
 using TOML
 
 using ParallelMCMC
+using ADTypes
+using Enzyme
 
 const MALA = ParallelMCMC.MALA
 const DEER = ParallelMCMC.DEER
@@ -49,8 +51,9 @@ function _make_stdnormal_rec(rng::AbstractRNG, dim::Int, steps::Int, epsilon::Fl
     tape = [(noise=randn(rng, dim), u=rand(rng)) for _ in 1:steps]
 
     step_fwd =
-        (x, te) ->
-            MALA.mala_step_taped(_stdnormal_logp, _stdnormal_grad, x, epsilon, te.noise, te.u)
+        (x, te) -> MALA.mala_step_taped(
+            _stdnormal_logp, _stdnormal_grad, x, epsilon, te.noise, te.u
+        )
     jvp =
         (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
             _stdnormal_logp,
@@ -88,14 +91,7 @@ function _mala_step_case()
     epsilon = 0.04
 
     bench = @benchmarkable MALA.mala_step_with_logα!(
-        $x_next,
-        $workspace,
-        $_stdnormal_logp,
-        $_stdnormal_grad,
-        $x,
-        $epsilon,
-        $noise,
-        $u,
+        $x_next, $workspace, $_stdnormal_logp, $_stdnormal_grad, $x, $epsilon, $noise, $u
     ) evals = 1
 
     return BenchmarkCase(
@@ -144,7 +140,7 @@ function _deer_solve_case()
         jacobian=:diag,
         damping=0.5,
         rng=rng,
-        workspace=$workspace,
+        workspace=($workspace),
         copy_result=false,
     ) setup = (rng = MersenneTwister(42)) evals = 1
 
@@ -170,16 +166,12 @@ function _parallel_mala_sample_case()
         tol_rel=1e-5,
         jacobian=:diag,
         damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
     initial_params = zeros(dim)
 
     bench = @benchmarkable sample(
-        rng,
-        $model,
-        $sampler,
-        64;
-        initial_params=$initial_params,
-        progress=false,
+        rng, $model, $sampler, 64; initial_params=($initial_params), progress=false
     ) setup = (rng = MersenneTwister(42)) evals = 1
 
     return BenchmarkCase(
@@ -201,16 +193,12 @@ function _parallel_mala_sample_no_hvp_case()
         tol_rel=1e-5,
         jacobian=:diag,
         damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
     initial_params = zeros(dim)
 
     bench = @benchmarkable sample(
-        rng,
-        $model,
-        $sampler,
-        64;
-        initial_params=$initial_params,
-        progress=false,
+        rng, $model, $sampler, 64; initial_params=($initial_params), progress=false
     ) setup = (rng = MersenneTwister(42)) evals = 1
 
     return BenchmarkCase(

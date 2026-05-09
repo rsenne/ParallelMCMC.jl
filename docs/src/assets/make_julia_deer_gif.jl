@@ -27,12 +27,7 @@ const CENTERS = [
 ]
 const SIGMAS = [0.38, 0.38, 0.38, 0.25]
 const LOG_WEIGHTS = log.([1.0, 1.0, 1.0, 0.50])
-const LOGO_COLORS = [
-    (56, 152, 38),
-    (203, 60, 51),
-    (149, 88, 178),
-    (64, 99, 216),
-]
+const LOGO_COLORS = [(56, 152, 38), (203, 60, 51), (149, 88, 178), (64, 99, 216)]
 
 struct TapeStep
     xi::Vector{Float64}
@@ -120,9 +115,7 @@ function make_recursion(tape, epsilon)
     return (; step_fwd, jvp, tape)
 end
 
-function deer_diag_update!(
-    output, A, B, scan_ws, rec, s0, current; damping=0.55
-)
+function deer_diag_update!(output, A, B, scan_ws, rec, s0, current; damping=0.55)
     dim, steps = size(current)
     basis = zeros(dim)
 
@@ -346,21 +339,24 @@ function main()
     epsilon = 0.095
     damping = 0.55
     x0 = [
-    rand(rng) * (X_RANGE[2] - X_RANGE[1]) + X_RANGE[1],
-    rand(rng) * (Y_RANGE[2] - Y_RANGE[1]) + Y_RANGE[1],
+        rand(rng) * (X_RANGE[2] - X_RANGE[1]) + X_RANGE[1],
+        rand(rng) * (Y_RANGE[2] - Y_RANGE[1]) + Y_RANGE[1],
     ]
 
-    
     tape = make_tape(rng, 2, steps)
     rec = make_recursion(tape, epsilon)
-    iterates, metrics = record_iterates(rec, x0; steps=steps, maxiter=maxiter, damping=damping)
+    iterates, metrics = record_iterates(
+        rec, x0; steps=steps, maxiter=maxiter, damping=damping
+    )
 
     selected = unique(round.(Int, range(0, maxiter; length=256)))
     selected_iterates = [iterates[i + 1] for i in selected]
 
     noise = [step.xi for step in tape]
     uniforms = [step.u for step in tape]
-    sequential = MALA.run_mala_sequential_taped(logposterior, gradposterior, x0, epsilon, noise, uniforms)
+    sequential = MALA.run_mala_sequential_taped(
+        logposterior, gradposterior, x0, epsilon, noise, uniforms
+    )
     final_trajectory = reduce(hcat, sequential[2:end])
 
     output = isempty(ARGS) ? joinpath(@__DIR__, "julia_deer_posterior.gif") : ARGS[1]

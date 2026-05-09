@@ -9,6 +9,8 @@ using ParallelMCMC
 using DynamicPPL
 using LogDensityProblems
 using ADTypes
+using Enzyme
+using ForwardDiff
 using Distributions: Beta, Dirichlet, Normal, MvNormal
 
 #=
@@ -106,6 +108,7 @@ end
             tol_rel=1e-4,
             jacobian=jacobian,
             damping=0.5,
+            backend=ADTypes.AutoEnzyme(),
         )
 
         trans, state = ParallelMCMC.AbstractMCMC.step(
@@ -129,7 +132,9 @@ end
     @test all(isfinite, model.grad_logdensity(zeros(2)))
     @test all(isfinite, model.hvp(zeros(2), [1.0, 0.0]))
 
-    sampler = ParallelMALASampler(0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3)
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
     chain = sample(
         MersenneTwister(3),
         model,
@@ -158,7 +163,9 @@ end
     @test all(isfinite, model.grad_logdensity(zeros(2)))
     @test all(isfinite, model.hvp(zeros(2), [1.0, 0.0]))
 
-    sampler = ParallelMALASampler(0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3)
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
     chain = sample(
         MersenneTwister(4),
         model,

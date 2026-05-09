@@ -1,6 +1,8 @@
 module LogDensityProblemsExt
 
 using ParallelMCMC
+using ADTypes: ADTypes
+using ForwardDiff: ForwardDiff
 using LogDensityProblems: LogDensityProblems
 using ParallelMCMC.DEER: DEER
 
@@ -63,14 +65,15 @@ function ParallelMCMC.DensityModel(ld; param_names=nothing)
     end
 
     #=
-    LogDensityProblems wrappers (notably Turing's) compute the gradient via
-    Enzyme reverse-mode internally. Differentiating that gradient *again*
-    with Mooncake (the package's AD-HVP fallback) hits Enzyme's compiled
-    `llvmcall` intrinsics, which Mooncake cannot trace. Compute the HVP
-    analytically via second-order Enzyme on `logp` instead, lazily prepared
-    at first call so we don't need an `x_template` here.
+    HVP via ForwardDiff on `logp`. The wrapped LogDensityProblems object's
+    own gradient is computed by whatever AD it was configured with (typically
+    Enzyme reverse for Turing); composing a second AD pass on top of that is
+    fragile (forward-over-reverse Enzyme crashes on MvNormal/Dirichlet, and
+    Mooncake can't trace Enzyme's `llvmcall`). FD over `logp` itself is
+    independent of the inner gradient AD and works for the small unconstrained
+    parameter vectors we sample over.
     =#
-    hvp_backend = DEER.DEFAULT_HVP_BACKEND
+    hvp_backend = ADTypes.AutoForwardDiff()
     hvp_prep_ref = Ref{Any}(nothing)
     function hvp(x, v)
         if hvp_prep_ref[] === nothing
@@ -79,9 +82,7 @@ function ParallelMCMC.DensityModel(ld; param_names=nothing)
         return DEER._logdensity_hvp_prepared(logp, hvp_prep_ref[], hvp_backend, x, v)
     end
 
-    return ParallelMCMC.DensityModel(
-        logp, gradlogp, dim; param_names=param_names, hvp=hvp
-    )
+    return ParallelMCMC.DensityModel(logp, gradlogp, dim; param_names=param_names, hvp=hvp)
 end
 
 end # module

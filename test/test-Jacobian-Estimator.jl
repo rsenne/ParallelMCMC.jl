@@ -2,10 +2,13 @@ using Test
 using Random
 using LinearAlgebra
 using StatsBase
+using ADTypes
+using Enzyme
 
 using ParallelMCMC
 const DEER = ParallelMCMC.DEER
 const MALA = ParallelMCMC.MALA
+const _AD = ADTypes.AutoEnzyme()
 
 logp_stdnormal_B(x) = -0.5 * dot(x, x)
 gradlogp_stdnormal_B(x) = -x
@@ -144,18 +147,10 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         s0 = randn(rng, D)
         ws = DEER.DEERWorkspace(S, s0)
 
-        @test_throws ArgumentError DEER.deer_update!(
-            ws, S_out, rec, s0, S; jacobian=:full
-        )
-        @test_throws ArgumentError DEER.deer_update!(
-            ws, S_out, rec, s0, S; damping=0.0
-        )
-        @test_throws ArgumentError DEER.deer_update!(
-            ws, S_out, rec, s0, S; probes=0
-        )
-        @test_throws ArgumentError DEER.deer_update!(
-            ws, randn(rng, D, T + 1), rec, s0, S
-        )
+        @test_throws ArgumentError DEER.deer_update!(ws, S_out, rec, s0, S; jacobian=:full)
+        @test_throws ArgumentError DEER.deer_update!(ws, S_out, rec, s0, S; damping=0.0)
+        @test_throws ArgumentError DEER.deer_update!(ws, S_out, rec, s0, S; probes=0)
+        @test_throws ArgumentError DEER.deer_update!(ws, randn(rng, D, T + 1), rec, s0, S)
 
         @test_throws ArgumentError DEER.solve(rec, s0; maxiter=0)
         @test_throws ArgumentError DEER.solve(rec, s0; tol_abs=-1.0)
@@ -203,9 +198,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
             (x, tt) -> MALA.mala_step_taped(
                 logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u
             )
-        hvp_fn =
-            (pt, dir) ->
-                DEER._hvp_nopre(gradlogp_stdnormal_B, DEER.DEFAULT_BACKEND, pt, dir)
+        hvp_fn = (pt, dir) -> DEER._hvp_nopre(gradlogp_stdnormal_B, _AD, pt, dir)
         jvp =
             (x, tt, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
                 logp_stdnormal_B, gradlogp_stdnormal_B, x, ϵ, tt.ξ, tt.u, v, hvp_fn
