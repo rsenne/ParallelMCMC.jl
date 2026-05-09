@@ -47,7 +47,7 @@ All samplers implement the [AbstractMCMC](https://github.com/TuringLang/Abstract
 To install the package into your current environment:
 
 ```julia-repl
-pkg> add https://github.com/rsenne/ParallelMCMC.jl
+pkg> add ParallelMCMC
 ```
 
 ## Quick start
