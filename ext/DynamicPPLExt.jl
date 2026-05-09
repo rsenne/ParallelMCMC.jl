@@ -50,59 +50,86 @@ function ParallelMCMC.DensityModel(
     return ParallelMCMC.DensityModel(ld; hvp=hvp)
 end
 
+######################
+# Chain construction #
+######################
+# In this section, we define overloads for DynamicPPL-based models so that resulting chains
+# are converted back into the original parameter space and contain the correct parameter
+# names. This is done by converting the raw samples (vectors of parameters) back into
+# `DynamicPPL.ParamsWithStats` objects.
+
+const ParallelMCMCTransitionTypes = Union{
+    ParallelMCMC.MALATransition,
+    ParallelMCMC.AdaptiveMALATransition,
+    ParallelMCMC.ParallelMALATransition,
+}
 # Types that represent LogDensityProblems objects that wrap DynamicPPL models.
 const LDFPrimal = ParallelMCMC.LogDensityProblemPrimal{<:DynamicPPL.LogDensityFunction}
 const LDFGradient = ParallelMCMC.LogDensityProblemGradient{<:DynamicPPL.LogDensityFunction}
 const DensityModelLDF = ParallelMCMC.DensityModel{<:LDFPrimal,<:LDFGradient}
 
-"""
-    postprocess_sample(model::DensityModel, sample)
-
-Converts a raw transition (e.g. `MALATransition`) into a `DynamicPPL.ParamsWithStats` object
-by reevaluating the DynamicPPL model with the vectorised parameters. This requires that the
-`DensityModel` object was constructed with a `LogDensityProblemPrimal` and
-`LogDensityProblemGradient` that wrap a DynamicPPL model.
-"""
-function ParallelMCMC.postprocess_sample(
-    model::DensityModelLDF, sample::ParallelMCMC.MALATransition
-)
-    stats = (accepted=sample.accepted,)
-    return DynamicPPL.ParamsWithStats(sample.x, model.logdensity.ld, stats)
-end
-function ParallelMCMC.postprocess_sample(
-    model::DensityModelLDF, sample::ParallelMCMC.ParallelMALATransition
-)
-    return DynamicPPL.ParamsWithStats(sample.x, model.logdensity.ld)
-end
-function ParallelMCMC.postprocess_sample(
-    model::DensityModelLDF, sample::ParallelMCMC.AdaptiveMALATransition
-)
-    stats = (
-        accepted=sample.accepted, step_size=sample.step_size, is_warmup=sample.is_warmup
-    )
-    return DynamicPPL.ParamsWithStats(sample.x, model.logdensity.ld, stats)
-end
-
 function AbstractMCMC.bundle_samples(
-    ts::Vector{<:DynamicPPL.ParamsWithStats},
-    model::DensityModel,
-    spl::AbstractMCMC.AbstractSampler,
-    state,
+    ts::Vector{<:ParallelMCMC.MALATransition},
+    model::DensityModelLDF,
+    spl::ParallelMCMC.MALASampler,
+    state::ParallelMCMC.MALAState,
     chain_type::Type{MCMCChains.Chains};
-    discard_warmup=false,
     kwargs...,
 )
-    if discard_warmup
-        ts = filter(t -> !hasproperty(t.stats, :is_warmup) || !t.stats.is_warmup, ts)
+    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
+end
+function AbstractMCMC.bundle_samples(
+    ts::Vector{<:ParallelMCMC.ParallelMALATransition},
+    model::DensityModelLDF,
+    spl::ParallelMCMC.ParallelMALASampler,
+    state::ParallelMCMC.ParallelMALAState,
+    chain_type::Type{MCMCChains.Chains};
+    kwargs...,
+)
+    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
+end
+function AbstractMCMC.bundle_samples(
+    ts::Vector{<:ParallelMCMC.AdaptiveMALATransition},
+    model::DensityModelLDF,
+    spl::ParallelMCMC.AdaptiveMALASampler,
+    state::ParallelMCMC.AdaptiveMALAState,
+    chain_type::Type{MCMCChains.Chains};
+    discard_warmup::Bool=false,
+    kwargs...,
+)
+    ts = discard_warmup ? filter(t -> !t.is_warmup, ts) : ts
+    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
+end
+
+"""
+    getstats(sample::ParallelMCMCTransitionTypes)
+
+Get a `NamedTuple` of stats from an MCMC transition.
+"""
+getstats(sample::ParallelMCMC.MALATransition) = (accepted=sample.accepted,)
+function getstats(sample::ParallelMCMC.AdaptiveMALATransition)
+    return (
+        accepted=sample.accepted, step_size=sample.step_size, is_warmup=sample.is_warmup
+    )
+end
+getstats(::ParallelMCMCTransitionTypes) = (;)
+
+function make_processed_dynamicppl_chain(
+    ::Type{Tchain}, ts::Vector{<:ParallelMCMCTransitionTypes}, model::DensityModelLDF
+) where {Tchain}
+    pwss = map(ts) do t
+        # Note: This assumes that there is always a field called t.x. This is currently true
+        # of all samplers in ParallelMCMC
+        DynamicPPL.ParamsWithStats(t.x, model.logdensity.ld, getstats(t))
     end
-    return AbstractMCMC.from_samples(MCMCChains.Chains, hcat(ts))
+    return AbstractMCMC.from_samples(Tchain, hcat(pwss))
 end
 
 function ParallelMCMC._construct_chain(
     ::Type{MCMCChains.Chains},
-    vals::AbstractMatrix{Float64},
-    internals::AbstractMatrix{Float64},
-    names::Vector{Symbol},
+    vals::AbstractMatrix{<:Real},
+    internals::AbstractMatrix{<:Real},
+    ::Vector{Symbol},
     internal_names::Vector{Symbol},
     model::DensityModelLDF,
 )

@@ -79,17 +79,6 @@ struct LogDensityProblemGradient{L}
 end
 
 """
-    postprocess_sample(model::DensityModel, transition)
-
-Optional step to postprocess raw transitions from the sampler. Overloading
-this allows us to, for example, transform samples from unconstrained space
-back to the original parameter space when wrapping a DynamicPPL model.
-
-By default, this function returns the transition unchanged.
-"""
-postprocess_sample(::DensityModel, transition) = transition
-
-"""
     MALASampler(epsilon; cholM=nothing)
 
 Metropolis-Adjusted Langevin Algorithm sampler with step size `epsilon`.
@@ -166,7 +155,7 @@ function AbstractMCMC.step(
     noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     t = MALATransition(x, logp_val, true)
     s = MALAState(x, logp_val, ws, noise, noise_host)
-    return postprocess_sample(model, t), s
+    return t, s
 end
 
 function AbstractMCMC.step(
@@ -199,7 +188,7 @@ function AbstractMCMC.step(
     logp_val = accepted ? model.logdensity(x_next) : state.logp
     t = MALATransition(x_next, logp_val, accepted)
     s = MALAState(x_next, logp_val, state.workspace, state.noise, state.noise_host)
-    return postprocess_sample(model, t), s
+    return t, s
 end
 
 function AbstractMCMC.bundle_samples(
@@ -629,8 +618,8 @@ end
 
 function _construct_chain(
     ::Type{MCMCChains.Chains},
-    vals::AbstractMatrix{Real},
-    internals::AbstractMatrix{Real},
+    vals::AbstractMatrix{<:Real},
+    internals::AbstractMatrix{<:Real},
     names::Vector{Symbol},
     internal_names::Vector{Symbol},
     model::DensityModel,
@@ -811,7 +800,7 @@ function AbstractMCMC.step(
     logp1 = logps[1]
     trans = ParallelMALATransition(x1, logp1)
     state = ParallelMALAState(x1, logp1, S, logps, ws, tape, 1)
-    return postprocess_sample(model, trans), state
+    return trans, state
 end
 
 function AbstractMCMC.step(
@@ -837,7 +826,7 @@ function AbstractMCMC.step(
             state.tape,
             t_next,
         )
-        return postprocess_sample(model, trans), new_state
+        return trans, new_state
     else
         x0 = state.trajectory[:, T]
         S_new, tape, ws = _deer_solve_new_tape(
@@ -848,7 +837,7 @@ function AbstractMCMC.step(
         logp_new = logps[1]
         trans = ParallelMALATransition(x_new, logp_new)
         new_state = ParallelMALAState(x_new, logp_new, S_new, logps, ws, tape, 1)
-        return postprocess_sample(model, trans), new_state
+        return trans, new_state
     end
 end
 
@@ -1004,7 +993,7 @@ function AbstractMCMC.step(
         noise,
         noise_host,
     )
-    return postprocess_sample(model, trans), state
+    return trans, state
 end
 
 function AbstractMCMC.step(
@@ -1062,7 +1051,7 @@ function AbstractMCMC.step(
         state.noise,
         state.noise_host,
     )
-    return postprocess_sample(model, trans), new_state
+    return trans, new_state
 end
 
 function AbstractMCMC.bundle_samples(
