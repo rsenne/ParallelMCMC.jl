@@ -67,6 +67,17 @@ function DensityModel(
     )
 end
 
+# Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
+# the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
+# However, structs defined in extensions are hard to get hold of so we define them here.
+# The callable behaviour itself is implemented in LogDensityProblemsExt.
+struct LogDensityProblemPrimal{L}
+    ld::L
+end
+struct LogDensityProblemGradient{L}
+    ld::L
+end
+
 """
     MALASampler(epsilon; cholM=nothing)
 
@@ -575,12 +586,13 @@ function _sample_parallel_mala_chain(
     rng::Random.AbstractRNG,
     model::DensityModel,
     sampler::ParallelMALASampler,
-    N::Int;
+    N::Int,
+    ::Type{Tchn};
     initial_params=nothing,
     param_names=nothing,
     progress=AbstractMCMC.PROGRESS[],
     progressname="Sampling",
-)
+) where {Tchn}
     D = model.dim
     names = _parallel_mala_param_names(model, D, param_names)
     internal_names = [:logp]
@@ -619,6 +631,17 @@ function _sample_parallel_mala_chain(
         end
     end
 
+    return _construct_chain(Tchn, vals, internals, names, internal_names, model)
+end
+
+function _construct_chain(
+    ::Type{MCMCChains.Chains},
+    vals::AbstractMatrix{<:Real},
+    internals::AbstractMatrix{<:Real},
+    names::Vector{Symbol},
+    internal_names::Vector{Symbol},
+    model::DensityModel,
+)
     return MCMCChains.Chains(
         hcat(vals, internals),
         vcat(names, internal_names),
@@ -750,7 +773,8 @@ function AbstractMCMC.mcmcsample(
             rng,
             model,
             sampler,
-            N_int;
+            N_int,
+            chain_type;
             initial_params=initial_params,
             param_names=param_names,
             progress=progress,

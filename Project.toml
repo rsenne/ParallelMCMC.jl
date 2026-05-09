@@ -1,7 +1,7 @@
 authors = ["Ryan Senne <rsenne@bu.edu>"]
 name = "ParallelMCMC"
 uuid = "1a970f40-4406-51c9-a967-cb3143c111e8"
-version = "0.1.0"
+version = "0.0.2"
 
 [compat]
 ADTypes = "1.21.0"
@@ -9,7 +9,7 @@ AbstractMCMC = "5.10.0"
 CUDA = "5.11.0"
 CUDA_Runtime_jll = "0.21"
 DifferentiationInterface = "0.7.13"
-DynamicPPL = "0.40"
+DynamicPPL = "0.40.6, 0.41"
 Enzyme = "0.13.142"
 ForwardDiff = "1"
 LinearAlgebra = "1"
@@ -33,7 +33,7 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 [extensions]
 DynamicPPLExt = ["DynamicPPL", "ForwardDiff", "LogDensityProblems"]
 EnzymeExt = "Enzyme"
-LogDensityProblemsExt = ["ForwardDiff", "LogDensityProblems"]
+LogDensityProblemsExt = "LogDensityProblems"
 
 [extras]
 CUDA_Runtime_jll = "76a88914-d11a-5bdc-97e0-2f5a05c973a2"

@@ -11,7 +11,7 @@ using LogDensityProblems
 using ADTypes
 using Enzyme
 using ForwardDiff
-using Distributions: Beta, Dirichlet, Normal, MvNormal
+using Distributions: Beta, Dirichlet, Normal, MvNormal, product_distribution
 
 #=
 A simple 1-D normal likelihood:  μ ~ N(0,1),  y | μ ~ N(μ, 0.5)
@@ -29,8 +29,9 @@ const TRUE_VAR_POST = 0.2
 end
 
 @model function mv_model(y)
-    μ ~ MvNormal(zeros(2), I)
-    y ~ MvNormal(μ, 0.5 * I)
+    c ~ Dirichlet(ones(3)) # to test constraints
+    μ ~ product_distribution((a=Normal(), b=Normal()))
+    y ~ MvNormal([μ.a, μ.b], 0.5 * I)
 end
 
 @model function beta_model()
@@ -45,7 +46,7 @@ end
     x ~ Dirichlet(ones(3))
 end
 
-@testset "LogDensityProblemsExt: param_names kwarg" begin
+@testset "directly passing LogDensityFunction" begin
     ld = DynamicPPL.LogDensityFunction(
         normal_model(TRUE_OBS),
         DynamicPPL.getlogjoint_internal,
@@ -53,10 +54,9 @@ end
         adtype=ADTypes.AutoEnzyme(),
     )
 
-    model = DensityModel(ld; param_names=[:μ])
+    model = DensityModel(ld)
 
     @test model.dim == 1
-    @test model.param_names == [:μ]
 
     chain = sample(
         MersenneTwister(1),
@@ -66,24 +66,31 @@ end
         chain_type=MCMCChains.Chains,
         progress=false,
     )
-    @test :μ in names(chain, :parameters)
-    @test !(Symbol("x[1]") in names(chain, :parameters))
+    @test only(names(chain, :parameters)) == :μ
 end
 
 @testset "DynamicPPLExt: convenience constructor" begin
     model = DensityModel(normal_model(TRUE_OBS))
 
     @test model.dim == 1
-    @test model.param_names == [:μ]
     @test isfinite(model.logdensity([0.0]))
     @test isfinite(model.grad_logdensity([0.0])[1])
+
+    chain = sample(
+        MersenneTwister(1),
+        model,
+        AdaptiveMALASampler(0.3; n_warmup=200),
+        600;
+        chain_type=MCMCChains.Chains,
+        progress=false,
+    )
+    @test only(names(chain, :parameters)) == :μ
 end
 
 @testset "DynamicPPLExt: convenience constructor uses linked space for constrained models" begin
     model = DensityModel(beta_model())
 
     @test model.dim == 1
-    @test model.param_names == [:x]
     @test isfinite(model.logdensity([-0.4]))
     @test isfinite(model.grad_logdensity([-0.4])[1])
 end
@@ -91,13 +98,7 @@ end
 @testset "DynamicPPLExt: generic Turing model works with ParallelMALA and default Enzyme HVP" begin
     model = DensityModel(normal_model(TRUE_OBS))
 
-    #=
-    The DynamicPPL extension auto-supplies an Enzyme second-order HVP so the
-    Mooncake AD-HVP fallback (which can't trace Enzyme's `llvmcall`
-    intrinsics inside the Turing-provided gradient) is not invoked.
-    =#
-    @test model.hvp !== nothing
-    @test isfinite(model.hvp([0.0], [1.0])[1])
+    @test model.hvp === nothing
 
     for jacobian in (:diag, :stoch_diag)
         sampler = ParallelMALASampler(
@@ -117,7 +118,6 @@ end
 
         @test trans isa ParallelMALATransition
         @test state isa ParallelMALAState
-        @test length(trans.x) == 1
         @test isfinite(trans.logp)
         @test all(isfinite, state.trajectory)
     end
@@ -127,10 +127,8 @@ end
     model = DensityModel(mvnormal_2d_model())
 
     @test model.dim == 2
-    @test model.hvp !== nothing
     @test isfinite(model.logdensity(zeros(2)))
     @test all(isfinite, model.grad_logdensity(zeros(2)))
-    @test all(isfinite, model.hvp(zeros(2), [1.0, 0.0]))
 
     sampler = ParallelMALASampler(
         0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
@@ -158,10 +156,8 @@ end
     model = DensityModel(dirichlet_3_model())
 
     @test model.dim == 2
-    @test model.hvp !== nothing
     @test isfinite(model.logdensity(zeros(2)))
     @test all(isfinite, model.grad_logdensity(zeros(2)))
-    @test all(isfinite, model.hvp(zeros(2), [1.0, 0.0]))
 
     sampler = ParallelMALASampler(
         0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
@@ -251,8 +247,8 @@ end
     obs = [1.0, -1.0]
     model = DensityModel(mv_model(obs))
 
-    @test model.dim == 2
-    @test model.param_names == [Symbol("μ[1]"), Symbol("μ[2]")]
+    # 2 from linked Dirichlet + 2 from product_distribution
+    @test model.dim == 4
 
     chain = sample(
         MersenneTwister(7),
@@ -262,6 +258,13 @@ end
         chain_type=MCMCChains.Chains,
         progress=false,
     )
-    @test Symbol("μ[1]") in names(chain, :parameters)
-    @test Symbol("μ[2]") in names(chain, :parameters)
+
+    # Check that the chain contains parameters in original space.
+    # The Dirichlet parameter should have length 3.
+    @test Set(names(chain, :parameters)) ==
+        Set(Symbol.(["c[1]", "c[2]", "c[3]", "μ.a", "μ.b"]))
+    for i in 1:3
+        # Dirichlet samples should be non-negative
+        @test all(chain[Symbol("c[$i]")] .>= 0.0)
+    end
 end

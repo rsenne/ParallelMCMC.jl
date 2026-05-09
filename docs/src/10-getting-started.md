@@ -111,11 +111,11 @@ sampler = ParallelMALASampler(0.05f0; T=64)
 
 ## Turing.jl integration
 
-ParallelMCMC.jl integrates with Turing.jl models through the `LogDensityProblems` extension.
+ParallelMCMC.jl integrates with Turing.jl models through the `DynamicPPL` and `LogDensityProblems` extensions.
 
 ### One-step convenience constructor
 
-Load `DynamicPPL` (part of Turing.jl) and a single-argument `DensityModel` constructor becomes available.  It extracts parameter names automatically:
+Load `DynamicPPL` (part of Turing.jl) and a single-argument `DensityModel` constructor becomes available:
 
 ```julia
 using Turing, ParallelMCMC, MCMCChains
@@ -130,6 +130,12 @@ model = DensityModel(normal_model(1.5))   # param_names=[:μ] extracted automati
 chain = sample(model, ParallelMALASampler(0.1; T=64), 500;
                chain_type=MCMCChains.Chains)
 ```
+
+Much like Turing's own samplers, the resulting chain will always have parameters in the original (possibly constrained) space, even though the MCMC sampling itself is performed in unconstrained space.
+Furthermore, parameter names are automatically extracted from the Turing model (and will always be the same as those when using Turing's own samplers).
+
+Note that when sampling with a Turing model the returned chain will have `:logjoint`, `:logprior`, and `:loglikelihood` columns, since Turing models provide enough information to separate these contributions to the log-density.
+This is in contrast to sampling with a manually constructed `DensityModel`, which returns only a single `:logp` column.
 
 ### Manual `LogDensityProblems` path
 
@@ -151,6 +157,7 @@ model = DensityModel(ld; param_names=[:μ])
 ```
 
 This also accepts any other `LogDensityProblems`-compatible object.
+As above, the returned chain will always contain parameters in the original space: the use of `LinkAll()` above only stipulates that MCMC sampling itself is to be performed in unconstrained space, and has no result on the form of the returned chain.
 
 ---
 
