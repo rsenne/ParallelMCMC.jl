@@ -68,39 +68,6 @@ const LDFPrimal = ParallelMCMC.LogDensityProblemPrimal{<:DynamicPPL.LogDensityFu
 const LDFGradient = ParallelMCMC.LogDensityProblemGradient{<:DynamicPPL.LogDensityFunction}
 const DensityModelLDF = ParallelMCMC.DensityModel{<:LDFPrimal,<:LDFGradient}
 
-function AbstractMCMC.bundle_samples(
-    ts::Vector{<:ParallelMCMC.MALATransition},
-    model::DensityModelLDF,
-    spl::ParallelMCMC.MALASampler,
-    state::ParallelMCMC.MALAState,
-    chain_type::Type{MCMCChains.Chains};
-    kwargs...,
-)
-    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
-end
-function AbstractMCMC.bundle_samples(
-    ts::Vector{<:ParallelMCMC.ParallelMALATransition},
-    model::DensityModelLDF,
-    spl::ParallelMCMC.ParallelMALASampler,
-    state::ParallelMCMC.ParallelMALAState,
-    chain_type::Type{MCMCChains.Chains};
-    kwargs...,
-)
-    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
-end
-function AbstractMCMC.bundle_samples(
-    ts::Vector{<:ParallelMCMC.AdaptiveMALATransition},
-    model::DensityModelLDF,
-    spl::ParallelMCMC.AdaptiveMALASampler,
-    state::ParallelMCMC.AdaptiveMALAState,
-    chain_type::Type{MCMCChains.Chains};
-    discard_warmup::Bool=false,
-    kwargs...,
-)
-    ts = discard_warmup ? filter(t -> !t.is_warmup, ts) : ts
-    return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
-end
-
 """
     getstats(sample::ParallelMCMCTransitionTypes)
 
@@ -113,6 +80,43 @@ function getstats(sample::ParallelMCMC.AdaptiveMALATransition)
     )
 end
 getstats(::ParallelMCMCTransitionTypes) = (;)
+
+"""
+    is_warmup(sample::ParallelMCMCTransitionTypes)
+
+Check if a sample is from the warmup phase of MCMC sampling.
+"""
+is_warmup(::ParallelMCMCTransitionTypes) = false
+is_warmup(sample::ParallelMCMC.AdaptiveMALATransition) = sample.is_warmup
+
+for (Ttrans, Tspl, Tstate) in (
+    (ParallelMCMC.MALATransition, ParallelMCMC.MALASampler, ParallelMCMC.MALAState),
+    (
+        ParallelMCMC.ParallelMALATransition,
+        ParallelMCMC.ParallelMALASampler,
+        ParallelMCMC.ParallelMALAState,
+    ),
+    (
+        ParallelMCMC.AdaptiveMALATransition,
+        ParallelMCMC.AdaptiveMALASampler,
+        ParallelMCMC.AdaptiveMALAState,
+    ),
+)
+    @eval begin
+        function AbstractMCMC.bundle_samples(
+            ts::Vector{<:$Ttrans},
+            model::DensityModelLDF,
+            spl::$Tspl,
+            state::$Tstate,
+            chain_type::Type{MCMCChains.Chains};
+            discard_warmup::Bool=false,
+            kwargs...,
+        )
+            ts = discard_warmup ? filter(is_warmup, ts) : ts
+            return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
+        end
+    end
+end
 
 function make_processed_dynamicppl_chain(
     ::Type{Tchain}, ts::Vector{<:ParallelMCMCTransitionTypes}, model::DensityModelLDF
