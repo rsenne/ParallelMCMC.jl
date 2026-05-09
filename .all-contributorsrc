@@ -1,5 +1,27 @@
 {
-  "projectName": "ParallelMCMC",
+  "projectName": "ParallelMCMC.jl",
   "projectOwner": "rsenne",
-  "files": ["README.md", "docs/src/index.md"]
+  "files": [
+    "README.md",
+    "docs/src/index.md"
+  ],
+  "commitType": "docs",
+  "commitConvention": "angular",
+  "contributorsPerLine": 7,
+  "contributors": [
+    {
+      "login": "rsenne",
+      "name": "Ryan Senne",
+      "avatar_url": "https://avatars.githubusercontent.com/u/50930199?v=4",
+      "profile": "https://github.com/rsenne",
+      "contributions": [
+        "code",
+        "maintenance",
+        "test",
+        "ideas",
+        "review",
+        "doc"
+      ]
+    }
+  ]
 }
