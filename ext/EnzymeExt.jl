@@ -87,7 +87,12 @@ function EnzymeRules.forward(
 )
     primal = needs_primal(config) ? pmcmc_matmul(A.val, B.val) : nothing
     shadow = if A isa Const && B isa Const
-        nothing
+        #=
+        Both args Const → output tangent is structurally zero. We still need
+        to return an output-shaped array (Enzyme's shadow-type check rejects
+        `nothing` when the caller asked for `Duplicated`/`DuplicatedNoNeed`).
+        =#
+        zero(primal === nothing ? pmcmc_matmul(A.val, B.val) : primal)
     elseif A isa Const
         pmcmc_matmul(A.val, B.dval)
     elseif B isa Const

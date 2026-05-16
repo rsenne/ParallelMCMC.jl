@@ -129,36 +129,6 @@ function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVe
     return res isa Tuple ? first(res) : res
 end
 
-_hvp_backend(backend::AbstractADType) = backend
-
-_hvp_second_order_backend(backend::AbstractADType) = DI.SecondOrder(backend, backend)
-_hvp_second_order_backend(backend::DI.SecondOrder) = backend
-
-function _prepare_logdensity_hvp(f, backend::AbstractADType, x_template::AbstractVector)
-    v_template = similar(x_template)
-    fill!(v_template, zero(eltype(x_template)))
-    return DI.prepare_hvp(f, backend, x_template, (v_template,); strict=Val(false))
-end
-
-function _logdensity_hvp_prepared(
-    f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector
-)
-    x_exec = _materialize_ad_vector(x)
-    v_exec = _tangent_like(x_exec, v)
-    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
-    return res isa Tuple ? first(res) : res
-end
-
-function _logdensity_hvp_nopre(
-    f, backend::AbstractADType, x::AbstractVector, v::AbstractVector
-)
-    x_exec = _materialize_ad_vector(x)
-    v_exec = _tangent_like(x_exec, v)
-    prep = DI.prepare_hvp(f, backend, x_exec, (v_exec,); strict=Val(false))
-    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
-    return res isa Tuple ? first(res) : res
-end
-
 function _prepare_batch_hvp_from_grad(
     grad_batch, backend::AbstractADType, X_template::AbstractMatrix
 )
