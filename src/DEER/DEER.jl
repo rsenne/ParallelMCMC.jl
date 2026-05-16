@@ -215,29 +215,39 @@ end
 #=
 Pick the AD-HVP fallback strategy from the user's backend.
 
-  :forward_on_grad   — `pushforward(gradlogp, x, v)`. Routes through the
-                       `pmcmc_matmul` frule, works on GPU. Requires the
-                       backend to support forward mode.
-  :reverse_on_grad   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
-                       through both the matmul and dot/sum rrules. Works on
-                       CPU with reverse-only backends (Mooncake, Zygote);
-                       not GPU-safe because Enzyme reverse trips on CUDA.jl
-                       internals beyond what we wrap.
+  ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
+                      `pmcmc_matmul` frule, works on GPU. Requires the
+                      backend to support forward mode.
+  ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
+                      through both the matmul and dot/sum rrules. Works on
+                      CPU with reverse-only backends (Mooncake, Zygote);
+                      not GPU-safe because Enzyme reverse trips on CUDA.jl
+                      internals beyond what we wrap.
 
-Default is `:forward_on_grad` since most DI backends support forward mode.
-We dispatch reverse-only backends here. AutoEnzyme dispatches to forward
-because Enzyme.Forward is robust on CuArrays once the matmul is wrapped.
+These are singleton types rather than symbols so the choice dispatches
+statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
+concrete method (and one concrete return type) at compile time, without
+relying on constant propagation through `===`.
+
+Default is `ForwardOnGrad()` since most DI backends support forward mode.
+We override to `ReverseOnGrad()` for reverse-only backends. AutoEnzyme stays
+on forward because Enzyme.Forward is robust on CuArrays once the matmul is
+wrapped.
 =#
-_hvp_strategy(::AbstractADType) = :forward_on_grad
-_hvp_strategy(::ADTypes.AutoMooncake) = :reverse_on_grad
+abstract type HVPStrategy end
+struct ForwardOnGrad <: HVPStrategy end
+struct ReverseOnGrad <: HVPStrategy end
+
+_hvp_strategy(::AbstractADType) = ForwardOnGrad()
+_hvp_strategy(::ADTypes.AutoMooncake) = ReverseOnGrad()
 if isdefined(ADTypes, :AutoZygote)
-    _hvp_strategy(::ADTypes.AutoZygote) = :reverse_on_grad
+    _hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
 end
 if isdefined(ADTypes, :AutoReverseDiff)
-    _hvp_strategy(::ADTypes.AutoReverseDiff) = :reverse_on_grad
+    _hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
 end
 if isdefined(ADTypes, :AutoTracker)
-    _hvp_strategy(::ADTypes.AutoTracker) = :reverse_on_grad
+    _hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
 end
 
 #=
@@ -295,6 +305,40 @@ function _batch_hvp_via_grad_reverse_prepared(
 )
     f, prep, eff_backend = prep_pair
     return DI.gradient(f, prep, eff_backend, X, DI.Constant(V))
+end
+
+#=
+Strategy-dispatched factories. Each method returns a closure with one
+concrete type, so the call site `_make_hvp_fn(_hvp_strategy(backend), ...)`
+is type-stable: dispatch on the singleton `HVPStrategy` picks the method
+at compile time, and the returned closure type is statically known.
+=#
+function _make_hvp_fn(
+    ::ForwardOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    prep = _prepare_hvp(gradlogp, backend, x_template)
+    return (pt, dir) -> _hvp_prepared(gradlogp, prep, backend, pt, dir)
+end
+
+function _make_hvp_fn(
+    ::ReverseOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    prep = _prepare_hvp_via_grad_reverse(gradlogp, backend, x_template)
+    return (pt, dir) -> _hvp_via_grad_reverse_prepared(prep, pt, dir)
+end
+
+function _make_hvp_batch_fn(
+    ::ForwardOnGrad, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    prep = _prepare_batch_hvp_from_grad(grad_batch, backend, X_template)
+    return (X, V) -> _batch_hvp_from_grad_prepared(grad_batch, prep, backend, X, V)
+end
+
+function _make_hvp_batch_fn(
+    ::ReverseOnGrad, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    prep = _prepare_batch_hvp_via_grad_reverse(grad_batch, backend, X_template)
+    return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
 end
 
 @inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}

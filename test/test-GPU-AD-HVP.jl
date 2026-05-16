@@ -176,7 +176,7 @@ else
     #=
     Mooncake on GPU. The whole point of routing through DI is that swapping
     the backend should keep the same `ParallelMALASampler` API working.
-    `_hvp_strategy(::AutoMooncake) = :reverse_on_grad`, so this exercises the
+    `_hvp_strategy(::AutoMooncake) = ReverseOnGrad()`, so this exercises the
     reverse-on-grad path through Mooncake's CUDA extension (no custom rules
     of ours involved — Mooncake's defaults handle `*`, broadcast, `sum`,
     `dot` on `CuArray` directly).
