@@ -9,8 +9,10 @@ const MALA = ParallelMCMC.MALA
 logp_stdnormal_kernel(x) = -0.5 * dot(x, x)
 gradlogp_stdnormal_kernel(x) = -x
 
-# Reference implementation of log q(y|x) for MALA proposal:
-# y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+#=
+Reference implementation of log q(y|x) for MALA proposal:
+y ~ Normal( x + ϵ∇logp(x), 2ϵ I )
+=#
 function logq_mala_ref(
     y::AbstractVector, x::AbstractVector, gradlogp_x::AbstractVector, ϵ::Real
 )
@@ -30,8 +32,7 @@ function logq_mala_mass_ref(
     μ = x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_x))
     r = y .- μ
     d = length(x)
-    return -0.5 * dot(cholM \ r, r) / (2ϵ) -
-           (d / 2) * log(4π * ϵ) - 0.5 * logdet(cholM)
+    return -0.5 * dot(cholM \ r, r) / (2ϵ) - (d / 2) * log(4π * ϵ) - 0.5 * logdet(cholM)
 end
 
 # Build a tape (ξs, us) deterministically
@@ -207,8 +208,9 @@ end
         y = MALA.mala_proposal(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ; cholM=cholM
         )
-        y_ref = x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_stdnormal_kernel(x))) .+
-                sqrt(2ϵ) .* (cholM.L * ξ)
+        y_ref =
+            x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_stdnormal_kernel(x))) .+
+            sqrt(2ϵ) .* (cholM.L * ξ)
         @test y ≈ y_ref atol=1e-12 rtol=1e-12
 
         logq_impl = MALA.logq_mala(y, x, gradlogp_stdnormal_kernel(x), ϵ; cholM=cholM)
@@ -217,15 +219,9 @@ end
 
         X = randn(rng, D, N)
         Ξ = randn(rng, D, N)
-        u = range(0.1, 0.9; length=N) |> collect
+        u = collect(range(0.1, 0.9; length=N))
         X_next, accepted = MALA.mala_step_batched(
-            X -> vec(-0.5 .* sum(abs2, X; dims=1)),
-            X -> -X,
-            X,
-            ϵ,
-            Ξ,
-            u;
-            cholM=cholM,
+            X -> vec(-0.5 .* sum(abs2, X; dims=1)), X -> -X, X, ϵ, Ξ, u; cholM=cholM
         )
 
         @test length(accepted) == N
@@ -250,7 +246,11 @@ end
         logq_batch = MALA.logq_mala_batched(Y, X, G, ϵ; cholM=cholM)
         logq_cols = [
             MALA.logq_mala(
-                copy(view(Y, :, j)), copy(view(X, :, j)), copy(view(G, :, j)), ϵ; cholM=cholM
+                copy(view(Y, :, j)),
+                copy(view(X, :, j)),
+                copy(view(G, :, j)),
+                ϵ;
+                cholM=cholM,
             ) for j in 1:N
         ]
         @test logq_batch ≈ logq_cols atol=1e-12 rtol=1e-12
@@ -273,7 +273,9 @@ end
         )
 
         @test actual ≈ expected atol=1e-12 rtol=1e-12
-        @test all(xi -> min(xi[1], xi[2]) - 1e-12 ≤ xi[3] ≤ max(xi[1], xi[2]) + 1e-12,
-            zip(x, y, actual))
+        @test all(
+            xi -> min(xi[1], xi[2]) - 1e-12 ≤ xi[3] ≤ max(xi[1], xi[2]) + 1e-12,
+            zip(x, y, actual),
+        )
     end
 end

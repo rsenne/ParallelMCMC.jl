@@ -18,6 +18,8 @@ using Printf
 using Statistics
 
 using ParallelMCMC
+using ADTypes
+using Enzyme
 using ParallelMCMCBenchmarks
 using CUDA
 
@@ -79,7 +81,7 @@ function build_raw_deer_problem(
     damping::Float32,
     probes::Int,
     cholM=nothing,
-    backend=DEER.DEFAULT_BACKEND,
+    backend=ADTypes.AutoEnzyme(),
 )
     FP = typeof(epsilon)
     D = model.dim

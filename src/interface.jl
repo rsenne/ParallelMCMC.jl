@@ -273,7 +273,7 @@ function ParallelMALASampler(
     damping::Real=0.5,
     probes::Int=1,
     cholM=nothing,
-    backend=DEER.DEFAULT_BACKEND,
+    backend,
 )
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
     (jacobian === :stoch_diag || jacobian === :diag) ||
@@ -368,21 +368,32 @@ function _build_mala_deer_rec(
     tape::Vector{<:MALATapeElement},
     x0_like::AbstractVector;
     cholM=nothing,
-    backend=DEER.DEFAULT_BACKEND,
+    backend,
     tape_noise=nothing,
     tape_uniforms=nothing,
 )
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    # Use a model-provided HVP when available. Otherwise differentiate the
-    # scalar logdensity directly
+    #=
+    Use a model-provided HVP when available. Otherwise compute Hv via AD,
+    picking the path from the user's `backend` (see `DEER._hvp_strategy`):
+
+      ForwardOnGrad() — `pushforward(gradlogp, x, v)`. Used for forward-
+                        capable backends (AutoEnzyme, AutoForwardDiff).
+                        Routes through the `pmcmc_matmul` frule and is the
+                        only AD-HVP mode that's reliable on GPU.
+      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Used
+                        for reverse-only backends (AutoMooncake, AutoZygote
+                        et al.).
+
+    Either path can be bypassed by providing an analytical `hvp` /
+    `hvp_batch` on the `DensityModel` (the recommended GPU production path).
+    =#
     hvp_fn = if model.hvp !== nothing
         model.hvp
     else
-        hvp_backend = DEER._hvp_second_order_backend(backend)
-        prep_hvp = DEER._prepare_logdensity_hvp(logp, hvp_backend, x0_like)
-        (pt, dir) -> DEER._logdensity_hvp_prepared(logp, prep_hvp, hvp_backend, pt, dir)
+        DEER._make_hvp_fn(DEER._hvp_strategy(backend), gradlogp, backend, x0_like)
     end
 
     # Exact forward step.
@@ -436,16 +447,11 @@ function _build_mala_deer_rec(
             hvp_batch = if model.hvp_batch !== nothing
                 model.hvp_batch
             else
-                hvp_batch_backend = DEER._hvp_backend(backend)
-                prep_hvp_batch = DEER._prepare_batch_hvp_from_grad(
-                    model.grad_logdensity_batch, hvp_batch_backend, X_template
-                )
-                (X, V) -> DEER._batch_hvp_from_grad_prepared(
+                DEER._make_hvp_batch_fn(
+                    DEER._hvp_strategy(backend),
                     model.grad_logdensity_batch,
-                    prep_hvp_batch,
-                    hvp_batch_backend,
-                    X,
-                    V,
+                    backend,
+                    X_template,
                 )
             end
 

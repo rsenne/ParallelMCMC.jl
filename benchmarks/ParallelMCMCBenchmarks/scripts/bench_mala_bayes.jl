@@ -17,6 +17,8 @@ using Statistics
 
 using AbstractMCMC: sample
 using ParallelMCMC
+using ADTypes
+using Enzyme
 using ParallelMCMCBenchmarks
 const BayesLinReg = ParallelMCMCBenchmarks.BayesLinReg
 const MALARunner = ParallelMCMCBenchmarks.MALARunner
@@ -46,7 +48,13 @@ x_warm, ϵ_tuned = MALARunner.tune_stepsize_mala(
 mala_sampler = AdaptiveMALASampler(ϵ_tuned; n_warmup=500)
 
 deer_sampler = ParallelMALASampler(
-    ϵ_tuned; T=64, maxiter=200, tol_abs=1e-6, tol_rel=1e-5, damping=0.5
+    ϵ_tuned;
+    T=64,
+    maxiter=200,
+    tol_abs=1e-6,
+    tol_rel=1e-5,
+    damping=0.5,
+    backend=ADTypes.AutoEnzyme(),
 )
 
 # Benchmark helper

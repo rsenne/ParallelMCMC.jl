@@ -9,12 +9,16 @@ using ParallelMCMC
 using DynamicPPL
 using LogDensityProblems
 using ADTypes
-using Distributions: Beta, Normal, MvNormal, product_distribution, Dirichlet
+using Enzyme
+using ForwardDiff
+using Distributions: Beta, Dirichlet, Normal, MvNormal, product_distribution
 
-# A simple 1-D normal likelihood:  μ ~ N(0,1),  y | μ ~ N(μ, 0.5)
-# Posterior:  μ | y=1.5  is N(μ_post, σ_post²)
-# σ_post² = 1 / (1/1² + 1/0.5²) = 1 / (1 + 4) = 0.2
-# μ_post  = σ_post² * (y / 0.5²) = 0.2 * (1.5 / 0.25) = 0.2 * 6 = 1.2
+#=
+A simple 1-D normal likelihood:  μ ~ N(0,1),  y | μ ~ N(μ, 0.5)
+Posterior:  μ | y=1.5  is N(μ_post, σ_post²)
+σ_post² = 1 / (1/1² + 1/0.5²) = 1 / (1 + 4) = 0.2
+μ_post  = σ_post² * (y / 0.5²) = 0.2 * (1.5 / 0.25) = 0.2 * 6 = 1.2
+=#
 const TRUE_OBS = 1.5
 const TRUE_MU_POST = 1.2
 const TRUE_VAR_POST = 0.2
@@ -32,6 +36,14 @@ end
 
 @model function beta_model()
     x ~ Beta(2, 2)
+end
+
+@model function mvnormal_2d_model()
+    x ~ MvNormal(zeros(2), I)
+end
+
+@model function dirichlet_3_model()
+    x ~ Dirichlet(ones(3))
 end
 
 @testset "directly passing LogDensityFunction" begin
@@ -97,6 +109,7 @@ end
             tol_rel=1e-4,
             jacobian=jacobian,
             damping=0.5,
+            backend=ADTypes.AutoEnzyme(),
         )
 
         trans, state = ParallelMCMC.AbstractMCMC.step(
@@ -108,6 +121,58 @@ end
         @test isfinite(trans.logp)
         @test all(isfinite, state.trajectory)
     end
+end
+
+@testset "DynamicPPLExt: MvNormal(zeros(2), I) runs with ParallelMALA" begin
+    model = DensityModel(mvnormal_2d_model())
+
+    @test model.dim == 2
+    @test isfinite(model.logdensity(zeros(2)))
+    @test all(isfinite, model.grad_logdensity(zeros(2)))
+
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
+    chain = sample(
+        MersenneTwister(3),
+        model,
+        sampler,
+        800;
+        initial_params=zeros(2),
+        chain_type=MCMCChains.Chains,
+        progress=false,
+    )
+    samples = Array(chain)
+    @test all(isfinite, samples)
+    # Standard normal in 2-D: posterior mean should be near zero.
+    @test maximum(abs, vec(mean(samples; dims=1))) < 0.25
+end
+
+@testset "DynamicPPLExt: Dirichlet(ones(3)) runs with ParallelMALA (linked space)" begin
+    #=
+    Dirichlet(ones(3)) lives on a 2-simplex, so its unconstrained
+    representation has dim 2. Bijectors handles the link/unlink.
+    =#
+    model = DensityModel(dirichlet_3_model())
+
+    @test model.dim == 2
+    @test isfinite(model.logdensity(zeros(2)))
+    @test all(isfinite, model.grad_logdensity(zeros(2)))
+
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
+    chain = sample(
+        MersenneTwister(4),
+        model,
+        sampler,
+        800;
+        initial_params=zeros(2),
+        chain_type=MCMCChains.Chains,
+        progress=false,
+    )
+    @test chain isa MCMCChains.Chains
+    @test all(isfinite, Array(chain))
 end
 
 @testset "DynamicPPLExt: named columns in Chains output" begin

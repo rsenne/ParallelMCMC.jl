@@ -36,9 +36,11 @@ function make_problem(X::AbstractMatrix, y::AbstractVector)
 
     function logp(β::AbstractVector)
         mul!(logits, X, β)
-        # ll = sum(@. y * (-log1p(exp(-logits))) + (1 - y) * (-log1p(exp(logits))))
-        # We perform this in-place to avoid allocations
-        # Note: log1p(exp(x)) is the softplus function
+        #=
+        ll = sum(@. y * (-log1p(exp(-logits))) + (1 - y) * (-log1p(exp(logits))))
+        We perform this in-place to avoid allocations
+        Note: log1p(exp(x)) is the softplus function
+        =#
         @. p = y * (-log1p(exp(-logits))) + (1 - y) * (-log1p(exp(logits)))
         return sum(p) - 0.5 * sum(abs2, β)
     end
@@ -47,8 +49,10 @@ function make_problem(X::AbstractMatrix, y::AbstractVector)
         mul!(logits, X, β)
         @. p = 1 / (1 + exp(-logits))
         @. resid = y - p
-        # grad = X' * (y - p) - β
-        # We reuse the output allocation here by using mul!
+        #=
+        grad = X' * (y - p) - β
+        We reuse the output allocation here by using mul!
+        =#
         grad = (X' * resid) .- β
         return grad
     end

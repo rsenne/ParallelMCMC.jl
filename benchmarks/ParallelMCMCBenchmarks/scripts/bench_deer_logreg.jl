@@ -23,6 +23,8 @@ using Statistics
 
 using AbstractMCMC: sample
 using ParallelMCMC
+using ADTypes
+using Enzyme
 using ParallelMCMCBenchmarks
 
 const BayesLogReg = ParallelMCMCBenchmarks.BayesLogReg
@@ -135,6 +137,7 @@ if _cuda_ok
             tol_rel=tol_rel,
             damping=damping,
             probes=probes,
+            backend=ADTypes.AutoEnzyme(),
         )
 
         println("  T=$T")

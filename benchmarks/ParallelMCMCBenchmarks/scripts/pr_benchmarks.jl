@@ -35,7 +35,9 @@ function main(args=ARGS)
         return 0
     end
 
-    seconds = parse(Float64, _option(args, "--seconds", get(ENV, "PMCMC_BENCH_SECONDS", "0.5")))
+    seconds = parse(
+        Float64, _option(args, "--seconds", get(ENV, "PMCMC_BENCH_SECONDS", "0.5"))
+    )
     samples = parse(Int, _option(args, "--samples", get(ENV, "PMCMC_BENCH_SAMPLES", "8")))
     output = _option(args, "--output", "")
     markdown = _option(args, "--markdown", "")

@@ -1,11 +1,11 @@
-# using Aqua, JET
+using Test
+using Aqua, JET
+using ParallelMCMC
 
-# @testset "Code Quality" begin
-#     @testset "Aqua Tests" begin
-#         Aqua.test_all(ParallelMCMC)
-#     end
+@testset "Aqua" begin
+    Aqua.test_all(ParallelMCMC)
+end
 
-#     @testset "Code Linting (JET)" begin
-#         JET.test_package(ParallelMCMC; target_modules=(ParallelMCMC,))
-#     end
-# end
+@testset "JET" begin
+    JET.test_package(ParallelMCMC; target_modules=(ParallelMCMC,))
+end

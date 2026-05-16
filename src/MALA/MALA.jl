@@ -37,10 +37,10 @@ end
 _apply_L!(out, ξ, ::Nothing) = (out .= ξ)
 _apply_L!(out, ξ, cholM::Cholesky) = mul!(out, cholM.L, ξ)
 
-_quad_Minv!(tmp, r, ::Nothing) = dot(r, r)
+_quad_Minv!(tmp, r, ::Nothing) = sum(abs2, r)
 function _quad_Minv!(tmp, r, cholM::Cholesky)
     ldiv!(tmp, cholM.L, r)
-    return dot(tmp, tmp)
+    return sum(abs2, tmp)
 end
 
 _logdet_M(::Nothing) = false  # Bool promotes to any numeric type without widening
@@ -715,7 +715,9 @@ function mala_step_surrogate_sigmoid_jvp(
         Minv_r = ws.solve_buf
     end
 
-    dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
+    inv_2ε = inv(2 * ε)
+    @. ws.Hv_y = ws.g_y * ws.w - ws.g_x * v - inv_2ε * Minv_r * ws.dr
+    dlogα = sum(ws.Hv_y)
     dg = g * (one(g) - g) * dlogα
 
     @. ws.jvp_out = a * ws.w + (ws.y - x) * dg + (one(a) - a) * v
@@ -785,7 +787,9 @@ function mala_step_taped_and_jvp!(
         Minv_r = ws.solve_buf
     end
 
-    dlogα = dot(ws.g_y, ws.w) - dot(ws.g_x, v) - inv(2 * ε) * dot(Minv_r, ws.dr)
+    inv_2ε = inv(2 * ε)
+    @. ws.Hv_y = ws.g_y * ws.w - ws.g_x * v - inv_2ε * Minv_r * ws.dr
+    dlogα = sum(ws.Hv_y)
     dg = g * (one(g) - g) * dlogα
 
     @. jvp_out = a * ws.w + (ws.y - x) * dg + (one(a) - a) * v
