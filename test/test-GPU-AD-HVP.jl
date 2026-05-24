@@ -8,6 +8,7 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using Enzyme
 using Mooncake
+using Zygote
 using CUDA: CUDA
 
 #=
@@ -223,6 +224,56 @@ else
 
         @test all(isfinite, β_post)
         # Same Gaussian target as the AutoEnzyme test; same loose tolerance.
+        @test maximum(abs, β_post) < 0.4
+    end
+
+    #=
+    Zygote on GPU. Same shape as the Mooncake test: ReverseOnGrad strategy,
+    no custom rules of ours involved — Zygote recurses into `pmcmc_matmul`
+    and differentiates `A * B` via ChainRules' cuBLAS-backed adjoints.
+    =#
+    @testset "GPU AD-HVP: ParallelMALASampler runs without analytical HVP (Zygote)" begin
+        D = 20
+        N_data = 64
+        rng = MersenneTwister(20251231)
+        X_cpu = randn(rng, Float32, N_data, D)
+        X_gpu = CUDA.CuMatrix(X_cpu)
+
+        model = DensityModel(
+            β -> _logp_single(β, X_gpu),
+            β -> _gradlogp_single(β, X_gpu),
+            D;
+            logdensity_batch=B -> _logp_batch(B, X_gpu),
+            grad_logdensity_batch=B -> _gradlogp_batch(B, X_gpu),
+        )
+
+        sampler = ParallelMALASampler(
+            0.05f0;
+            T=16,
+            maxiter=200,
+            tol_abs=1.0f-3,
+            tol_rel=1.0f-2,
+            damping=0.5f0,
+            backend=ADTypes.AutoZygote(),
+        )
+
+        n_samples, n_burn = 1600, 400
+        x0 = CUDA.zeros(Float32, D)
+
+        raw = sample(
+            MersenneTwister(42),
+            model,
+            sampler,
+            n_samples;
+            initial_params=x0,
+            progress=false,
+        )
+        β_post = vec(
+            mean(reduce(hcat, [Array(s.x) for s in raw[(n_burn + 1):end]]); dims=2)
+        )
+
+        @test all(isfinite, β_post)
+        # Same Gaussian target as the AutoEnzyme/AutoMooncake tests; same tolerance.
         @test maximum(abs, β_post) < 0.4
     end
 end # _ADHVP_GPU_AVAILABLE

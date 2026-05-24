@@ -68,44 +68,9 @@ Setting `damping < 1` blends the Newton update with the previous iterate, which 
 
 ### GPU execution
 
-The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic.  To run DEER on GPU:
+The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic, so the same `ParallelMALASampler` runs on either CPU or GPU — implement `logdensity`/`grad_logdensity` over `CuArray`s, pass `backend = ADTypes.AutoEnzyme()` (or `AutoMooncake`), and a `CuVector` as `initial_params`.
 
-1. Implement `logdensity` and `grad_logdensity` using GPU-compatible operations.
-2. Pass `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
-3. Pass a `CuVector` as `initial_params` to `sample`.
-
-```julia
-using CUDA, ADTypes
-
-sampler = ParallelMALASampler(0.1f0; T=64, backend=ADTypes.AutoEnzyme())
-
-chain = sample(model, sampler, 500;
-               initial_params=CUDA.randn(Float32, 2),
-               chain_type=MCMCChains.Chains)
-```
-
-#### AD-HVP fallback
-
-DEER needs a Hessian-vector product (HVP) at every Newton step.  If you
-supply `hvp`/`hvp_batch` analytically, those run as plain kernels and
-nothing else is required.  If you only supply `grad_logdensity` /
-`grad_logdensity_batch`, the sampler computes the HVP via **Mooncake**
-reverse-mode applied to `x -> dot(grad_logdensity(x), v)`.
-
-```julia
-using ParallelMCMC, CUDA
-
-const X = CUDA.CuMatrix(randn(Float32, N, D))
-
-# Plain Julia / CUDA operations.
-grad_logp(β)       = -β .- (transpose(X) * (X * β))     ./ Float32(N)
-grad_logp_batch(B) = -B .- (transpose(X) * (X * B))     ./ Float32(N)
-
-model   = DensityModel(logp, grad_logp, D;
-                       logdensity_batch=logp_batch,
-                       grad_logdensity_batch=grad_logp_batch)
-sampler = ParallelMALASampler(0.05f0; T=64)
-```
+GPU execution has its own caveats (Turing models are CPU-only, `AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients must be written as single-op broadcasts).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
 
 ---
 
