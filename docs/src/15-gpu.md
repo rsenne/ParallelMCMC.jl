@@ -78,54 +78,141 @@ Mooncake does not have this restriction.
 
 ---
 
-## Worked example: GPU multivariate Gaussian
+## Worked example: Bayesian logistic regression on GPU
 
-Target: $\log p(\beta) = -\tfrac{1}{2}(\|\beta\|^2 + \|X\beta\|^2 / N)$, with $X \in \mathbb{R}^{N \times D}$ on GPU.
+A standard Bayesian logistic regression with a Gaussian prior; an example model where GPU acceleration actually pays off as `N` and `D` grow.  Posterior:
 
-### Enzyme backend (requires `pmcmc_matmul`)
+```math
+\log p(\beta \mid y, X) = -\tfrac{1}{2}\|\beta\|^2 + \sum_{i=1}^{N} \bigl[ y_i \, x_i^\top \beta - \log(1 + e^{x_i^\top \beta}) \bigr],
+```
+
+with gradient $\nabla_\beta \log p = -\beta + X^\top (y - \sigma(X\beta))$, where $\sigma$ is the logistic sigmoid.
+
+We use a numerically stable softplus on GPU:
+
+```math
+\log(1 + e^{z}) = \max(z, 0) + \log(1 + e^{-|z|}),
+```
+
+so neither the positive nor negative tail overflows in `Float32`.
+
+### Synthetic data
+
+```julia
+using Random, CUDA
+
+D = 50; N = 1000
+rng    = MersenneTwister(0)
+β_true = randn(rng, Float32, D)
+X_cpu  = randn(rng, Float32, N, D)
+probs  = 1f0 ./ (1f0 .+ exp.(-(X_cpu * β_true)))
+y_cpu  = Float32.(rand(rng, N) .< probs)
+
+X_gpu = CUDA.CuMatrix(X_cpu)
+y_gpu = CUDA.CuVector(y_cpu)
+```
+
+### Mooncake backend (plain operators)
+
+```julia
+using ParallelMCMC, MCMCChains
+using ADTypes, Mooncake
+
+softplus(z) = log1p(exp(-abs(z))) + max(z, zero(z))
+
+logp(β)     = -0.5f0 * sum(abs2, β) + dot(y_gpu, X_gpu * β) -
+              sum(softplus.(X_gpu * β))
+gradlogp(β) = let z = X_gpu * β
+    -β .+ transpose(X_gpu) * (y_gpu .- 1f0 ./ (1f0 .+ exp.(-z)))
+end
+
+function logp_batch(B)
+    Z     = X_gpu * B
+    prior = -0.5f0 .* vec(sum(abs2, B; dims=1))
+    ll    = vec(sum(y_gpu .* Z; dims=1)) .- vec(sum(softplus.(Z); dims=1))
+    return prior .+ ll
+end
+function gradlogp_batch(B)
+    Z = X_gpu * B
+    P = 1f0 ./ (1f0 .+ exp.(-Z))
+    return -B .+ transpose(X_gpu) * (y_gpu .- P)
+end
+
+model   = DensityModel(logp, gradlogp, D;
+                       logdensity_batch=logp_batch,
+                       grad_logdensity_batch=gradlogp_batch)
+sampler = ParallelMALASampler(0.005f0;
+                              T=16, damping=0.5f0,
+                              backend=ADTypes.AutoMooncake(; config=nothing))
+
+chain = sample(model, sampler, 1_600;
+               initial_params=CUDA.zeros(Float32, D),
+               chain_type=MCMCChains.Chains)
+```
+
+Posterior mean recovery error `‖β_post − β_true‖ / ‖β_true‖` should land in the 0.1–0.2 range after a few hundred post-warmup samples.
+
+### Enzyme backend (requires `pmcmc_matmul` and staged broadcasts)
+
+Same model, with the GPU-Enzyme restrictions applied: every `*` becomes `pmcmc_matmul`, every `dot` becomes `pmcmc_dot`, and every gradient broadcast is expanded into single-op stages:
 
 ```julia
 using ParallelMCMC, MCMCChains
 using ADTypes, Enzyme
-using CUDA, Random
-
-D = 20
-N = 64
-
-rng   = MersenneTwister(20251231)
-X_gpu = CUDA.CuMatrix(randn(rng, Float32, N, D))
 
 function logp(β)
-    Xβ = pmcmc_matmul(X_gpu, β)
-    -0.5f0 * (sum(abs2, β) + sum(abs2, Xβ) / Float32(N))
+    z      = pmcmc_matmul(X_gpu, β)
+    az     = abs.(z)
+    ez     = exp.(.-az)
+    sp1    = log1p.(ez)
+    sp2    = max.(z, 0f0)
+    sp     = sp1 .+ sp2
+    ll     = pmcmc_dot(y_gpu, z) - sum(sp)
+    prior  = -0.5f0 * sum(abs2, β)
+    return prior + ll
 end
 
 function gradlogp(β)
-    Xβ = pmcmc_matmul(X_gpu, β)
-    Y  = pmcmc_matmul(transpose(X_gpu), Xβ)
-    Y  = Y ./ Float32(N)
-    Y  = Y .+ β
-    return -Y
+    z     = pmcmc_matmul(X_gpu, β)
+    ez    = exp.(.-z)
+    den   = 1f0 .+ ez
+    p     = 1f0 ./ den
+    resid = y_gpu .- p
+    g_ll  = pmcmc_matmul(transpose(X_gpu), resid)
+    g     = .-β
+    g     = g .+ g_ll
+    return g
 end
 
 function logp_batch(B)
-    XB = pmcmc_matmul(X_gpu, B)
-    -0.5f0 .* (vec(sum(abs2, B; dims=1)) .+ vec(sum(abs2, XB; dims=1)) ./ Float32(N))
+    Z      = pmcmc_matmul(X_gpu, B)
+    aZ     = abs.(Z)
+    eZ     = exp.(.-aZ)
+    sp1    = log1p.(eZ)
+    sp2    = max.(Z, 0f0)
+    SP     = sp1 .+ sp2
+    yZ     = y_gpu .* Z
+    ll     = vec(sum(yZ; dims=1)) .- vec(sum(SP; dims=1))
+    prior  = -0.5f0 .* vec(sum(abs2, B; dims=1))
+    return prior .+ ll
 end
 
 function gradlogp_batch(B)
-    XB = pmcmc_matmul(X_gpu, B)
-    Y  = pmcmc_matmul(transpose(X_gpu), XB)
-    Y  = Y ./ Float32(N)
-    Y  = Y .+ B
-    return -Y
+    Z     = pmcmc_matmul(X_gpu, B)
+    eZ    = exp.(.-Z)
+    denZ  = 1f0 .+ eZ
+    P     = 1f0 ./ denZ
+    Resid = y_gpu .- P
+    G_ll  = pmcmc_matmul(transpose(X_gpu), Resid)
+    G     = .-B
+    G     = G .+ G_ll
+    return G
 end
 
-model = DensityModel(logp, gradlogp, D;
-                     logdensity_batch=logp_batch,
-                     grad_logdensity_batch=gradlogp_batch)
-
-sampler = ParallelMALASampler(0.05f0;
+model   = DensityModel(logp, gradlogp, D;
+                       logdensity_batch=logp_batch,
+                       grad_logdensity_batch=gradlogp_batch)
+sampler = ParallelMALASampler(0.005f0;
                               T=16, damping=0.5f0,
                               backend=ADTypes.AutoEnzyme())
 
@@ -134,40 +221,7 @@ chain = sample(model, sampler, 1_600;
                chain_type=MCMCChains.Chains)
 ```
 
-### Mooncake backend (plain operators)
-
-The same model with `AutoMooncake()`.  Note the wrappers are gone — plain `*`, `transpose`, and `sum` are differentiated by Mooncake's CUDA extension directly:
-
-```julia
-using ParallelMCMC, MCMCChains
-using ADTypes, Mooncake
-using CUDA, Random
-
-D = 20
-N = 64
-
-rng   = MersenneTwister(20251231)
-X_gpu = CUDA.CuMatrix(randn(rng, Float32, N, D))
-
-logp(β)     = -0.5f0 * (sum(abs2, β) + sum(abs2, X_gpu * β) / Float32(N))
-gradlogp(β) = -(β .+ (transpose(X_gpu) * (X_gpu * β)) ./ Float32(N))
-
-logp_batch(B)     = -0.5f0 .* (vec(sum(abs2, B; dims=1))
-                                .+ vec(sum(abs2, X_gpu * B; dims=1)) ./ Float32(N))
-gradlogp_batch(B) = -(B .+ (transpose(X_gpu) * (X_gpu * B)) ./ Float32(N))
-
-model = DensityModel(logp, gradlogp, D;
-                     logdensity_batch=logp_batch,
-                     grad_logdensity_batch=gradlogp_batch)
-
-sampler = ParallelMALASampler(0.05f0;
-                              T=16, damping=0.5f0,
-                              backend=ADTypes.AutoMooncake(; config=nothing))
-
-chain = sample(model, sampler, 1_600;
-               initial_params=CUDA.zeros(Float32, D),
-               chain_type=MCMCChains.Chains)
-```
+The two snippets sample the same posterior; the difference is purely in what the AD backend can chew on.
 
 ---
 
