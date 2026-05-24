@@ -58,6 +58,7 @@ The simplest entry point is [`DensityModel`](@ref), which wraps a log-density an
 
 ```julia
 using ParallelMCMC, MCMCChains
+using ADTypes, Enzyme
 
 # Example: 2-D standard normal
 logp(x)      = -0.5 * sum(abs2, x)
@@ -70,7 +71,8 @@ model = DensityModel(logp, grad_logp, 2;
 ### DEER — parallel-across-sequence (primary algorithm)
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
+                              backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
                chain_type=MCMCChains.Chains)

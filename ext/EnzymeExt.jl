@@ -34,8 +34,11 @@ function DEER._hvp_forward_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
     reuse, and Enzyme aborts with `EnzymeRuntimeActivityError`. With runtime
     activity, the shadow is tracked dynamically.
     =#
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Forward) :
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Forward)
+    else
         backend.mode
+    end
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=Enzyme.Const)
 end
 
@@ -48,8 +51,11 @@ fill in `function_annotation=Enzyme.Const` so Enzyme doesn't throw
 =#
 function DEER._hvp_closure_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
     A === Nothing || return backend  # user already specified function_annotation
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Reverse) :
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Reverse)
+    else
         backend.mode
+    end
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=Enzyme.Const)
 end
 
@@ -196,12 +202,7 @@ function EnzymeRules.augmented_primal(
 end
 
 function EnzymeRules.reverse(
-    config::RevConfig,
-    ::Const{typeof(pmcmc_dot)},
-    dret,
-    tape,
-    a::Annotation,
-    b::Annotation,
+    config::RevConfig, ::Const{typeof(pmcmc_dot)}, dret, tape, a::Annotation, b::Annotation
 )
     cache_a, cache_b = tape
     if !(dret isa Const)
@@ -241,9 +242,7 @@ function EnzymeRules.forward(
     if RT <: DuplicatedNoNeed
         return tangent
     elseif RT <: Duplicated
-        return Duplicated(
-            primal === nothing ? pmcmc_dotsum(A.val, B.val) : primal, tangent
-        )
+        return Duplicated(primal === nothing ? pmcmc_dotsum(A.val, B.val) : primal, tangent)
     else
         return needs_primal(config) ? primal : tangent
     end

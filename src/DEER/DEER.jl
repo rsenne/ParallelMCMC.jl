@@ -135,7 +135,10 @@ function _prepare_batch_hvp_from_grad(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     return DI.prepare_pushforward(
-        grad_batch, _hvp_forward_backend(backend), X_template, (V_template,);
+        grad_batch,
+        _hvp_forward_backend(backend),
+        X_template,
+        (V_template,);
         strict=Val(false),
     )
 end
@@ -145,9 +148,7 @@ function _batch_hvp_from_grad_prepared(
 )
     X_exec = _materialize_ad_matrix(X)
     V_exec = _tangent_like(X_exec, V)
-    res = DI.pushforward(
-        grad_batch, prep, _hvp_forward_backend(backend), X_exec, (V_exec,)
-    )
+    res = DI.pushforward(grad_batch, prep, _hvp_forward_backend(backend), X_exec, (V_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -252,9 +253,7 @@ function _prepare_hvp_via_grad_reverse(
     return (f, prep, eff_backend)
 end
 
-function _hvp_via_grad_reverse_prepared(
-    prep_pair, x::AbstractVector, v::AbstractVector
-)
+function _hvp_via_grad_reverse_prepared(prep_pair, x::AbstractVector, v::AbstractVector)
     f, prep, eff_backend = prep_pair
     return DI.gradient(f, prep, eff_backend, x, DI.Constant(v))
 end
