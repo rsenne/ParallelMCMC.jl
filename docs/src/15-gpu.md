@@ -225,6 +225,72 @@ The two snippets sample the same posterior; the difference is purely in what the
 
 ---
 
+## The AD-HVP fallback (and when to write your own)
+
+DEER needs a Hessian–vector product $H v$ at every Newton step.  `DensityModel` accepts both `gradlogp` and (optionally) `hvp` / `hvp_batch`.  Depending on what you supply, the sampler does one of two things:
+
+- **You supply `hvp` / `hvp_batch`.**  These run as plain kernels.  The AD backend is never invoked for HVPs.
+- **You only supply `gradlogp` / `grad_logdensity_batch`.**  The sampler builds the HVP by differentiating your gradient — either a forward-mode pushforward of `gradlogp` ([`ForwardOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), the default for most backends) or a reverse-mode gradient of `x -> dot(gradlogp(x), v)` ([`ReverseOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), used for `AutoMooncake` and `AutoZygote`).  This is the **AD-HVP fallback**, and it is what the logistic-regression example above uses.
+
+### When the fallback is the right call
+
+- **Complex or composed models.**  Bayesian neural nets, hierarchical models with many transformations, mixtures, or anything where the Hessian has no convenient closed form.  Deriving and maintaining `hvp` by hand for these is error-prone; AD removes a whole class of bugs.
+- **Prototyping.**  You want a correct sampler running before you optimize.  Drop in `gradlogp`, lean on AD, profile later.
+- **Operations that AD libraries handle for free but are tedious to differentiate by hand.**  Special functions, link functions, log-sum-exp, normalizing constants of standard distributions, etc.
+- **You want backend flexibility.**  With only `gradlogp` you can swap `AutoMooncake` ↔ `AutoEnzyme` ↔ `AutoZygote` to compare without rewriting model code.
+
+### When to write your own analytical HVP
+
+- **The HVP has a clean closed form.**  Quadratic priors, Gaussian likelihoods, GLMs (logistic, Poisson, probit) — the second derivative is a known function of intermediate quantities you already compute in `gradlogp`.  A few extra lines and you skip the AD pipeline entirely.
+- **Performance matters and the AD compile is heavy.**  Enzyme and Mooncake both pay a one-shot compilation cost on the user's gradient.  For long-running chains this amortizes, but for many short runs the analytical HVP wins.
+- **You're hitting AD-backend-specific GPU restrictions.**  The [Enzyme limitations](#2-enzyme-on-gpu-currently-needs-pmcmc_matmul-pmcmc_dot-pmcmc_dotsum) above (`pmcmc_*` wrappers, staged broadcasts) only matter when the AD backend is invoked.  Supplying analytical HVP sidesteps them — your `gradlogp` and `hvp` can use plain `*`, `dot`, `sum` even with `backend=AutoEnzyme()`, because the backend is held but never run.
+- **You can reuse intermediates between gradient and HVP.**  When `hvp` shares $X\beta$, $\sigma(X\beta)$, or similar with the gradient computation, an analytical version can be both faster *and* shorter than what AD produces.
+
+### Same example with analytical HVP
+
+For Bayesian logistic regression with a Gaussian prior, the Hessian is
+
+```math
+\nabla^2 \log p = -I - X^\top \, \mathrm{diag}\bigl(\sigma(X\beta) \odot (1 - \sigma(X\beta))\bigr) \, X,
+```
+
+so
+
+```math
+H v = -v - X^\top \bigl[\sigma(X\beta) \odot (1 - \sigma(X\beta)) \odot (X v)\bigr].
+```
+
+Plug it in alongside `gradlogp` and the sampler stops invoking the AD path:
+
+```julia
+function hvp(β, v)
+    z  = X_gpu * β
+    σz = 1f0 ./ (1f0 .+ exp.(-z))
+    w  = σz .* (1f0 .- σz)
+    -v .- transpose(X_gpu) * (w .* (X_gpu * v))
+end
+function hvp_batch(B, V)
+    Z = X_gpu * B
+    Σ = 1f0 ./ (1f0 .+ exp.(-Z))
+    W = Σ .* (1f0 .- Σ)
+    -V .- transpose(X_gpu) * (W .* (X_gpu * V))
+end
+
+model = DensityModel(logp, gradlogp, D;
+                     logdensity_batch=logp_batch,
+                     grad_logdensity_batch=gradlogp_batch,
+                     hvp=hvp, hvp_batch=hvp_batch)
+
+# `backend` is still required by the API, but is never invoked.
+sampler = ParallelMALASampler(0.005f0;
+                              T=16, damping=0.5f0,
+                              backend=ADTypes.AutoMooncake(; config=nothing))
+```
+
+This recovers the same posterior as the fallback version — the only difference is that HVPs come from a plain matmul instead of a reverse-mode pass over `gradlogp`.
+
+---
+
 ## Picking an AD backend on GPU
 
 | Backend | GPU support | Restrictions | Recommended when |
