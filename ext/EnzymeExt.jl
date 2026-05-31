@@ -22,41 +22,35 @@ Tell DEER's forward-on-grad HVP path how to normalize a plain `AutoEnzyme()`:
 pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const`. Pinning
 Forward is load-bearing on GPU — without it, DI defaults to reverse mode
 and Enzyme aborts on the cuBLAS / `cuPointerGetAttribute` gc-transition
-bundle inside the user's GPU `gradlogp`. If the user already specified
-either field, respect their choice.
+bundle inside the user's GPU `gradlogp`.
+
+`mode` and `function_annotation` are normalized independently — a user who
+sets one keeps that choice, but still gets the default for the other.
+
+`set_runtime_activity` is load-bearing for composed `pmcmc_matmul` calls
+(e.g. `pmcmc_matmul(transpose(X), pmcmc_matmul(X, β))`). Static activity
+analysis can't prove the outer call's `transpose(X)` shadow is safe to
+reuse, and Enzyme aborts with `EnzymeRuntimeActivityError`. With runtime
+activity, the shadow is tracked dynamically.
 =#
 function DEER._hvp_forward_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    A === Nothing || return backend  # user already specified function_annotation
-    #=
-    `set_runtime_activity` is load-bearing for composed `pmcmc_matmul` calls
-    (e.g. `pmcmc_matmul(transpose(X), pmcmc_matmul(X, β))`). Static activity
-    analysis can't prove the outer call's `transpose(X)` shadow is safe to
-    reuse, and Enzyme aborts with `EnzymeRuntimeActivityError`. With runtime
-    activity, the shadow is tracked dynamically.
-    =#
-    mode = if backend.mode === nothing
-        Enzyme.set_runtime_activity(Enzyme.Forward)
-    else
-        backend.mode
-    end
-    return ADTypes.AutoEnzyme(; mode=mode, function_annotation=Enzyme.Const)
+    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Forward) : backend.mode
+    annotation = A === Nothing ? Enzyme.Const : A
+    return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
 
 #=
 Tell DEER's reverse-on-grad HVP path how to normalize a plain `AutoEnzyme()`:
 fill in `function_annotation=Enzyme.Const` so Enzyme doesn't throw
 `EnzymeMutabilityException` on the read-only `_HvpReverseClosure` /
-`_BatchHvpReverseClosure` wrappers. If the user already specified
-`function_annotation`, respect their choice.
+`_BatchHvpReverseClosure` wrappers, and default `mode` to reverse with
+runtime activity. As in `_hvp_forward_backend`, the two fields are
+normalized independently.
 =#
 function DEER._hvp_closure_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    A === Nothing || return backend  # user already specified function_annotation
-    mode = if backend.mode === nothing
-        Enzyme.set_runtime_activity(Enzyme.Reverse)
-    else
-        backend.mode
-    end
-    return ADTypes.AutoEnzyme(; mode=mode, function_annotation=Enzyme.Const)
+    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Reverse) : backend.mode
+    annotation = A === Nothing ? Enzyme.Const : A
+    return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
 
 #=
