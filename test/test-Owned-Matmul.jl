@@ -49,7 +49,7 @@ end
     dY_expected = dA * B + A * dB
 
     f1 = ((A_, B_),) -> pmcmc_matmul(A_, B_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),); strict=Val(false))
+    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),))
     dY = first(DI.pushforward(f1, prep, _AD_FWD, (A, B), ((dA, dB),)))
 
     @test dY ≈ dY_expected rtol=1e-12 atol=1e-12
@@ -66,7 +66,7 @@ end
     dy_expected = dA * b + A * db
 
     f1 = ((A_, b_),) -> pmcmc_matmul(A_, b_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, b), ((dA, db),); strict=Val(false))
+    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, b), ((dA, db),))
     dy = first(DI.pushforward(f1, prep, _AD_FWD, (A, b), ((dA, db),)))
 
     @test dy ≈ dy_expected rtol=1e-12 atol=1e-12
@@ -81,7 +81,7 @@ end
     w = randn(rng, M)
 
     f = ((A_, b_),) -> pmcmc_dot(pmcmc_matmul(A_, b_), w)
-    prep = DI.prepare_gradient(f, _AD_REV, (A, b); strict=Val(false))
+    prep = DI.prepare_gradient(f, _AD_REV, (A, b))
     g = DI.gradient(f, prep, _AD_REV, (A, b))
 
     dA_expected = w * b'
@@ -108,7 +108,7 @@ end
     b = randn(rng, 6)
 
     f = ((a_, b_),) -> pmcmc_dot(a_, b_)
-    prep = DI.prepare_gradient(f, _AD_REV, (a, b); strict=Val(false))
+    prep = DI.prepare_gradient(f, _AD_REV, (a, b))
     g = DI.gradient(f, prep, _AD_REV, (a, b))
 
     @test g[1] ≈ b rtol=1e-12 atol=1e-12
@@ -126,7 +126,7 @@ end
     dval_expected = dot(da, b) + dot(a, db)
 
     f1 = ((a_, b_),) -> pmcmc_dot(a_, b_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (a, b), ((da, db),); strict=Val(false))
+    prep = DI.prepare_pushforward(f1, _AD_FWD, (a, b), ((da, db),))
     dval = first(DI.pushforward(f1, prep, _AD_FWD, (a, b), ((da, db),)))
 
     @test dval ≈ dval_expected rtol=1e-12 atol=1e-12
@@ -150,7 +150,7 @@ end
     B = randn(rng, 4, 3)
 
     f = ((A_, B_),) -> pmcmc_dotsum(A_, B_)
-    prep = DI.prepare_gradient(f, _AD_REV, (A, B); strict=Val(false))
+    prep = DI.prepare_gradient(f, _AD_REV, (A, B))
     g = DI.gradient(f, prep, _AD_REV, (A, B))
 
     @test g[1] ≈ B rtol=1e-12 atol=1e-12
@@ -168,19 +168,11 @@ end
     dval_expected = sum(dA .* B) + sum(A .* dB)
 
     f1 = ((A_, B_),) -> pmcmc_dotsum(A_, B_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),); strict=Val(false))
+    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),))
     dval = first(DI.pushforward(f1, prep, _AD_FWD, (A, B), ((dA, dB),)))
 
     @test dval ≈ dval_expected rtol=1e-12 atol=1e-12
 end
-
-# ============================================================
-# Enzyme Const-annotation paths
-#
-# DI doesn't expose Enzyme `Const` directly on arguments — it activates the
-# whole gradient subject. The rule bodies all special-case `a isa Const` /
-# `B isa Const`; these tests hit those branches via `Enzyme.autodiff`.
-# ============================================================
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_matmul" begin
     rng = MersenneTwister(100)

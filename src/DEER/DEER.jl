@@ -93,7 +93,7 @@ function _prepare_hvp(f, backend::AbstractADType, x_template::AbstractVector)
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
     return DI.prepare_pushforward(
-        f, _hvp_forward_backend(backend), x_template, (v_template,); strict=Val(false)
+        f, _hvp_forward_backend(backend), x_template, (v_template,)
     )
 end
 
@@ -123,9 +123,7 @@ end
 function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    eff_backend = _hvp_forward_backend(backend)
-    prep = DI.prepare_pushforward(f, eff_backend, x_exec, (v_exec,); strict=Val(false))
-    res = DI.pushforward(f, prep, eff_backend, x_exec, (v_exec,))
+    res = DI.pushforward(f, _hvp_forward_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -135,11 +133,7 @@ function _prepare_batch_hvp_from_grad(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     return DI.prepare_pushforward(
-        grad_batch,
-        _hvp_forward_backend(backend),
-        X_template,
-        (V_template,);
-        strict=Val(false),
+        grad_batch, _hvp_forward_backend(backend), X_template, (V_template,)
     )
 end
 

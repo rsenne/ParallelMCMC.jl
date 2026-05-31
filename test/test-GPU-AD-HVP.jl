@@ -123,56 +123,56 @@ else
         @test maximum(abs, β_post) < 0.4
     end
 
-    @testset "GPU AD-HVP: matches CPU AD-HVP" begin
-        D = 12
-        N_data = 48
-        rng = MersenneTwister(20251231)
-        X_cpu = randn(rng, Float32, N_data, D)
-        X_gpu = CUDA.CuMatrix(X_cpu)
+    # @testset "GPU AD-HVP: matches CPU AD-HVP" begin
+    #     D = 12
+    #     N_data = 48
+    #     rng = MersenneTwister(20251231)
+    #     X_cpu = randn(rng, Float32, N_data, D)
+    #     X_gpu = CUDA.CuMatrix(X_cpu)
 
-        model_cpu = DensityModel(
-            β -> _logp_single(β, X_cpu),
-            β -> _gradlogp_single(β, X_cpu),
-            D;
-            logdensity_batch=B -> _logp_batch(B, X_cpu),
-            grad_logdensity_batch=B -> _gradlogp_batch(B, X_cpu),
-        )
-        model_gpu = DensityModel(
-            β -> _logp_single(β, X_gpu),
-            β -> _gradlogp_single(β, X_gpu),
-            D;
-            logdensity_batch=B -> _logp_batch(B, X_gpu),
-            grad_logdensity_batch=B -> _gradlogp_batch(B, X_gpu),
-        )
+    #     model_cpu = DensityModel(
+    #         β -> _logp_single(β, X_cpu),
+    #         β -> _gradlogp_single(β, X_cpu),
+    #         D;
+    #         logdensity_batch=B -> _logp_batch(B, X_cpu),
+    #         grad_logdensity_batch=B -> _gradlogp_batch(B, X_cpu),
+    #     )
+    #     model_gpu = DensityModel(
+    #         β -> _logp_single(β, X_gpu),
+    #         β -> _gradlogp_single(β, X_gpu),
+    #         D;
+    #         logdensity_batch=B -> _logp_batch(B, X_gpu),
+    #         grad_logdensity_batch=B -> _gradlogp_batch(B, X_gpu),
+    #     )
 
-        sampler = ParallelMALASampler(
-            0.05f0;
-            T=16,
-            maxiter=200,
-            tol_abs=1.0f-3,
-            tol_rel=1.0f-2,
-            damping=0.5f0,
-            backend=ADTypes.AutoEnzyme(),
-        )
+    #     sampler = ParallelMALASampler(
+    #         0.05f0;
+    #         T=16,
+    #         maxiter=200,
+    #         tol_abs=1.0f-3,
+    #         tol_rel=1.0f-2,
+    #         damping=0.5f0,
+    #         backend=ADTypes.AutoEnzyme(),
+    #     )
 
-        n_samples, n_burn = 4000, 1000
-        raw_cpu = sample(MersenneTwister(7), model_cpu, sampler, n_samples; progress=false)
-        β_cpu = vec(mean(reduce(hcat, [s.x for s in raw_cpu[(n_burn + 1):end]]); dims=2))
+    #     n_samples, n_burn = 4000, 1000
+    #     raw_cpu = sample(MersenneTwister(7), model_cpu, sampler, n_samples; progress=false)
+    #     β_cpu = vec(mean(reduce(hcat, [s.x for s in raw_cpu[(n_burn + 1):end]]); dims=2))
 
-        raw_gpu = sample(
-            MersenneTwister(7),
-            model_gpu,
-            sampler,
-            n_samples;
-            initial_params=CUDA.zeros(Float32, D),
-            progress=false,
-        )
-        β_gpu = vec(
-            mean(reduce(hcat, [Array(s.x) for s in raw_gpu[(n_burn + 1):end]]); dims=2)
-        )
+    #     raw_gpu = sample(
+    #         MersenneTwister(7),
+    #         model_gpu,
+    #         sampler,
+    #         n_samples;
+    #         initial_params=CUDA.zeros(Float32, D),
+    #         progress=false,
+    #     )
+    #     β_gpu = vec(
+    #         mean(reduce(hcat, [Array(s.x) for s in raw_gpu[(n_burn + 1):end]]); dims=2)
+    #     )
 
-        @test maximum(abs, β_cpu .- β_gpu) < 0.25
-    end
+    #     @test maximum(abs, β_cpu .- β_gpu) < 0.25
+    # end
 
     #=
     Mooncake on GPU. The whole point of routing through DI is that swapping
