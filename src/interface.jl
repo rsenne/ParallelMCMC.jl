@@ -380,15 +380,12 @@ function _build_mala_deer_rec(
     picking the path from the user's `backend` (see `DEER._hvp_strategy`):
 
       ForwardOnGrad() — `pushforward(gradlogp, x, v)`. Used for forward-
-                        capable backends (AutoEnzyme, AutoForwardDiff).
-                        Routes through the `pmcmc_matmul` frule and is the
-                        only AD-HVP mode that's reliable on GPU.
+                        capable backends (AutoEnzyme, AutoForwardDiff, AutoMooncakeForward).
       ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Used
-                        for reverse-only backends (AutoMooncake, AutoZygote
-                        et al.).
+                        for reverse-mode comaptible backends (AutoZygote, AutoMooncake).
 
     Either path can be bypassed by providing an analytical `hvp` /
-    `hvp_batch` on the `DensityModel` (the recommended GPU production path).
+    `hvp_batch` on the `DensityModel`.
     =#
     hvp_fn = if model.hvp !== nothing
         model.hvp
