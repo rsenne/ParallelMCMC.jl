@@ -16,7 +16,8 @@ the native Enzyme rules in `ext/EnzymeExt.jl`. We check:
   3. reverse-mode pullbacks (gradients) match the analytical formulas
 
 The reverse cases are critical: they're what makes the GPU AD-HVP path work
-without crashing on `cuMemcpyDtoHAsync_v2` gc-transition bundles.
+without hitting the `cuMemcpyDtoHAsync_v2` gc-transition abort (see
+`ext/EnzymeExt.jl`).
 =#
 
 const _AD_FWD = ADTypes.AutoEnzyme(; mode=Enzyme.Forward)

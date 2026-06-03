@@ -156,10 +156,9 @@ column-independence of the user's batched gradient — its gradient w.r.t. B
 is the columnwise HVP.
 
 The reductions go through `pmcmc_dot`/`pmcmc_dotsum` (rather than `dot`/`sum`)
-so that on GPU the EnzymeExt reverse rules intercept them. Without that,
-Enzyme reverse-mode tries to invert `cuMemcpyDtoHAsync_v2` (the device→host
-copy emitted by every CuArray scalar reduction) and crashes on its
-gc-transition bundle.
+so that on GPU the EnzymeExt reverse rules intercept them — otherwise Enzyme
+reverse-mode hits the `cuMemcpyDtoHAsync_v2` gc-transition abort (see the
+Enzyme rules in `ext/EnzymeExt.jl`).
 
 We bundle the closure with the prep so `prepare_gradient` and `gradient`
 see the same function instance (DI keys preparations on function identity).
@@ -221,9 +220,9 @@ Hooks for backend-specific normalization of the user's `backend`.
 `_hvp_forward_backend` is for the forward-on-grad pushforward path
 (differentiates the user's `gradlogp` directly). EnzymeExt specializes it
 to pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const` when
-the user passed plain `AutoEnzyme()` — without pinning Forward, DI lowers
-through reverse mode and Enzyme aborts on the cuBLAS / cuPointerGetAttribute
-gc-transition bundle on GPU.
+the user passed plain `AutoEnzyme()`, without pinning Forward, DI lowers
+through reverse mode and hits the gc-transition abort on GPU (see
+`ext/EnzymeExt.jl`).
 
 `_hvp_closure_backend` is for the reverse-on-grad gradient path on the
 read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.

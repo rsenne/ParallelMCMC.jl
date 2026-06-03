@@ -20,9 +20,8 @@ using Enzyme.EnzymeCore.EnzymeRules:
 #=
 Tell DEER's forward-on-grad HVP path how to normalize a plain `AutoEnzyme()`:
 pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const`. Pinning
-Forward is load-bearing on GPU — without it, DI defaults to reverse mode
-and Enzyme aborts on the cuBLAS / `cuPointerGetAttribute` gc-transition
-bundle inside the user's GPU `gradlogp`.
+Forward is load-bearing on GPU — without it DI defaults to reverse mode, which
+hits the gc-transition abort documented on the Enzyme rules below.
 
 `mode` and `function_annotation` are normalized independently — a user who
 sets one keeps that choice, but still gets the default for the other.
@@ -34,7 +33,11 @@ reuse, and Enzyme aborts with `EnzymeRuntimeActivityError`. With runtime
 activity, the shadow is tracked dynamically.
 =#
 function DEER._hvp_forward_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Forward) : backend.mode
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Forward)
+    else
+        backend.mode
+    end
     annotation = A === Nothing ? Enzyme.Const : A
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
@@ -48,26 +51,26 @@ runtime activity. As in `_hvp_forward_backend`, the two fields are
 normalized independently.
 =#
 function DEER._hvp_closure_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Reverse) : backend.mode
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Reverse)
+    else
+        backend.mode
+    end
     annotation = A === Nothing ? Enzyme.Const : A
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
 
 #=
 Native Enzyme rules for the owned wrappers `pmcmc_matmul`, `pmcmc_dot`,
-`pmcmc_dotsum`. These exist so that on GPU paths Enzyme treats each as
-opaque: primal and cotangents are computed by plain `*`, `'`, `dot`, `sum`,
-and broadcast — *outside* Enzyme's IR rewriter. That sidesteps the
-"unsupported tag gc-transition" abort Enzyme hits when it tries to lower
-`cuMemcpyDtoHAsync_v2` (emitted by every CuArray scalar reduction) or the
-cuBLAS bundles inside `*(::CuArray, ::CuArray)`.
+`pmcmc_dotsum`. They make Enzyme treat each as opaque: primal and cotangents
+are computed by plain `*`, `dot`, `sum`, broadcast outside Enzyme's IR
+rewriter.
 
-For each function we define
-  - `EnzymeRules.forward`           (forward-mode JVP)
-  - `EnzymeRules.augmented_primal`  (forward sweep of reverse mode)
-  - `EnzymeRules.reverse`           (reverse sweep)
+Why: reverse-mode Enzyme aborts differentiating a CuArray scalar reduction.
 
-Width=1 only — we don't need batch-mode AD here, and DI uses width=1.
+    unsupported tag gc-transition for
+      call i32 @cuMemcpyDtoHAsync_v2(...) [ "jl_roots"(...), "gc-transition"() ]
+    UNREACHABLE executed at .../Enzyme/GradientUtils.cpp:309      (signal 6)
 =#
 
 #=
