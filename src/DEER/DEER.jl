@@ -180,23 +180,22 @@ end
 Pick the AD-HVP fallback strategy from the user's backend.
 
   ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
-                      `pmcmc_matmul` frule, works on GPU. Requires the
-                      backend to support forward mode.
+                      `pmcmc_matmul` frule.
   ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
-                      through both the matmul and dot/sum rrules. Works on
-                      CPU with reverse-only backends (Mooncake, Zygote);
-                      not GPU-safe because Enzyme reverse trips on CUDA.jl
-                      internals beyond what we wrap.
+                      through the matmul and dot/sum rrules.
 
 These are singleton types rather than symbols so the choice dispatches
 statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
 concrete method (and one concrete return type) at compile time, without
 relying on constant propagation through `===`.
 
-Default is `ForwardOnGrad()` since most DI backends support forward mode.
-We override to `ReverseOnGrad()` for reverse-only backends. AutoEnzyme stays
-on forward because Enzyme.Forward is robust on CuArrays once the matmul is
-wrapped.
+Mooncake/Zygote: We route them through
+`ReverseOnGrad` as the default. both CPU and GPU run this path fine (see the
+Mooncake GPU test). `AutoEnzyme` stays on `ForwardOnGrad`: its reverse mode
+hits the gc-transition abort on GPU (see `ext/EnzymeExt.jl`), whereas
+`Enzyme.Forward` is robust on CuArrays once the matmul is wrapped.
+
+Note: forward mode is also supported for these backends via their forward counterparts.
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
