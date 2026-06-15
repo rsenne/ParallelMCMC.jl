@@ -71,9 +71,13 @@ Setting `damping < 1` blends the Newton update with the previous iterate, which 
 
 ### GPU execution
 
-The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic, so the same `ParallelMALASampler` runs on either CPU or GPU — implement `logdensity`/`grad_logdensity` over `CuArray`s, pass `backend = ADTypes.AutoEnzyme()` (or `AutoMooncake`), and a `CuVector` as `initial_params`.
+The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic.  To run DEER on GPU:
 
-GPU execution has its own caveats (Turing models are CPU-only, `AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients must be written as single-op broadcasts).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
+1. Implement `logdensity` and `grad_logdensity` using GPU-compatible operations.
+2. Pass for example, `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
+3. Pass a `CuVector` as `initial_params` to `sample`.
+
+GPU execution has its own caveats (Turing models are CPU-only, `AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients should avoid scalar indexing).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
 
 ---
 

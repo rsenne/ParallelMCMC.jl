@@ -6,7 +6,7 @@ DEER's prefix-scan and per-step batch evaluations are array-type-agnostic, so th
 
 ## When to use GPU
 
-GPU pays off when the per-Newton-step work — evaluating `logdensity_batch` and `grad_logdensity_batch` across the `T`-wide trajectory and the Hutchinson `probes` — is large enough to saturate the device.  The prefix scan itself is `O(\log T)` on either backend; you are not buying scan speedup by moving to GPU, you are buying batched gradient evaluation speedup.
+GPU pays off when the per-Newton-step work i.e., evaluating `logdensity_batch` and `grad_logdensity_batch` across the `T`-wide trajectory and the Hutchinson `probes` is large enough to saturate the device.
 
 | Regime | Reach for |
 |---|---|
@@ -50,9 +50,9 @@ When you should use them:
 
 When you do **not** need them:
 
-- CPU code — plain `*`, `dot`, `sum` are faster and clearer.
-- GPU code with `AutoMooncake(; config=nothing)` — Mooncake's own CUDA extension handles these operations natively.
-- GPU code with `AutoZygote()` — Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
+- CPU code: plain `*`, `dot`, `sum` are faster and clearer.
+- GPU code with `AutoMooncake(; config=nothing)`: Mooncake's own CUDA extension handles these operations natively.
+- GPU code with `AutoZygote()`: Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
 
 These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain `A * B` on `CuArray`s will work and the wrappers will be deprecated.
 
