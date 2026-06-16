@@ -156,10 +156,9 @@ column-independence of the user's batched gradient — its gradient w.r.t. B
 is the columnwise HVP.
 
 The reductions go through `pmcmc_dot`/`pmcmc_dotsum` (rather than `dot`/`sum`)
-so that on GPU the EnzymeExt reverse rules intercept them. Without that,
-Enzyme reverse-mode tries to invert `cuMemcpyDtoHAsync_v2` (the device→host
-copy emitted by every CuArray scalar reduction) and crashes on its
-gc-transition bundle.
+so that on GPU the EnzymeExt reverse rules intercept them — otherwise Enzyme
+reverse-mode hits the `cuMemcpyDtoHAsync_v2` gc-transition abort (see the
+Enzyme rules in `ext/EnzymeExt.jl`).
 
 We bundle the closure with the prep so `prepare_gradient` and `gradient`
 see the same function instance (DI keys preparations on function identity).
@@ -181,23 +180,22 @@ end
 Pick the AD-HVP fallback strategy from the user's backend.
 
   ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
-                      `pmcmc_matmul` frule, works on GPU. Requires the
-                      backend to support forward mode.
+                      `pmcmc_matmul` frule.
   ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
-                      through both the matmul and dot/sum rrules. Works on
-                      CPU with reverse-only backends (Mooncake, Zygote);
-                      not GPU-safe because Enzyme reverse trips on CUDA.jl
-                      internals beyond what we wrap.
+                      through the matmul and dot/sum rrules.
 
 These are singleton types rather than symbols so the choice dispatches
 statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
 concrete method (and one concrete return type) at compile time, without
 relying on constant propagation through `===`.
 
-Default is `ForwardOnGrad()` since most DI backends support forward mode.
-We override to `ReverseOnGrad()` for reverse-only backends. AutoEnzyme stays
-on forward because Enzyme.Forward is robust on CuArrays once the matmul is
-wrapped.
+Mooncake/Zygote: We route them through
+`ReverseOnGrad` as the default. both CPU and GPU run this path fine (see the
+Mooncake GPU test). `AutoEnzyme` stays on `ForwardOnGrad`: its reverse mode
+hits the gc-transition abort on GPU (see `ext/EnzymeExt.jl`), whereas
+`Enzyme.Forward` is robust on CuArrays once the matmul is wrapped.
+
+Note: forward mode is also supported for these backends via their forward counterparts.
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
@@ -215,9 +213,9 @@ Hooks for backend-specific normalization of the user's `backend`.
 `_hvp_forward_backend` is for the forward-on-grad pushforward path
 (differentiates the user's `gradlogp` directly). EnzymeExt specializes it
 to pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const` when
-the user passed plain `AutoEnzyme()` — without pinning Forward, DI lowers
-through reverse mode and Enzyme aborts on the cuBLAS / cuPointerGetAttribute
-gc-transition bundle on GPU.
+the user passed plain `AutoEnzyme()`, without pinning Forward, DI lowers
+through reverse mode and hits the gc-transition abort on GPU (see
+`ext/EnzymeExt.jl`).
 
 `_hvp_closure_backend` is for the reverse-on-grad gradient path on the
 read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.

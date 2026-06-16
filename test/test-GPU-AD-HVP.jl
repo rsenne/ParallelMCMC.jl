@@ -34,15 +34,8 @@ else
     True mean = 0; we'll check the posterior mean is near zero.
 
     Calls go through `pmcmc_matmul` so Enzyme dispatches to the rule in
-    `ext/EnzymeExt.jl` and avoids cuBLAS gc-transition bundles, which
-    Enzyme's default `*` rule trips on.
-
-    Gradients are written as a sequence of single-op broadcasts rather
-    than one fused expression like `-β .- pmcmc_matmul(...) ./ N`. Julia
-    fuses the second form into one CUDA broadcast kernel whose gc-transition
-    bundle (cuPointerGetAttribute on each input) Enzyme cannot lower —
-    splitting it into stages gives Enzyme one operation at a time and
-    keeps each kernel small enough to differentiate.
+    `ext/EnzymeExt.jl`, which keeps the op off Enzyme's reverse path and
+    away from the gc-transition abort documented there.
     =#
     function _logp_single(β, X)
         Xβ = pmcmc_matmul(X, β)

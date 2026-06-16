@@ -381,8 +381,10 @@ function _build_mala_deer_rec(
 
       ForwardOnGrad() — `pushforward(gradlogp, x, v)`. Used for forward-
                         capable backends (AutoEnzyme, AutoForwardDiff, AutoMooncakeForward).
-      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Used
-                        for reverse-mode comaptible backends (AutoZygote, AutoMooncake).
+      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Default
+                        routing for AutoMooncake / AutoZygote / AutoReverseDiff
+                        / AutoTracker (which also have forward counterparts,
+                        see `DEER._hvp_strategy` for the nuance).
 
     Either path can be bypassed by providing an analytical `hvp` /
     `hvp_batch` on the `DensityModel`.

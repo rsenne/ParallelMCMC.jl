@@ -6,7 +6,7 @@ DEER's prefix-scan and per-step batch evaluations are array-type-agnostic, so th
 
 ## When to use GPU
 
-GPU pays off when the per-Newton-step work — evaluating `logdensity_batch` and `grad_logdensity_batch` across the `T`-wide trajectory and the Hutchinson `probes` — is large enough to saturate the device.  The prefix scan itself is `O(\log T)` on either backend; you are not buying scan speedup by moving to GPU, you are buying batched gradient evaluation speedup.
+GPU pays off when the per-Newton-step work i.e., evaluating `logdensity_batch` and `grad_logdensity_batch` across the `T`-wide trajectory and the Hutchinson `probes` is large enough to saturate the device.
 
 | Regime | Reach for |
 |---|---|
@@ -36,7 +36,13 @@ pmcmc_dot(a, b)     = dot(a, b)
 pmcmc_dotsum(A, B)  = sum(A .* B)
 ```
 
-These exist purely so the package can register Enzyme rules against them without committing type piracy on `Base.*`, `Base.dot`, `Base.sum`.  The rules compute primal and cotangents with plain operators *outside* Enzyme's IR rewriter, which sidesteps the `unsupported tag gc-transition` abort Enzyme hits when it tries to lower cuBLAS bundles or the `cuMemcpyDtoHAsync_v2` emitted by CuArray scalar reductions.
+These exist purely so the package can register Enzyme rules against them without committing type piracy on `Base.*`, `Base.dot`, `Base.sum`.  The rules compute primal and cotangents with plain operators *outside* Enzyme's IR rewriter, which keeps them off the reverse-mode path that aborts on GPU.
+
+```
+unsupported tag gc-transition for
+  call i32 @cuMemcpyDtoHAsync_v2(...) [ "jl_roots"(...), "gc-transition"() ]
+UNREACHABLE executed at .../Enzyme/GradientUtils.cpp:309      (signal 6)
+```
 
 When you should use them:
 
@@ -44,9 +50,9 @@ When you should use them:
 
 When you do **not** need them:
 
-- CPU code — plain `*`, `dot`, `sum` are faster and clearer.
-- GPU code with `AutoMooncake(; config=nothing)` — Mooncake's own CUDA extension handles these operations natively.
-- GPU code with `AutoZygote()` — Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
+- CPU code: plain `*`, `dot`, `sum` are faster and clearer.
+- GPU code with `AutoMooncake(; config=nothing)`: Mooncake's own CUDA extension handles these operations natively.
+- GPU code with `AutoZygote()`: Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
 
 These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain `A * B` on `CuArray`s will work and the wrappers will be deprecated.
 
@@ -71,8 +77,6 @@ function gradlogp(β)
     return -Y
 end
 ```
-
-Each intermediate assignment forces Julia to emit a separate broadcast kernel with a small enough gc-transition bundle that Enzyme can handle.  This restriction goes away when the upstream Enzyme fix lands; until then it applies to every gradient written for the GPU + Enzyme path.
 
 Mooncake does not have this restriction.
 
@@ -152,7 +156,7 @@ chain = sample(model, sampler, 1_600;
 
 Posterior mean recovery error `‖β_post − β_true‖ / ‖β_true‖` should land in the 0.1–0.2 range after a few hundred post-warmup samples.
 
-### Enzyme backend (requires `pmcmc_matmul` and staged broadcasts)
+### Enzyme backend (requires `pmcmc_matmul)
 
 Same model, with the GPU-Enzyme restrictions applied: every `*` becomes `pmcmc_matmul`, every `dot` becomes `pmcmc_dot`, and every gradient broadcast is expanded into single-op stages:
 
