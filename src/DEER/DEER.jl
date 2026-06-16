@@ -205,15 +205,9 @@ struct ReverseOnGrad <: HVPStrategy end
 
 _hvp_strategy(::AbstractADType) = ForwardOnGrad()
 _hvp_strategy(::ADTypes.AutoMooncake) = ReverseOnGrad()
-if isdefined(ADTypes, :AutoZygote)
-    _hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
-end
-if isdefined(ADTypes, :AutoReverseDiff)
-    _hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
-end
-if isdefined(ADTypes, :AutoTracker)
-    _hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
-end
+_hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
+_hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
+_hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
 
 #=
 Hooks for backend-specific normalization of the user's `backend`.
@@ -231,10 +225,9 @@ EnzymeExt specializes it to set `function_annotation=Enzyme.Const` so
 Enzyme doesn't throw `EnzymeMutabilityException` on a closure that captures
 `gradlogp`.
 
-Default for both is identity.
 =#
-_hvp_forward_backend(backend::AbstractADType) = backend
-_hvp_closure_backend(backend::AbstractADType) = backend
+_hvp_forward_backend(backend::AbstractADType) = DI.outer(backend)
+_hvp_closure_backend(backend::AbstractADType) = DI.inner(backend)
 
 function _prepare_hvp_via_grad_reverse(
     gradlogp, backend::AbstractADType, x_template::AbstractVector

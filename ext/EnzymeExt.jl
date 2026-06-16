@@ -17,6 +17,8 @@ using Enzyme.EnzymeCore.EnzymeRules:
     overwritten,
     width
 
+# TODO: Implement matmul overloads upstream in Enzyme. See: https://github.com/EnzymeAD/Enzyme.jl/issues/3122
+
 #=
 Tell DEER's forward-on-grad HVP path how to normalize a plain `AutoEnzyme()`:
 pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const`. Pinning
@@ -34,7 +36,11 @@ reuse, and Enzyme aborts with `EnzymeRuntimeActivityError`. With runtime
 activity, the shadow is tracked dynamically.
 =#
 function DEER._hvp_forward_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Forward) : backend.mode
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Forward)
+    else
+        backend.mode
+    end
     annotation = A === Nothing ? Enzyme.Const : A
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
@@ -48,7 +54,11 @@ runtime activity. As in `_hvp_forward_backend`, the two fields are
 normalized independently.
 =#
 function DEER._hvp_closure_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
-    mode = backend.mode === nothing ? Enzyme.set_runtime_activity(Enzyme.Reverse) : backend.mode
+    mode = if backend.mode === nothing
+        Enzyme.set_runtime_activity(Enzyme.Reverse)
+    else
+        backend.mode
+    end
     annotation = A === Nothing ? Enzyme.Const : A
     return ADTypes.AutoEnzyme(; mode=mode, function_annotation=annotation)
 end
