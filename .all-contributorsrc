@@ -45,6 +45,15 @@
         "review",
         "ideas"
       ]
+    },
+    {
+      "login": "wsmoses",
+      "name": "William Moses",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1260124?v=4",
+      "profile": "http://wsmoses.com",
+      "contributions": [
+        "review"
+      ]
     }
   ]
 }
