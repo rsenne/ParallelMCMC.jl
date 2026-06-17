@@ -13,6 +13,7 @@ All samplers take a [`DensityModel`](@ref) as their first argument.  A `DensityM
 
 ```julia
 using ParallelMCMC, MCMCChains
+using ADTypes, Enzyme
 
 # Banana-shaped target in 2-D
 function logp(x)
@@ -30,12 +31,13 @@ model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 
 ---
 
-## ParallelMALASampler — the primary algorithm
+## ParallelMALASampler
 
 [`ParallelMALASampler`](@ref) reformulates a trajectory of `T` MALA steps as a fixed-point problem and solves it via Newton iterations, each of which costs $O(\log T)$ parallel work via an associative prefix scan.  Wall-clock time per sample is therefore sublinear in chain length on multi-core CPUs and GPUs.
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag, damping=0.5)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag, damping=0.5,
+                              backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
                chain_type=MCMCChains.Chains, progress=true)
@@ -59,7 +61,8 @@ The `jacobian` keyword controls how the per-step Jacobian is approximated during
 For high-dimensional targets, `:stoch_diag` with a small number of `probes` is a good trade-off:
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=128, jacobian=:stoch_diag, probes=2)
+sampler = ParallelMALASampler(0.1; T=128, jacobian=:stoch_diag, probes=2,
+                              backend=AutoEnzyme())
 ```
 
 ### Damping
@@ -71,18 +74,10 @@ Setting `damping < 1` blends the Newton update with the previous iterate, which 
 The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic.  To run DEER on GPU:
 
 1. Implement `logdensity` and `grad_logdensity` using GPU-compatible operations.
-2. Pass `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
+2. Pass for example, `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
 3. Pass a `CuVector` as `initial_params` to `sample`.
 
-```julia
-using CUDA, ADTypes
-
-sampler = ParallelMALASampler(0.1f0; T=64, backend=ADTypes.AutoEnzyme())
-
-chain = sample(model, sampler, 500;
-               initial_params=CUDA.randn(Float32, 2),
-               chain_type=MCMCChains.Chains)
-```
+GPU execution has its own caveats (Turing models are CPU-only, `AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients should avoid scalar indexing).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
 
 ---
 
@@ -104,7 +99,7 @@ end
 
 model = DensityModel(normal_model(1.5))   # param_names=[:μ] extracted automatically
 
-chain = sample(model, ParallelMALASampler(0.1; T=64), 500;
+chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()), 500;
                chain_type=MCMCChains.Chains)
 ```
 
@@ -143,7 +138,8 @@ As above, the returned chain will always contain parameters in the original spac
 All samplers support `MCMCThreads()`.  Start Julia with multiple threads (e.g. `julia -t 4`):
 
 ```julia
-chain = sample(model, ParallelMALASampler(0.1; T=64), MCMCThreads(), 500, 4;
+chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()),
+               MCMCThreads(), 500, 4;
                chain_type=MCMCChains.Chains)
 ```
 
@@ -168,7 +164,7 @@ baseline = sample(model, AdaptiveMALASampler(0.1; n_warmup=500), 600;
 eps_tuned = baseline[end, :step_size, 1]
 
 # Step 2: run DEER with the tuned step size
-chain = sample(model, ParallelMALASampler(eps_tuned; T=64), 2_000;
+chain = sample(model, ParallelMALASampler(eps_tuned; T=64, backend=AutoEnzyme()), 2_000;
                chain_type=MCMCChains.Chains)
 ```
 

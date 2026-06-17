@@ -1,10 +1,13 @@
 using Test
 using Random
 using LinearAlgebra
+using ADTypes
+using Enzyme
 
 using ParallelMCMC
 const MALA = ParallelMCMC.MALA
 const DEER = ParallelMCMC.DEER
+const _AD = ADTypes.AutoEnzyme()
 
 # Standard normal target in R^d
 logp_stdnormal(x) = -0.5 * dot(x, x)
@@ -32,7 +35,7 @@ function _make_rec(tape, ε)
     step_fwd =
         (x, tt) ->
             MALA.mala_step_taped(logp_stdnormal, gradlogp_stdnormal, x, ε, tt.ξ, tt.u)
-    hvp_fn = (pt, dir) -> DEER._hvp_nopre(gradlogp_stdnormal, DEER.DEFAULT_BACKEND, pt, dir)
+    hvp_fn = (pt, dir) -> DEER._hvp_nopre(gradlogp_stdnormal, _AD, pt, dir)
     jvp =
         (x, tt, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
             logp_stdnormal, gradlogp_stdnormal, x, ε, tt.ξ, tt.u, v, hvp_fn

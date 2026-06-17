@@ -5,6 +5,10 @@ using Statistics
 using MCMCChains
 
 using ParallelMCMC
+using ADTypes
+using Enzyme
+
+const _AD = ADTypes.AutoEnzyme()
 
 logp_deer(x) = -0.5 * dot(x, x)
 gradlogp_deer(x) = -x
@@ -16,7 +20,7 @@ gradlogp_quartic_deer(x) = @. -x - 0.4 * x^3
 hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
 
 @testset "ParallelMALASampler construction" begin
-    s = ParallelMALASampler(0.05)
+    s = ParallelMALASampler(0.05; backend=_AD)
     @test s isa ParallelMCMC.AbstractMCMC.AbstractSampler
     @test s.epsilon == 0.05
     @test s.T == 64
@@ -24,17 +28,17 @@ hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
     @test s.jacobian === :stoch_diag
 
     # keyword overrides
-    s2 = ParallelMALASampler(0.1; T=32, jacobian=:stoch_diag, damping=0.8)
+    s2 = ParallelMALASampler(0.1; T=32, jacobian=:stoch_diag, damping=0.8, backend=_AD)
     @test s2.T == 32
     @test s2.jacobian === :stoch_diag
     @test s2.damping == 0.8
-    @test_throws ArgumentError ParallelMALASampler(0.1; jacobian=:full)
+    @test_throws ArgumentError ParallelMALASampler(0.1; jacobian=:full, backend=_AD)
 end
 
 @testset "ParallelMALASampler initial step" begin
     rng = MersenneTwister(42)
     model = DensityModel(logp_deer, gradlogp_deer, 3)
-    sampler = ParallelMALASampler(0.05; T=16)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
     trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
 
@@ -53,7 +57,7 @@ end
 @testset "ParallelMALASampler initial step respects initial_params" begin
     rng = MersenneTwister(42)
     model = DensityModel(logp_deer, gradlogp_deer, 3)
-    sampler = ParallelMALASampler(0.05; T=8)
+    sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
     x0 = [1.0, 2.0, 3.0]
     x0_copy = copy(x0)
 
@@ -74,23 +78,14 @@ end
     tape = [ParallelMCMC.MALATapeElement(randn(rng, D), rand(rng)) for _ in 1:T]
     model = DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D)
 
-    rec_ad = ParallelMCMC._build_mala_deer_rec(
-        model, ε, tape, zeros(D); backend=ParallelMCMC.DEER.DEFAULT_BACKEND
-    )
+    rec_ad = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D); backend=_AD)
     x = randn(rng, D)
     v = randn(rng, D)
     te = tape[1]
 
     f_ad, jvp_ad = rec_ad.fwd_and_jvp(x, te, v)
     f_ref, jvp_ref = ParallelMCMC.MALA.mala_step_taped_and_jvp(
-        logp_quartic_deer,
-        gradlogp_quartic_deer,
-        x,
-        ε,
-        te.ξ,
-        te.u,
-        v,
-        hvp_quartic_deer,
+        logp_quartic_deer, gradlogp_quartic_deer, x, ε, te.ξ, te.u, v, hvp_quartic_deer
     )
 
     @test f_ad ≈ f_ref atol=1e-10 rtol=1e-10
@@ -111,7 +106,7 @@ end
         grad_logdensity_batch=gradlogp_batch_deer,
     )
 
-    rec = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D))
+    rec = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D); backend=_AD)
     @test rec.fwd_and_jvp_batch !== nothing
 
     X = randn(rng, D, T)
@@ -132,7 +127,7 @@ end
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin
     rng = MersenneTwister(7)
     model = DensityModel(logp_deer, gradlogp_deer, 2)
-    sampler = ParallelMALASampler(0.05; T=8)
+    sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
 
     trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
     @test state.t == 1
@@ -167,7 +162,7 @@ end
         grad_logdensity_batch=gradlogp_batch_deer,
         hvp_batch=(X, V) -> -V,
     )
-    sampler = ParallelMALASampler(0.05; T=8)
+    sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
 
     _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler; initial_params=zeros(2))
     @test batch_calls[] ≥ 1
@@ -186,7 +181,7 @@ end
     rng = MersenneTwister(99)
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     T = 4
-    sampler = ParallelMALASampler(0.05; T=T)
+    sampler = ParallelMALASampler(0.05; T=T, backend=_AD)
 
     _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
 
@@ -206,7 +201,7 @@ end
 
 @testset "ParallelMALASampler sample() end-to-end" begin
     model = DensityModel(logp_deer, gradlogp_deer, 2)
-    sampler = ParallelMALASampler(0.05; T=16)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
     samples = sample(MersenneTwister(1), model, sampler, 50; progress=false)
     @test length(samples) == 50
@@ -214,7 +209,7 @@ end
 
 @testset "ParallelMALASampler sample() with chain_type=Chains" begin
     model = DensityModel(logp_deer, gradlogp_deer, 2)
-    sampler = ParallelMALASampler(0.05; T=16)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
     chain = sample(
         MersenneTwister(1),
@@ -236,7 +231,7 @@ end
 
 @testset "ParallelMALASampler sample() with custom param_names" begin
     model = DensityModel(logp_deer, gradlogp_deer, 2)
-    sampler = ParallelMALASampler(0.05; T=16)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
     chain = sample(
         MersenneTwister(2),
@@ -255,7 +250,7 @@ end
 @testset "ParallelMALASampler stationary distribution" begin
     D = 3
     model = DensityModel(logp_deer, gradlogp_deer, D)
-    sampler = ParallelMALASampler(0.1; T=32, damping=0.5)
+    sampler = ParallelMALASampler(0.1; T=32, damping=0.5, backend=_AD)
 
     chain = sample(
         MersenneTwister(2025),
@@ -278,7 +273,7 @@ end
 
 @testset "ParallelMALASampler parallel chains via MCMCThreads" begin
     model = DensityModel(logp_deer, gradlogp_deer, 2)
-    sampler = ParallelMALASampler(0.05; T=8)
+    sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
 
     chains = sample(
         MersenneTwister(42),

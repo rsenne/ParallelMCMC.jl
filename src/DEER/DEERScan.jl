@@ -140,8 +140,10 @@ function solve_affine_scan_diag!(
         last_level = (offset << 1) >= T
         @views begin
             if !last_level
-                # The destination already has the older prefix up to offset ÷ 2;
-                # only the newly exposed unchanged segment needs refreshing.
+                #=
+                The destination already has the older prefix up to offset ÷ 2;
+                only the newly exposed unchanged segment needs refreshing.
+                =#
                 copy_start = offset == 1 ? 1 : (offset >> 1) + 1
                 alpha_new[:, copy_start:offset] .= alpha[:, copy_start:offset]
                 beta_new[:, copy_start:offset] .= beta[:, copy_start:offset]

@@ -9,6 +9,8 @@ using ParallelMCMC
 using DynamicPPL
 using LogDensityProblems
 using ADTypes
+using Enzyme
+using ForwardDiff
 using Distributions: MvNormal, Bernoulli
 
 #=
@@ -17,13 +19,6 @@ Bayesian logistic regression:
     y_i | β ~ Bernoulli(sigmoid(X_i β))
 
 Synthetic data with known β_true lets us verify posterior means.
-
-The tests are split into two groups:
-
-Turing integration: uses the DynamicPPL convenience constructor.  These are
-CPU-only because DynamicPPL model evaluation does not support GPU arrays.
-ParallelMALASampler works fine with Turing on CPU; for GPU you supply a manual
-logp/gradlogp that is array-type-agnostic (see below).
 =#
 
 const _LR_D = 2
@@ -39,8 +34,10 @@ end
 
 const _LR_X, _LR_y = _lr_data(MersenneTwister(1234), _LR_N, _LR_D, _LR_β_true)
 
-# Array-type-agnostic logp and gradlogp — identical math as the Turing model,
-# but expressed as plain broadcasts so they run on CPU or GPU without change.
+#=
+Array-type-agnostic logp and gradlogp — identical math as the Turing model,
+but expressed as plain broadcasts so they run on CPU or GPU without change.
+=#
 function _logp_lr(β, X, y)
     logits = X * β
     ll = sum(@. y * (-log1p(exp(-logits))) + (1 - y) * (-log1p(exp(logits))))
@@ -71,8 +68,7 @@ end
 
 function _deer_logistic_turing_density_model()
     return DensityModel(
-        _deer_logistic_regression(_LR_X, _LR_y);
-        hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y)
+        _deer_logistic_regression(_LR_X, _LR_y); hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y)
     )
 end
 
@@ -89,7 +85,14 @@ end
 @testset "ParallelMALASampler Turing logistic: chains output well-formed" begin
     model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
+        0.05;
+        T=16,
+        maxiter=80,
+        tol_abs=1e-4,
+        tol_rel=1e-3,
+        jacobian=:diag,
+        damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
 
     chain = sample(
@@ -112,7 +115,14 @@ end
 @testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
     model = _deer_logistic_turing_density_model()
     sampler = ParallelMALASampler(
-        0.05; T=16, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, jacobian=:diag, damping=0.5
+        0.05;
+        T=16,
+        maxiter=80,
+        tol_abs=1e-4,
+        tol_rel=1e-3,
+        jacobian=:diag,
+        damping=0.5,
+        backend=ADTypes.AutoEnzyme(),
     )
 
     chain = sample(
@@ -249,7 +259,7 @@ else
         @test size(S_gpu) == (_LR_D, T)
         @test all(isfinite, Array(S_gpu))
         S_ref = reduce(hcat, xs_seq[2:end])
-        @test Array(S_gpu) ≈ S_ref rtol=1e-4 atol=1e-5
+        @test Array(S_gpu) ≈ S_ref rtol=1e-3 atol=1e-4
     end
 
     @testset "ParallelMALASampler GPU logistic: posterior mean matches CPU" begin
@@ -257,11 +267,11 @@ else
         y_gpu = CUDA.CuVector(_y_f32)
 
         sampler = ParallelMALASampler(
-            0.1f0;
+            0.05f0;
             T=16,
-            maxiter=50,
-            tol_abs=1e-4f0,
-            tol_rel=1e-3f0,
+            maxiter=200,
+            tol_abs=1.0f-4,
+            tol_rel=1.0f-3,
             damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )

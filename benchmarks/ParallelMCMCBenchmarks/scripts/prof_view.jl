@@ -27,6 +27,8 @@ or:
 using Random
 using CUDA
 using ParallelMCMC
+using ADTypes
+using Enzyme
 using ParallelMCMCBenchmarks
 
 const BayesLogReg = ParallelMCMCBenchmarks.BayesLogReg
@@ -52,7 +54,7 @@ function build_raw_deer_problem(
     epsilon::Float32,
     T::Int,
     cholM=nothing,
-    backend=DEER.DEFAULT_BACKEND,
+    backend=ADTypes.AutoEnzyme(),
 )
     FP = typeof(epsilon)
     D = model.dim

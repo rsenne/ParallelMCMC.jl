@@ -58,6 +58,7 @@ The simplest entry point is [`DensityModel`](@ref), which wraps a log-density an
 
 ```julia
 using ParallelMCMC, MCMCChains
+using ADTypes, Enzyme
 
 # Example: 2-D standard normal
 logp(x)      = -0.5 * sum(abs2, x)
@@ -70,7 +71,8 @@ model = DensityModel(logp, grad_logp, 2;
 ### DEER — parallel-across-sequence (primary algorithm)
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
+                              backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
                chain_type=MCMCChains.Chains)
@@ -123,6 +125,7 @@ See [Getting Started](10-getting-started.md) for worked examples and guidance on
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/rsenne"><img src="https://avatars.githubusercontent.com/u/50930199?v=4?s=100" width="100px;" alt="Ryan Senne"/><br /><sub><b>Ryan Senne</b></sub></a><br /><a href="#code-rsenne" title="Code">💻</a> <a href="#maintenance-rsenne" title="Maintenance">🚧</a> <a href="#test-rsenne" title="Tests">⚠️</a> <a href="#ideas-rsenne" title="Ideas, Planning, & Feedback">🤔</a> <a href="#review-rsenne" title="Reviewed Pull Requests">👀</a> <a href="#doc-rsenne" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/penelopeysm"><img src="https://avatars.githubusercontent.com/u/122629585?v=4?s=100" width="100px;" alt="Penelope Yong"/><br /><sub><b>Penelope Yong</b></sub></a><br /><a href="#code-penelopeysm" title="Code">💻</a> <a href="#test-penelopeysm" title="Tests">⚠️</a> <a href="#ideas-penelopeysm" title="Ideas, Planning, & Feedback">🤔</a> <a href="#review-penelopeysm" title="Reviewed Pull Requests">👀</a> <a href="#doc-penelopeysm" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://gdalle.github.io/"><img src="https://avatars.githubusercontent.com/u/22795598?v=4?s=100" width="100px;" alt="Guillaume Dalle"/><br /><sub><b>Guillaume Dalle</b></sub></a><br /><a href="#review-gdalle" title="Reviewed Pull Requests">👀</a> <a href="#ideas-gdalle" title="Ideas, Planning, & Feedback">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://wsmoses.com"><img src="https://avatars.githubusercontent.com/u/1260124?v=4?s=100" width="100px;" alt="William Moses"/><br /><sub><b>William Moses</b></sub></a><br /><a href="#review-wsmoses" title="Reviewed Pull Requests">👀</a></td>
     </tr>
   </tbody>

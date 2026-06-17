@@ -3,7 +3,6 @@ module DEER
 using LinearAlgebra
 using DifferentiationInterface
 using ADTypes: ADTypes, AbstractADType
-import Enzyme: Enzyme
 using Random
 using CUDA: CUDA
 
@@ -11,29 +10,9 @@ include("DEERScan.jl")
 using .DEERScan
 
 const DI = DifferentiationInterface
-const DEFAULT_BACKEND = ADTypes.AutoEnzyme(;
-    mode=Enzyme.Forward, function_annotation=Enzyme.Duplicated
-)
-const DEFAULT_HVP_BACKEND = DI.SecondOrder(
-    DEFAULT_BACKEND,
-    # The log-density function itself is non-active in the reverse pass.
-    # Marking it duplicated makes DynamicPPL closure fields look active to Enzyme.
-    ADTypes.AutoEnzyme(;
-        mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
-        function_annotation=Enzyme.Const,
-    ),
-)
 
 export TapedRecursion,
-    DEERWorkspace,
-    deer_update!,
-    deer_update,
-    solve,
-    _prepare_hvp,
-    _hvp_prepared,
-    _hvp_nopre,
-    DEFAULT_BACKEND,
-    DEFAULT_HVP_BACKEND
+    DEERWorkspace, deer_update!, deer_update, solve, _prepare_hvp, _hvp_prepared, _hvp_nopre
 
 """
 Deterministic recursion driven by a pre-generated tape.
@@ -91,7 +70,11 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     S_tmp = similar(S_template)
     diff_buf = similar(S_template)
     zbuf = similar(s0_template)
-    zhost = zbuf isa CUDA.CuArray ? Vector{eltype(s0_template)}(undef, length(s0_template)) : nothing
+    zhost = if zbuf isa CUDA.CuArray
+        Vector{eltype(s0_template)}(undef, length(s0_template))
+    else
+        nothing
+    end
     jt_buf = similar(s0_template)
     xbar_buf = similar(s0_template)
     scan = DEERScan.AffineScanWorkspace(S_template)
@@ -109,7 +92,9 @@ end
 function _prepare_hvp(f, backend::AbstractADType, x_template::AbstractVector)
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
-    return DI.prepare_pushforward(f, backend, x_template, (v_template,); strict=Val(false))
+    return DI.prepare_pushforward(
+        f, _hvp_forward_backend(backend), x_template, (v_template,)
+    )
 end
 
 function _materialize_ad_array(x::AbstractArray)
@@ -131,49 +116,14 @@ function _hvp_prepared(
 )
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
+    res = DI.pushforward(f, prep, _hvp_forward_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
 function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    prep = DI.prepare_pushforward(f, backend, x_exec, (v_exec,); strict=Val(false))
-    res = DI.pushforward(f, prep, backend, x_exec, (v_exec,))
-    return res isa Tuple ? first(res) : res
-end
-
-_hvp_backend(backend::AbstractADType) = backend
-
-_hvp_second_order_backend(backend::AbstractADType) = DI.SecondOrder(backend, backend)
-_hvp_second_order_backend(backend::DI.SecondOrder) = backend
-
-_hvp_backend(::ADTypes.AutoEnzyme) = DEFAULT_BACKEND
-
-_hvp_second_order_backend(::ADTypes.AutoEnzyme) = DEFAULT_HVP_BACKEND
-
-function _prepare_logdensity_hvp(f, backend::AbstractADType, x_template::AbstractVector)
-    v_template = similar(x_template)
-    fill!(v_template, zero(eltype(x_template)))
-    return DI.prepare_hvp(f, backend, x_template, (v_template,); strict=Val(false))
-end
-
-function _logdensity_hvp_prepared(
-    f, prep, backend::AbstractADType, x::AbstractVector, v::AbstractVector
-)
-    x_exec = _materialize_ad_vector(x)
-    v_exec = _tangent_like(x_exec, v)
-    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
-    return res isa Tuple ? first(res) : res
-end
-
-function _logdensity_hvp_nopre(
-    f, backend::AbstractADType, x::AbstractVector, v::AbstractVector
-)
-    x_exec = _materialize_ad_vector(x)
-    v_exec = _tangent_like(x_exec, v)
-    prep = DI.prepare_hvp(f, backend, x_exec, (v_exec,); strict=Val(false))
-    res = DI.hvp(f, prep, backend, x_exec, (v_exec,))
+    res = DI.pushforward(f, _hvp_forward_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -183,7 +133,7 @@ function _prepare_batch_hvp_from_grad(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     return DI.prepare_pushforward(
-        grad_batch, backend, X_template, (V_template,); strict=Val(false)
+        grad_batch, _hvp_forward_backend(backend), X_template, (V_template,)
     )
 end
 
@@ -192,8 +142,157 @@ function _batch_hvp_from_grad_prepared(
 )
     X_exec = _materialize_ad_matrix(X)
     V_exec = _tangent_like(X_exec, V)
-    res = DI.pushforward(grad_batch, prep, backend, X_exec, (V_exec,))
+    res = DI.pushforward(grad_batch, prep, _hvp_forward_backend(backend), X_exec, (V_exec,))
     return res isa Tuple ? first(res) : res
+end
+
+#=
+---------------------------------------------------------------------------
+Reverse-on-grad HVP. Computes Hv as the gradient of
+`x -> pmcmc_dot(gradlogp(x), v)`, with `v` carried as a DI Constant context
+so a single `prepare_gradient` covers all subsequent Newton steps. The
+batched variant uses `B -> pmcmc_dotsum(grad_batch(B), V)` and exploits the
+column-independence of the user's batched gradient — its gradient w.r.t. B
+is the columnwise HVP.
+
+The reductions go through `pmcmc_dot`/`pmcmc_dotsum` (rather than `dot`/`sum`)
+so that on GPU the EnzymeExt reverse rules intercept them — otherwise Enzyme
+reverse-mode hits the `cuMemcpyDtoHAsync_v2` gc-transition abort (see the
+Enzyme rules in `ext/EnzymeExt.jl`).
+
+We bundle the closure with the prep so `prepare_gradient` and `gradient`
+see the same function instance (DI keys preparations on function identity).
+---------------------------------------------------------------------------
+=#
+import ..ParallelMCMC: pmcmc_dot, pmcmc_dotsum
+
+struct _HvpReverseClosure{F}
+    grad::F
+end
+(c::_HvpReverseClosure)(x, v) = pmcmc_dot(c.grad(x), v)
+
+struct _BatchHvpReverseClosure{F}
+    grad_batch::F
+end
+(c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
+
+#=
+Pick the AD-HVP fallback strategy from the user's backend.
+
+  ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
+                      `pmcmc_matmul` frule.
+  ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
+                      through the matmul and dot/sum rrules.
+
+These are singleton types rather than symbols so the choice dispatches
+statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
+concrete method (and one concrete return type) at compile time, without
+relying on constant propagation through `===`.
+
+Mooncake/Zygote: We route them through
+`ReverseOnGrad` as the default. both CPU and GPU run this path fine (see the
+Mooncake GPU test). `AutoEnzyme` stays on `ForwardOnGrad`: its reverse mode
+hits the gc-transition abort on GPU (see `ext/EnzymeExt.jl`), whereas
+`Enzyme.Forward` is robust on CuArrays once the matmul is wrapped.
+
+Note: forward mode is also supported for these backends via their forward counterparts.
+=#
+abstract type HVPStrategy end
+struct ForwardOnGrad <: HVPStrategy end
+struct ReverseOnGrad <: HVPStrategy end
+
+_hvp_strategy(::AbstractADType) = ForwardOnGrad()
+_hvp_strategy(::ADTypes.AutoMooncake) = ReverseOnGrad()
+_hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
+_hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
+_hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
+
+#=
+Hooks for backend-specific normalization of the user's `backend`.
+
+`_hvp_forward_backend` is for the forward-on-grad pushforward path
+(differentiates the user's `gradlogp` directly). EnzymeExt specializes it
+to pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const` when
+the user passed plain `AutoEnzyme()`, without pinning Forward, DI lowers
+through reverse mode and hits the gc-transition abort on GPU (see
+`ext/EnzymeExt.jl`).
+
+`_hvp_closure_backend` is for the reverse-on-grad gradient path on the
+read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.
+EnzymeExt specializes it to set `function_annotation=Enzyme.Const` so
+Enzyme doesn't throw `EnzymeMutabilityException` on a closure that captures
+`gradlogp`.
+
+=#
+_hvp_forward_backend(backend::AbstractADType) = DI.outer(backend)
+_hvp_closure_backend(backend::AbstractADType) = DI.inner(backend)
+
+function _prepare_hvp_via_grad_reverse(
+    gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    v_template = similar(x_template)
+    fill!(v_template, zero(eltype(x_template)))
+    f = _HvpReverseClosure(gradlogp)
+    eff_backend = _hvp_closure_backend(backend)
+    prep = DI.prepare_gradient(f, eff_backend, x_template, DI.Constant(v_template))
+    return (f, prep, eff_backend)
+end
+
+function _hvp_via_grad_reverse_prepared(prep_pair, x::AbstractVector, v::AbstractVector)
+    f, prep, eff_backend = prep_pair
+    return DI.gradient(f, prep, eff_backend, x, DI.Constant(v))
+end
+
+function _prepare_batch_hvp_via_grad_reverse(
+    grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    V_template = similar(X_template)
+    fill!(V_template, zero(eltype(X_template)))
+    f = _BatchHvpReverseClosure(grad_batch)
+    eff_backend = _hvp_closure_backend(backend)
+    prep = DI.prepare_gradient(f, eff_backend, X_template, DI.Constant(V_template))
+    return (f, prep, eff_backend)
+end
+
+function _batch_hvp_via_grad_reverse_prepared(
+    prep_pair, X::AbstractMatrix, V::AbstractMatrix
+)
+    f, prep, eff_backend = prep_pair
+    return DI.gradient(f, prep, eff_backend, X, DI.Constant(V))
+end
+
+#=
+Strategy-dispatched factories. Each method returns a closure with one
+concrete type, so the call site `_make_hvp_fn(_hvp_strategy(backend), ...)`
+is type-stable: dispatch on the singleton `HVPStrategy` picks the method
+at compile time, and the returned closure type is statically known.
+=#
+function _make_hvp_fn(
+    ::ForwardOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    prep = _prepare_hvp(gradlogp, backend, x_template)
+    return (pt, dir) -> _hvp_prepared(gradlogp, prep, backend, pt, dir)
+end
+
+function _make_hvp_fn(
+    ::ReverseOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    prep = _prepare_hvp_via_grad_reverse(gradlogp, backend, x_template)
+    return (pt, dir) -> _hvp_via_grad_reverse_prepared(prep, pt, dir)
+end
+
+function _make_hvp_batch_fn(
+    ::ForwardOnGrad, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    prep = _prepare_batch_hvp_from_grad(grad_batch, backend, X_template)
+    return (X, V) -> _batch_hvp_from_grad_prepared(grad_batch, prep, backend, X, V)
+end
+
+function _make_hvp_batch_fn(
+    ::ReverseOnGrad, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    prep = _prepare_batch_hvp_via_grad_reverse(grad_batch, backend, X_template)
+    return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
 end
 
 @inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}
@@ -221,8 +320,9 @@ end
 @inline _rademacher!(z::AbstractArray, rng::AbstractRNG, ::Nothing) = _rademacher!(z, rng)
 
 @inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG) = _rademacher!(Z, rng)
-@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) =
-    _rademacher!(Z, rng, host)
+@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) = _rademacher!(
+    Z, rng, host
+)
 
 function jac_diag_via_jvps(rec::TapedRecursion, x::AbstractVector, t::Int)
     D = length(x)
