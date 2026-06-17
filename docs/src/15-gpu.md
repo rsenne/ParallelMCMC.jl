@@ -299,9 +299,9 @@ This recovers the same posterior as the fallback version — the only difference
 
 | Backend | GPU support | Restrictions | Recommended when |
 |---|---|---|---|
-| `AutoEnzyme()` | Via `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` and single-op-broadcast gradients | The restrictions above, plus no in-place mutation in `gradlogp`| You want Enzyme's reverse-mode performance and are willing to follow the rules above |
+| `AutoEnzyme()` | Via `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` and single-op-broadcast gradients | The restrictions above | You want Enzyme's reverse-mode performance and are willing to follow the rules above |
 | `AutoMooncake(; config=nothing)` | Native (no wrappers) | Slower compile | You want plain Julia operators with no rewriting |
-| `AutoZygote()` | Native (no wrappers) | ChainRules-based; reverse-only | You want plain Julia operators and are already on the ChainRules ecosystem |
+| `AutoZygote()` | Native (no wrappers) | ChainRules-based; reverse-only, plus no in-place mutation in `gradlogp`| You want plain Julia operators and are already on the ChainRules ecosystem |
 | `AutoForwardDiff()` | Native; works with `*` / `dot` / `sum` / broadcasts on `CuArray{Dual}`| Cost scales as O(D)| Low-D models, prototyping, validating Mooncake/Enzyme results |
 
 If you supply `hvp` / `hvp_batch` analytically, none of the above matters — those run as plain kernels and the sampler does not invoke a backend.
