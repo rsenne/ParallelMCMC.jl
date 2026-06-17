@@ -54,12 +54,14 @@ pkg> add ParallelMCMC
 
 ```julia
 using ParallelMCMC, MCMCChains
+using ADTypes, Enzyme
 
 logp(x)      = -0.5 * sum(abs2, x)            # 2-D standard normal
 grad_logp(x) = -x
 
 model   = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag)
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
+                              backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500; chain_type=MCMCChains.Chains)
 ```

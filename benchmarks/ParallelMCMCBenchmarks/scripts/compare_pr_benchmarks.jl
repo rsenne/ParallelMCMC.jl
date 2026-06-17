@@ -108,7 +108,10 @@ function write_markdown(path, rows; warn_ratio, fail_ratio)
             "`.",
         )
         println(io)
-        println(io, "| Benchmark | Base median | PR median | Ratio | Allocs | Memory delta | Status |")
+        println(
+            io,
+            "| Benchmark | Base median | PR median | Ratio | Allocs | Memory delta | Status |",
+        )
         println(io, "|---|---:|---:|---:|---:|---:|---|")
         for row in rows
             println(
@@ -167,8 +170,12 @@ function main(args=ARGS)
     base === nothing && error("--base is required")
     head === nothing && error("--head is required")
 
-    warn_ratio = parse(Float64, _option(args, "--warn-ratio", get(ENV, "PMCMC_BENCH_WARN_RATIO", "1.25")))
-    fail_ratio = parse(Float64, _option(args, "--fail-ratio", get(ENV, "PMCMC_BENCH_FAIL_RATIO", "1.75")))
+    warn_ratio = parse(
+        Float64, _option(args, "--warn-ratio", get(ENV, "PMCMC_BENCH_WARN_RATIO", "1.25"))
+    )
+    fail_ratio = parse(
+        Float64, _option(args, "--fail-ratio", get(ENV, "PMCMC_BENCH_FAIL_RATIO", "1.75"))
+    )
     markdown = _option(args, "--markdown", "")
 
     warn_ratio > 1 || error("--warn-ratio must be greater than 1")

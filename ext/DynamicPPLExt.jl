@@ -4,18 +4,19 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using AbstractMCMC: AbstractMCMC
-using Enzyme: Enzyme
 using MCMCChains: MCMCChains
 using LogDensityProblems: LogDensityProblems
 
 """
-    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse), function_annotation=Enzyme.Duplicated), hvp=nothing)
+    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing)
 
 Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
 computation via DynamicPPL's `adtype` interface.
 
-Requires `DynamicPPL` to be loaded.
+Requires `DynamicPPL`, `ForwardDiff`, and `LogDensityProblems` to be loaded (these are the
+weak-dependency triggers for this extension; `ForwardDiff` is what backs the default
+`AutoForwardDiff()` AD path).
 
 # Example
 ```julia
@@ -26,18 +27,15 @@ using Turing, ParallelMCMC, MCMCChains
     y ~ Normal(μ, 0.5)
 end
 
+# AutoForwardDiff is the default. For larger models pass an explicit backend
+# and `using` the corresponding package (Enzyme, Mooncake).
 model = DensityModel(mymodel(1.5))
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
                chain_type=MCMCChains.Chains, discard_warmup=true, progress=true)
 ```
 """
 function ParallelMCMC.DensityModel(
-    turing_model::DynamicPPL.Model;
-    ad_backend=ADTypes.AutoEnzyme(;
-        mode=Enzyme.set_runtime_activity(Enzyme.Reverse),
-        function_annotation=Enzyme.Duplicated,
-    ),
-    hvp=nothing,
+    turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing
 )
     # Sample in linked/unconstrained space and let DynamicPPL provide the gradient.
     ld = DynamicPPL.LogDensityFunction(

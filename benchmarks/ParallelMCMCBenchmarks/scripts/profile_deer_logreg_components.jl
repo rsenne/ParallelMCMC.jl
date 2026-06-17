@@ -9,6 +9,8 @@ using Statistics
 
 using AbstractMCMC: sample
 using ParallelMCMC
+using ADTypes
+using Enzyme
 using ParallelMCMCBenchmarks
 using CUDA
 
@@ -67,7 +69,9 @@ function build_problem()
 end
 
 function build_rec(model_gpu, x0_gpu, tape)
-    return ParallelMCMC._build_mala_deer_rec(model_gpu, epsilon, tape, x0_gpu;)
+    return ParallelMCMC._build_mala_deer_rec(
+        model_gpu, epsilon, tape, x0_gpu; backend=ADTypes.AutoEnzyme()
+    )
 end
 
 function solve_prebuilt(rec, x0_gpu, ws; seed=42, return_info=false)
@@ -131,6 +135,7 @@ deer_gpu = ParallelMALASampler(
     tol_rel=tol_rel,
     damping=damping,
     probes=probes,
+    backend=ADTypes.AutoEnzyme(),
 )
 
 println("=" ^ 96)
