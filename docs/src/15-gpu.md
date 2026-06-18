@@ -56,19 +56,15 @@ When you do **not** need them:
 
 These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain `A * B` on `CuArray`s will work and the wrappers will be deprecated.
 
-### 3. Gradients must be written as single-op broadcasts, not fused expressions
+### 3. Some Enzyme GPU gradients hit a `gc-transition` abort. Staging them as single ops is a workaround
 
-Enzyme on GPU can lower a single broadcast kernel at a time but aborts when a kernel fuses multiple operations.  This means the fused form
+Certain `CuArray` gradient expressions abort during Enzyme compilation on GPU with the same `gc-transition` failure as limitation 2. In practice the fused form below aborts while the staged form compiles, so **writing the gradient as single-op stages is a reliable workaround**:
 
 ```julia
-# BROKEN: aborts during Enzyme compile on GPU
+# ABORTS during Enzyme compile on GPU
 gradlogp(β) = -β .- pmcmc_matmul(transpose(X), pmcmc_matmul(X, β)) ./ Float32(N)
-```
 
-must be written as a sequence of single-op stages:
-
-```julia
-# WORKS: each line is one CUDA kernel Enzyme can differentiate
+# WORKS: built up one broadcast op at a time
 function gradlogp(β)
     Xβ = pmcmc_matmul(X, β)
     Y  = pmcmc_matmul(transpose(X), Xβ)
