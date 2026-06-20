@@ -8,6 +8,8 @@ ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 AbstractMCMC = "80f14c24-f653-4e6a-9b94-39d6b0f70001"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
+FlexiChains = "4a37a8b9-6e57-4b92-8664-298d46e639f7"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -16,15 +18,15 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 [weakdeps]
 DynamicPPL = "366bfd00-2699-11ea-058f-f148b4cae6d8"
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
-ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
 Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [extensions]
-DynamicPPLExt = ["DynamicPPL", "ForwardDiff", "LogDensityProblems"]
+DynamicPPLExt = ["DynamicPPL", "FlexiChains", "ForwardDiff", "LogDensityProblems", "MCMCChains"]
 EnzymeExt = "Enzyme"
 LogDensityProblemsExt = "LogDensityProblems"
+MCMCChainsExt = ["AbstractMCMC", "MCMCChains"]
 
 [compat]
 ADTypes = "1.21.0"
@@ -34,6 +36,7 @@ CUDA_Runtime_jll = "0.21"
 DifferentiationInterface = "0.7.13"
 DynamicPPL = "0.40.6, 0.41"
 Enzyme = "0.13.146"
+FlexiChains = "0.6.15"
 ForwardDiff = "1"
 LinearAlgebra = "1"
 LogDensityProblems = "2"

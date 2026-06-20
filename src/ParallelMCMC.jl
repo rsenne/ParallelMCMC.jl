@@ -2,7 +2,7 @@ module ParallelMCMC
 
 using AbstractMCMC
 using CUDA
-using MCMCChains
+using FlexiChains
 using LinearAlgebra
 using Random
 using Statistics

@@ -196,10 +196,10 @@ function AbstractMCMC.bundle_samples(
     model::DensityModel,
     sampler::MALASampler,
     state::MALAState,
-    ::Type{MCMCChains.Chains};
+    ::Type{Tchn};
     param_names=nothing,
     kwargs...,
-)
+) where {Tchn}
     N = length(samples)
     D = model.dim
 
@@ -223,11 +223,7 @@ function AbstractMCMC.bundle_samples(
         internals[i, 2] = s.accepted ? 1.0 : 0.0
     end
 
-    return MCMCChains.Chains(
-        hcat(vals, internals),
-        vcat(names, internal_names),
-        Dict(:parameters => names, :internals => internal_names),
-    )
+    return _construct_chain(Tchn, vals, internals, names, internal_names, model, samples)
 end
 
 """
@@ -618,22 +614,51 @@ function _sample_parallel_mala_chain(
         end
     end
 
-    return _construct_chain(Tchn, vals, internals, names, internal_names, model)
+    # If Tchn doesn't have a custom _construct_chain implementation this will throw an
+    # error, but we *should* have made sure that only chain types that _do_ have a
+    # _construct_chain implementation enter this function to begin with.
+    return _construct_chain(Tchn, vals, internals, names, internal_names, model, nothing)
 end
 
 function _construct_chain(
-    ::Type{MCMCChains.Chains},
+    ::Type{T},
+    ::AbstractMatrix{<:Real},
+    ::AbstractMatrix{<:Real},
+    ::Vector{Symbol},
+    ::Vector{Symbol},
+    ::DensityModel,
+    original_samples::Union{Nothing,<:Vector},
+) where {T}
+    # Catch-all for unsupported chain types.
+    if original_samples === nothing
+        error("original samples not provided; this should not happen! Please open an issue on ParallelMCMC.jl.")
+    end
+    # The user might have specifically asked for a generic chain type, e.g. Any. In such a
+    # case we don't emit this warning message
+    if !(typeof(original_samples) <: T)
+        @info "Chain type $(nameof(typeof(original_samples))) does not have a custom _construct_chain implementation; returning original vector of samples."
+    end
+    return original_samples
+end
+
+function _construct_chain(
+    ::Type{FlexiChains.FlexiChain{Symbol}},
     vals::AbstractMatrix{<:Real},
     internals::AbstractMatrix{<:Real},
     names::Vector{Symbol},
     internal_names::Vector{Symbol},
     model::DensityModel,
+    ::Union{Nothing,Vector},
 )
-    return MCMCChains.Chains(
-        hcat(vals, internals),
-        vcat(names, internal_names),
-        Dict(:parameters => names, :internals => internal_names),
+    # vals and internals are both `iters x params`
+    # FlexiChains expects `iters x chains x params`
+    arr = hcat(vals, internals)
+    arr = reshape(arr, size(arr, 1), 1, size(arr, 2))
+    params = (
+        FlexiChains.Parameter.(names)...,
+        FlexiChains.Extra.(internal_names)...
     )
+    return FlexiChains.FlexiChain{Symbol}(arr, params)
 end
 
 function _sample_parallel_mala_blocks(
@@ -711,6 +736,9 @@ function _default_parallel_mala_mcmcsample(
     )
 end
 
+has_parallel_sample_implementation(::Type{FlexiChains.FlexiChain{Symbol}}) = true
+has_parallel_sample_implementation(::Type) = false
+
 function AbstractMCMC.mcmcsample(
     rng::Random.AbstractRNG,
     model::DensityModel,
@@ -755,7 +783,7 @@ function AbstractMCMC.mcmcsample(
     N > 0 || error("the number of samples must be ≥ 1")
     N_int = Int(N)
 
-    if chain_type === MCMCChains.Chains
+    if has_parallel_sample_implementation(chain_type)
         return _sample_parallel_mala_chain(
             rng,
             model,
@@ -851,10 +879,10 @@ function AbstractMCMC.bundle_samples(
     model::DensityModel,
     sampler::ParallelMALASampler,
     state::ParallelMALAState,
-    ::Type{MCMCChains.Chains};
+    ::Type{Tchn};
     param_names=nothing,
     kwargs...,
-)
+) where {Tchn}
     N = length(samples)
     D = model.dim
 
@@ -876,11 +904,7 @@ function AbstractMCMC.bundle_samples(
         internals[i, 1] = samples[i].logp
     end
 
-    return MCMCChains.Chains(
-        hcat(vals, internals),
-        vcat(names, internal_names),
-        Dict(:parameters => names, :internals => internal_names),
-    )
+    return _construct_chain(Tchn, vals, internals, names, internal_names, model, samples)
 end
 
 """
@@ -1064,11 +1088,11 @@ function AbstractMCMC.bundle_samples(
     model::DensityModel,
     sampler::AdaptiveMALASampler,
     state::AdaptiveMALAState,
-    ::Type{MCMCChains.Chains};
+    ::Type{Tchn};
     param_names=nothing,
     discard_warmup=false,
     kwargs...,
-)
+) where {Tchn}
     filtered = discard_warmup ? filter(s -> !s.is_warmup, samples) : samples
     N = length(filtered)
     D = model.dim
@@ -1095,9 +1119,5 @@ function AbstractMCMC.bundle_samples(
         internals[i, 4] = s.is_warmup ? 1.0 : 0.0
     end
 
-    return MCMCChains.Chains(
-        hcat(vals, internals),
-        vcat(names, internal_names),
-        Dict(:parameters => names, :internals => internal_names),
-    )
+    return _construct_chain(Tchn, vals, internals, names, internal_names, model, filtered)
 end

@@ -4,8 +4,11 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using AbstractMCMC: AbstractMCMC
+using FlexiChains: FlexiChain, VarName
 using MCMCChains: MCMCChains
 using LogDensityProblems: LogDensityProblems
+
+CHAIN_TYPES = (MCMCChains.Chains, FlexiChain{VarName})
 
 """
     DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing)
@@ -100,18 +103,20 @@ for (Ttrans, Tspl, Tstate) in (
         ParallelMCMC.AdaptiveMALAState,
     ),
 )
-    @eval begin
-        function AbstractMCMC.bundle_samples(
-            ts::Vector{<:$Ttrans},
-            model::DensityModelLDF,
-            spl::$Tspl,
-            state::$Tstate,
-            chain_type::Type{MCMCChains.Chains};
-            discard_warmup::Bool=false,
-            kwargs...,
-        )
-            ts = discard_warmup ? filter(t -> !is_warmup(t), ts) : ts
-            return make_processed_dynamicppl_chain(MCMCChains.Chains, ts, model)
+    for Tchain in CHAIN_TYPES
+        @eval begin
+            function AbstractMCMC.bundle_samples(
+                ts::Vector{<:$Ttrans},
+                model::DensityModelLDF,
+                spl::$Tspl,
+                state::$Tstate,
+                chain_type::Type{$Tchain},
+                discard_warmup::Bool=false,
+                kwargs...,
+            )
+                ts = discard_warmup ? filter(t -> !is_warmup(t), ts) : ts
+                return make_processed_dynamicppl_chain($Tchain, ts, model)
+            end
         end
     end
 end
@@ -127,19 +132,23 @@ function make_processed_dynamicppl_chain(
     return AbstractMCMC.from_samples(Tchain, hcat(pwss))
 end
 
-function ParallelMCMC._construct_chain(
-    ::Type{MCMCChains.Chains},
-    vals::AbstractMatrix{<:Real},
-    internals::AbstractMatrix{<:Real},
-    ::Vector{Symbol},
-    internal_names::Vector{Symbol},
-    model::DensityModelLDF,
-)
-    pwss = map(zip(eachrow(vals), eachrow(internals))) do (val, internal)
-        stats = NamedTuple{Tuple(internal_names)}(internal)
-        DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
+# Must define separate methods for each chain type to avoid method ambiguity
+for T in CHAIN_TYPES
+    @eval function ParallelMCMC._construct_chain(
+        ::Type{$T},
+        vals::AbstractMatrix{<:Real},
+        internals::AbstractMatrix{<:Real},
+        ::Vector{Symbol},
+        internal_names::Vector{Symbol},
+        model::DensityModelLDF,
+        ::Union{Nothing,Vector}
+    )
+        pwss = map(zip(eachrow(vals), eachrow(internals))) do (val, internal)
+            stats = NamedTuple{Tuple(internal_names)}(internal)
+            DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
+        end
+        return AbstractMCMC.from_samples($T, hcat(pwss))
     end
-    return AbstractMCMC.from_samples(MCMCChains.Chains, hcat(pwss))
 end
 
 end # module
