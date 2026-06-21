@@ -14,9 +14,8 @@ Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
 computation via DynamicPPL's `adtype` interface.
 
-Requires `DynamicPPL`, `ForwardDiff`, and `LogDensityProblems` to be loaded (these are the
-weak-dependency triggers for this extension; `ForwardDiff` is what backs the default
-`AutoForwardDiff()` AD path).
+Requires `DynamicPPL` and `LogDensityProblems` to be loaded (these are the weak-dependency
+triggers for this extension), plus any AD backend that is used.
 
 # Example
 ```julia
