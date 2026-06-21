@@ -191,7 +191,7 @@ end
         progress=false,
     )
 
-    @test chain isa SymChain,
+    @test chain isa SymChain
     @test FlexiChains.niters(chain) == 150
 
     extras_names = FlexiChains.extras(chain)
