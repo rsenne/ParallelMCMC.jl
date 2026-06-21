@@ -15,10 +15,9 @@ Construct a `DensityModel` from any object implementing the
 - `LogDensityProblems.dimension(ld)` -> `Int`
 - `LogDensityProblems.logdensity_and_gradient(ld, x)` -> `(logp, grad)`
 
-The optional `param_names` keyword accepts a `Vector{Symbol}` of parameter names
-that will be used for the columns of the returned `FlexiChain{Symbol}` object.
-If omitted, names default to `x[1], x[2], ...` unless you also pass `param_names`
-to `sample(...)`.
+The optional `param_names` keyword accepts a collection of parameter names that will be used
+for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
+parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
 The `hvp` keyword argument is forwarded to the main `DensityModel` constructor.
 
