@@ -16,7 +16,7 @@ Construct a `DensityModel` from any object implementing the
 - `LogDensityProblems.logdensity_and_gradient(ld, x)` -> `(logp, grad)`
 
 The optional `param_names` keyword accepts a `Vector{Symbol}` of parameter names
-that will be used for the columns of the returned `MCMCChains.Chains` object.
+that will be used for the columns of the returned `FlexiChain{Symbol}` object.
 If omitted, names default to `x[1], x[2], ...` unless you also pass `param_names`
 to `sample(...)`.
 
@@ -24,7 +24,7 @@ The `hvp` keyword argument is forwarded to the main `DensityModel` constructor.
 
 # Turing.jl / DynamicPPL example
 ```julia
-using Turing, LogDensityProblems, ADTypes, Enzyme, ParallelMCMC, MCMCChains
+using Turing, LogDensityProblems, ADTypes, Enzyme, ParallelMCMC, FlexiChains
 
 @model function mymodel(y)
     μ ~ Normal(0, 1)
@@ -41,7 +41,7 @@ ld = DynamicPPL.LogDensityFunction(
 
 model = DensityModel(ld; param_names=[:μ])
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
-               chain_type=MCMCChains.Chains, discard_warmup=true, progress=true)
+               chain_type=VNChain, discard_warmup=true, progress=true)
 ```
 
 If DynamicPPL is loaded, the simpler one-step constructor `DensityModel(mymodel(obs))`

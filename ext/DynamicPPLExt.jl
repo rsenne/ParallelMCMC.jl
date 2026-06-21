@@ -4,11 +4,8 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using AbstractMCMC: AbstractMCMC
-using FlexiChains: FlexiChain, VarName
-using MCMCChains: MCMCChains
+using FlexiChains: FlexiChain, VarName, VNChain
 using LogDensityProblems: LogDensityProblems
-
-CHAIN_TYPES = (MCMCChains.Chains, FlexiChain{VarName})
 
 """
     DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing)
@@ -23,7 +20,7 @@ weak-dependency triggers for this extension; `ForwardDiff` is what backs the def
 
 # Example
 ```julia
-using Turing, ParallelMCMC, MCMCChains
+using Turing, ParallelMCMC, FlexiChains
 
 @model function mymodel(y)
     μ ~ Normal(0, 1)
@@ -34,7 +31,7 @@ end
 # and `using` the corresponding package (Enzyme, Mooncake).
 model = DensityModel(mymodel(1.5))
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
-               chain_type=MCMCChains.Chains, discard_warmup=true, progress=true)
+               chain_type=FlexiChains.VNChain, discard_warmup=true, progress=true)
 ```
 """
 function ParallelMCMC.DensityModel(
@@ -103,52 +100,40 @@ for (Ttrans, Tspl, Tstate) in (
         ParallelMCMC.AdaptiveMALAState,
     ),
 )
-    for Tchain in CHAIN_TYPES
-        @eval begin
-            function AbstractMCMC.bundle_samples(
-                ts::Vector{<:$Ttrans},
-                model::DensityModelLDF,
-                spl::$Tspl,
-                state::$Tstate,
-                chain_type::Type{$Tchain},
-                discard_warmup::Bool=false,
-                kwargs...,
-            )
-                ts = discard_warmup ? filter(t -> !is_warmup(t), ts) : ts
-                return make_processed_dynamicppl_chain($Tchain, ts, model)
+    @eval begin
+        function AbstractMCMC.bundle_samples(
+            ts::Vector{<:$Ttrans},
+            model::DensityModelLDF,
+            spl::$Tspl,
+            state::$Tstate,
+            chain_type::Type{VNChain},
+            discard_warmup::Bool=false,
+            kwargs...,
+        )
+            ts = discard_warmup ? filter(t -> !is_warmup(t), ts) : ts
+            pwss = map(ts) do t
+                # Note: This assumes that there is always a field called t.x. This is currently true
+                # of all samplers in ParallelMCMC
+                DynamicPPL.ParamsWithStats(t.x, model.logdensity.ld, getstats(t))
             end
+            return AbstractMCMC.from_samples(VNChain, hcat(pwss))
         end
     end
 end
 
-function make_processed_dynamicppl_chain(
-    ::Type{Tchain}, ts::Vector{<:ParallelMCMCTransitionTypes}, model::DensityModelLDF
-) where {Tchain}
-    pwss = map(ts) do t
-        # Note: This assumes that there is always a field called t.x. This is currently true
-        # of all samplers in ParallelMCMC
-        DynamicPPL.ParamsWithStats(t.x, model.logdensity.ld, getstats(t))
+function ParallelMCMC._construct_flexichain(
+    ::Type{VarName},
+    vals::AbstractMatrix{<:Real},
+    internals::AbstractMatrix{<:Real},
+    ::Vector{<:VarName},
+    internal_names::Vector{Symbol},
+    model::DensityModelLDF,
+)
+    pwss = map(zip(eachrow(vals), eachrow(internals))) do (val, internal)
+        stats = NamedTuple{Tuple(internal_names)}(internal)
+        DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
     end
-    return AbstractMCMC.from_samples(Tchain, hcat(pwss))
-end
-
-# Must define separate methods for each chain type to avoid method ambiguity
-for T in CHAIN_TYPES
-    @eval function ParallelMCMC._construct_chain(
-        ::Type{$T},
-        vals::AbstractMatrix{<:Real},
-        internals::AbstractMatrix{<:Real},
-        ::Vector{Symbol},
-        internal_names::Vector{Symbol},
-        model::DensityModelLDF,
-        ::Union{Nothing,Vector}
-    )
-        pwss = map(zip(eachrow(vals), eachrow(internals))) do (val, internal)
-            stats = NamedTuple{Tuple(internal_names)}(internal)
-            DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
-        end
-        return AbstractMCMC.from_samples($T, hcat(pwss))
-    end
+    return AbstractMCMC.from_samples(VNChain, hcat(pwss))
 end
 
 end # module

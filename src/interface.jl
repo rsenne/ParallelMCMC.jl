@@ -25,13 +25,13 @@ product helpers for use with ParallelMCMC samplers.
   batched Hessian-vector product over columns. If omitted, the sampler can
   differentiate `grad_logdensity_batch` to keep the batched DEER path enabled.
 - `dim::Int` — dimensionality of the parameter space
-- `param_names` — optional `Vector{Symbol}` of parameter names used in `MCMCChains` output.
-  If `nothing` (the default), names fall back to `x[1], x[2], ...`.
+- `param_names` — optional collection of parameter names used in `FlexiChains` output. If
+  `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
 
 When `logdensity_batch` and `grad_logdensity_batch` are provided,
 `ParallelMALASampler` enables the batched DEER update path.
 """
-struct DensityModel{F,G,H,FB,GB,HB} <: AbstractMCMC.AbstractModel
+struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
     logdensity::F
     grad_logdensity::G
     hvp::H
@@ -39,7 +39,7 @@ struct DensityModel{F,G,H,FB,GB,HB} <: AbstractMCMC.AbstractModel
     grad_logdensity_batch::GB
     hvp_batch::HB
     dim::Int
-    param_names::Union{Nothing,Vector{Symbol}}
+    param_names::PN
 end
 
 """
@@ -191,39 +191,33 @@ function AbstractMCMC.step(
     return t, s
 end
 
-function AbstractMCMC.bundle_samples(
-    samples::Vector{<:MALATransition},
-    model::DensityModel,
-    sampler::MALASampler,
-    state::MALAState,
-    ::Type{Tchn};
-    param_names=nothing,
-    kwargs...,
-) where {Tchn}
-    N = length(samples)
-    D = model.dim
+for TKey in (Symbol, VarName)
+    @eval function AbstractMCMC.bundle_samples(
+        samples::Vector{<:MALATransition},
+        model::DensityModel,
+        sampler::MALASampler,
+        state::MALAState,
+        ::Type{FlexiChains.FlexiChain{$TKey}};
+        param_names=nothing,
+        kwargs...,
+    )
+        N = length(samples)
+        D = model.dim
 
-    names = if param_names !== nothing
-        param_names
-    elseif model.param_names !== nothing
-        model.param_names
-    else
-        [Symbol("x[$i]") for i in 1:D]
+        internal_names = [:logp, :accepted]
+
+        vals = Matrix{Float64}(undef, N, D)
+        internals = Matrix{Float64}(undef, N, 2)
+
+        for i in 1:N
+            s = samples[i]
+            vals[i, :] .= s.x
+            internals[i, 1] = s.logp
+            internals[i, 2] = s.accepted ? 1.0 : 0.0
+        end
+
+        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
     end
-
-    internal_names = [:logp, :accepted]
-
-    vals = Matrix{Float64}(undef, N, D)
-    internals = Matrix{Float64}(undef, N, 2)
-
-    for i in 1:N
-        s = samples[i]
-        vals[i, :] .= s.x
-        internals[i, 1] = s.logp
-        internals[i, 2] = s.accepted ? 1.0 : 0.0
-    end
-
-    return _construct_chain(Tchn, vals, internals, names, internal_names, model, samples)
 end
 
 """
@@ -524,13 +518,14 @@ function _trajectory_logps(model::DensityModel, S::AbstractMatrix)
     return [model.logdensity(S[:, t]) for t in 1:T]
 end
 
-function _parallel_mala_param_names(model::DensityModel, D::Int, param_names)
+function _default_param_names(model::DensityModel, D::Int, param_names)
     if param_names !== nothing
         return param_names
     elseif model.param_names !== nothing
         return model.param_names
     else
-        return [Symbol("x[$i]") for i in 1:D]
+        # One vector-valued parameter `:x` with shape `(D,)`
+        return (:x => (D,),)
     end
 end
 
@@ -570,14 +565,13 @@ function _sample_parallel_mala_chain(
     model::DensityModel,
     sampler::ParallelMALASampler,
     N::Int,
-    ::Type{Tchn};
+    ::Type{FlexiChains.FlexiChain{TKey}};
     initial_params=nothing,
     param_names=nothing,
     progress=AbstractMCMC.PROGRESS[],
     progressname="Sampling",
-) where {Tchn}
+) where {TKey}
     D = model.dim
-    names = _parallel_mala_param_names(model, D, param_names)
     internal_names = [:logp]
 
     vals = Matrix{Float64}(undef, N, D)
@@ -614,51 +608,53 @@ function _sample_parallel_mala_chain(
         end
     end
 
-    # If Tchn doesn't have a custom _construct_chain implementation this will throw an
-    # error, but we *should* have made sure that only chain types that _do_ have a
-    # _construct_chain implementation enter this function to begin with.
-    return _construct_chain(Tchn, vals, internals, names, internal_names, model, nothing)
+    return _construct_flexichain(TKey, vals, internals, param_names, internal_names, model)
 end
 
-function _construct_chain(
-    ::Type{T},
-    ::AbstractMatrix{<:Real},
-    ::AbstractMatrix{<:Real},
-    ::Vector{Symbol},
-    ::Vector{Symbol},
-    ::DensityModel,
-    original_samples::Union{Nothing,<:Vector},
-) where {T}
-    # Catch-all for unsupported chain types.
-    if original_samples === nothing
-        error("original samples not provided; this should not happen! Please open an issue on ParallelMCMC.jl.")
-    end
-    # The user might have specifically asked for a generic chain type, e.g. Any. In such a
-    # case we don't emit this warning message
-    if !(typeof(original_samples) <: T)
-        @info "Chain type $(nameof(typeof(original_samples))) does not have a custom _construct_chain implementation; returning original vector of samples."
-    end
-    return original_samples
-end
-
-function _construct_chain(
-    ::Type{FlexiChains.FlexiChain{Symbol}},
+function _construct_flexichain(
+    ::Type{TKey},
     vals::AbstractMatrix{<:Real},
     internals::AbstractMatrix{<:Real},
-    names::Vector{Symbol},
+    param_names::Any,
     internal_names::Vector{Symbol},
     model::DensityModel,
-    ::Union{Nothing,Vector},
-)
+) where {TKey}
+    # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
+    # `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
+    # 'upgrade' symbol parameter names to VarNames if the user requested a VNChain.
+    to_parameter(vn::VarName) = FlexiChains.Parameter(vn)
+    to_parameter(s::Symbol) = FlexiChains.Parameter(TKey <: VarName ? VarName{s}() : s)
+
     # vals and internals are both `iters x params`
     # FlexiChains expects `iters x chains x params`
     arr = hcat(vals, internals)
     arr = reshape(arr, size(arr, 1), 1, size(arr, 2))
-    params = (
-        FlexiChains.Parameter.(names)...,
+
+    # Wrap parameter names in the format that FlexiChains expects. Ref:
+    # https://pysm.dev/FlexiChains.jl/stable/arrays/#api-fromarray
+    if param_names === nothing
+        param_names = model.param_names
+    end
+    wrapped_param_names = if param_names === nothing
+        # Wasn't defined either as `param_names` or `model.param_names`, so make some up
+        (to_parameter(:x) => (size(vals, 2),),)
+    else
+        map(param_names) do n
+            if n isa Pair
+                to_parameter(n.first) => n.second
+            elseif n isa TKey || n isa Symbol
+                to_parameter(n)
+            else
+                throw(ArgumentError("param_names must be a collection of Pairs or $TKey, got $(typeof(n))"))
+            end
+        end
+    end
+
+    all_names = (
+        wrapped_param_names...,
         FlexiChains.Extra.(internal_names)...
     )
-    return FlexiChains.FlexiChain{Symbol}(arr, params)
+    return FlexiChains.FlexiChain{TKey}(arr, all_names)
 end
 
 function _sample_parallel_mala_blocks(
@@ -736,9 +732,6 @@ function _default_parallel_mala_mcmcsample(
     )
 end
 
-has_parallel_sample_implementation(::Type{FlexiChains.FlexiChain{Symbol}}) = true
-has_parallel_sample_implementation(::Type) = false
-
 function AbstractMCMC.mcmcsample(
     rng::Random.AbstractRNG,
     model::DensityModel,
@@ -783,7 +776,7 @@ function AbstractMCMC.mcmcsample(
     N > 0 || error("the number of samples must be ≥ 1")
     N_int = Int(N)
 
-    if has_parallel_sample_implementation(chain_type)
+    if chain_type <: FlexiChains.FlexiChain
         return _sample_parallel_mala_chain(
             rng,
             model,
@@ -874,37 +867,33 @@ function AbstractMCMC.step(
     end
 end
 
-function AbstractMCMC.bundle_samples(
-    samples::Vector{<:ParallelMALATransition},
-    model::DensityModel,
-    sampler::ParallelMALASampler,
-    state::ParallelMALAState,
-    ::Type{Tchn};
-    param_names=nothing,
-    kwargs...,
-) where {Tchn}
-    N = length(samples)
-    D = model.dim
+for TKey in (Symbol, VarName)
+    @eval function AbstractMCMC.bundle_samples(
+        samples::Vector{<:ParallelMALATransition},
+        model::DensityModel,
+        sampler::ParallelMALASampler,
+        state::ParallelMALAState,
+        ::Type{FlexiChains.FlexiChain{$TKey}};
+        param_names=nothing,
+        kwargs...,
+    )
+        N = length(samples)
+        D = model.dim
 
-    names = if param_names !== nothing
-        param_names
-    elseif model.param_names !== nothing
-        model.param_names
-    else
-        [Symbol("x[$i]") for i in 1:D]
+        names = _default_param_names(model, D, param_names)
+
+        internal_names = [:logp]
+
+        vals = Matrix{Float64}(undef, N, D)
+        internals = Matrix{Float64}(undef, N, 1)
+
+        for i in 1:N
+            vals[i, :] .= samples[i].x
+            internals[i, 1] = samples[i].logp
+        end
+
+        return _construct_flexichain($TKey, vals, internals, names, internal_names, model)
     end
-
-    internal_names = [:logp]
-
-    vals = Matrix{Float64}(undef, N, D)
-    internals = Matrix{Float64}(undef, N, 1)
-
-    for i in 1:N
-        vals[i, :] .= samples[i].x
-        internals[i, 1] = samples[i].logp
-    end
-
-    return _construct_chain(Tchn, vals, internals, names, internal_names, model, samples)
 end
 
 """
@@ -1083,41 +1072,35 @@ function AbstractMCMC.step(
     return trans, new_state
 end
 
-function AbstractMCMC.bundle_samples(
-    samples::Vector{<:AdaptiveMALATransition},
-    model::DensityModel,
-    sampler::AdaptiveMALASampler,
-    state::AdaptiveMALAState,
-    ::Type{Tchn};
-    param_names=nothing,
-    discard_warmup=false,
-    kwargs...,
-) where {Tchn}
-    filtered = discard_warmup ? filter(s -> !s.is_warmup, samples) : samples
-    N = length(filtered)
-    D = model.dim
+for TKey in (Symbol, VarName)
+    @eval function AbstractMCMC.bundle_samples(
+        samples::Vector{<:AdaptiveMALATransition},
+        model::DensityModel,
+        sampler::AdaptiveMALASampler,
+        state::AdaptiveMALAState,
+        ::Type{FlexiChains.FlexiChain{$TKey}};
+        param_names=nothing,
+        discard_warmup=false,
+        kwargs...,
+    )
+        filtered = discard_warmup ? filter(s -> !s.is_warmup, samples) : samples
+        N = length(filtered)
+        D = model.dim
 
-    names = if param_names !== nothing
-        param_names
-    elseif model.param_names !== nothing
-        model.param_names
-    else
-        [Symbol("x[$i]") for i in 1:D]
+        internal_names = [:logp, :accepted, :step_size, :is_warmup]
+
+        vals = Matrix{Float64}(undef, N, D)
+        internals = Matrix{Float64}(undef, N, 4)
+
+        for i in 1:N
+            s = filtered[i]
+            vals[i, :] .= s.x
+            internals[i, 1] = s.logp
+            internals[i, 2] = s.accepted ? 1.0 : 0.0
+            internals[i, 3] = s.step_size
+            internals[i, 4] = s.is_warmup ? 1.0 : 0.0
+        end
+
+        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
     end
-
-    internal_names = [:logp, :accepted, :step_size, :is_warmup]
-
-    vals = Matrix{Float64}(undef, N, D)
-    internals = Matrix{Float64}(undef, N, 4)
-
-    for i in 1:N
-        s = filtered[i]
-        vals[i, :] .= s.x
-        internals[i, 1] = s.logp
-        internals[i, 2] = s.accepted ? 1.0 : 0.0
-        internals[i, 3] = s.step_size
-        internals[i, 4] = s.is_warmup ? 1.0 : 0.0
-    end
-
-    return _construct_chain(Tchn, vals, internals, names, internal_names, model, filtered)
 end
