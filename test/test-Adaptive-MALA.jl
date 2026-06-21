@@ -2,7 +2,7 @@ using Test
 using Random
 using LinearAlgebra
 using Statistics
-using MCMCChains
+using FlexiChains
 
 using ParallelMCMC
 const MALA = ParallelMCMC.MALA
@@ -187,27 +187,27 @@ end
         model,
         sampler,
         150;
-        chain_type=MCMCChains.Chains,
+        chain_type=SymChain,
         progress=false,
     )
 
-    @test chain isa MCMCChains.Chains
-    @test size(chain, 1) == 150
+    @test chain isa SymChain,
+    @test FlexiChains.niters(chain) == 150
 
-    internals = names(chain, :internals)
-    @test :logp in internals
-    @test :accepted in internals
-    @test :step_size in internals
-    @test :is_warmup in internals
+    extras_names = FlexiChains.extras(chain)
+    @test :logp in extras_names
+    @test :accepted in extras_names
+    @test :step_size in extras_names
+    @test :is_warmup in extras_names
 
     @test all(isfinite, chain[:logp])
-    @test all(x -> x == 0.0 || x == 1.0, chain[:accepted])
+    @test all(x -> x isa Bool, chain[:accepted])
     @test all(s -> s > 0, chain[:step_size])
 
     # Warmup samples appear at the start
-    @test chain[:is_warmup][1] == 1.0
-    # Post-warmup samples have is_warmup == 0
-    @test chain[:is_warmup][end] == 0.0
+    @test chain[:is_warmup][1]
+    # Post-warmup samples have is_warmup == false
+    @test !chain[:is_warmup][end]
 end
 
 @testset "step_size is constant after warmup" begin
@@ -220,12 +220,12 @@ end
         model,
         sampler,
         n_w + 50;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
     # Filter by is_warmup flag to avoid off-by-one from the init transition.
-    is_wup = vec(chain[:is_warmup]) .== 1.0
+    is_wup = vec(chain[:is_warmup])
     step_sizes = vec(chain[:step_size])
     post_warmup = step_sizes[.!is_wup]
 
@@ -245,12 +245,12 @@ end
         model,
         sampler,
         n_w + 5_000;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
     # Discard warmup
-    post = Array(chain[(n_w + 1):end, :, :])   # 5000 × D
+    post = Array(chain)[(n_w + 1):end, :, :]   # 5000 × D
 
     mu = vec(mean(post; dims=1))
     vars = vec(var(post; dims=1))
@@ -270,11 +270,11 @@ end
         ParallelMCMC.AbstractMCMC.MCMCThreads(),
         60,
         2;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
-    @test chains isa MCMCChains.Chains
-    @test size(chains, 1) == 60
-    @test size(chains, 3) == 2
+    @test chains isa VNChain
+    @test FlexiChains.niters(chains) == 60
+    @test FlexiChains.nchains(chains) == 2
 end

@@ -6,7 +6,6 @@ using Statistics
 using ParallelMCMC
 using ADTypes: ADTypes
 using CUDA: CUDA
-using MCMCChains
 
 #=
 On a problem large enough to amortize CUDA kernel-launch overhead,

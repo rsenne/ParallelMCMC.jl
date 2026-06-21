@@ -2,7 +2,7 @@ using Test
 using Random
 using LinearAlgebra
 using Statistics
-using MCMCChains
+using FlexiChains
 
 using ParallelMCMC
 
@@ -63,10 +63,10 @@ end
         model,
         AdaptiveMALASampler(0.3; n_warmup=200),
         600;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
-    @test only(names(chain, :parameters)) == :μ
+    @test only(FlexiChains.parameters(chain)) == @varname(μ)
 end
 
 @testset "DynamicPPLExt: convenience constructor" begin
@@ -81,10 +81,10 @@ end
         model,
         AdaptiveMALASampler(0.3; n_warmup=200),
         600;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
-    @test only(names(chain, :parameters)) == :μ
+    @test only(FlexiChains.parameters(chain)) == @varname(μ)
 end
 
 @testset "DynamicPPLExt: convenience constructor uses linked space for constrained models" begin
@@ -139,13 +139,14 @@ end
         sampler,
         800;
         initial_params=zeros(2),
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
-    samples = Array(chain)
+    samples = chain[@varname(x), stack=true]
     @test all(isfinite, samples)
     # Standard normal in 2-D: posterior mean should be near zero.
-    @test maximum(abs, vec(mean(samples; dims=1))) < 0.25
+    posterior_means = mean(samples; dims=1)
+    @test maximum(abs, posterior_means) < 0.25
 end
 
 @testset "DynamicPPLExt: Dirichlet(ones(3)) runs with ParallelMALA (linked space)" begin
@@ -168,10 +169,10 @@ end
         sampler,
         800;
         initial_params=zeros(2),
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
-    @test chain isa MCMCChains.Chains
+    @test chain isa VNChain
     @test all(isfinite, Array(chain))
 end
 
@@ -183,13 +184,14 @@ end
         model,
         AdaptiveMALASampler(0.3; n_warmup=200),
         600;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
-    @test chain isa MCMCChains.Chains
-    @test :μ in names(chain, :parameters)
-    @test !(Symbol("x[1]") in names(chain, :parameters))
+    @test chain isa VNChain
+    params = FlexiChains.parameters(chain)
+    @test @varname(μ) in params
+    @test !(@varname(x) in params)
 end
 
 @testset "discard_warmup=true removes warmup samples" begin
@@ -203,7 +205,7 @@ end
         model,
         sampler,
         n_total;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
     chain_trimmed = sample(
@@ -211,14 +213,14 @@ end
         model,
         sampler,
         n_total;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
         discard_warmup=true,
     )
 
-    @test size(chain_full, 1) == n_total
-    @test size(chain_trimmed, 1) == n_total - n_warmup - 1
-    @test all(==(0.0), vec(chain_trimmed[:is_warmup]))
+    @test FlexiChains.niters(chain_full) == n_total
+    @test FlexiChains.niters(chain_trimmed) == n_total - n_warmup - 1
+    @test all(==(false), chain_trimmed[:is_warmup])
 end
 
 @testset "posterior mean and variance match analytic solution" begin
@@ -232,12 +234,12 @@ end
         model,
         sampler,
         n_warmup + n_draw;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
         discard_warmup=true,
     )
 
-    mu_samples = vec(Array(chain[:μ]))
+    mu_samples = vec(chain[:μ])
 
     @test abs(mean(mu_samples) - TRUE_MU_POST) < 0.05
     @test abs(var(mu_samples) - TRUE_VAR_POST) < 0.05
@@ -255,16 +257,12 @@ end
         model,
         AdaptiveMALASampler(0.2; n_warmup=100),
         300;
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
     # Check that the chain contains parameters in original space.
     # The Dirichlet parameter should have length 3.
-    @test Set(names(chain, :parameters)) ==
-        Set(Symbol.(["c[1]", "c[2]", "c[3]", "μ.a", "μ.b"]))
-    for i in 1:3
-        # Dirichlet samples should be non-negative
-        @test all(chain[Symbol("c[$i]")] .>= 0.0)
-    end
+    @test Set(FlexiChains.parameters(chain)) == Set([@varname(c), @varname(μ)])
+    @test all(chain[@varname(c), stack=true] .>= 0.0)  # Dirichlet samples should be non-negative
 end

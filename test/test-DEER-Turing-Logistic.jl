@@ -2,7 +2,7 @@ using Test
 using Random
 using LinearAlgebra
 using Statistics
-using MCMCChains
+using FlexiChains
 
 using ParallelMCMC
 
@@ -101,15 +101,14 @@ end
         sampler,
         400;
         initial_params=zeros(_LR_D),
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
-    @test chain isa MCMCChains.Chains
-    @test size(chain, 1) == 400
-    @test Symbol("β[1]") in names(chain, :parameters)
-    @test Symbol("β[2]") in names(chain, :parameters)
-    @test all(isfinite, Array(chain[:, [Symbol("β[1]"), Symbol("β[2]")], :]))
+    @test chain isa SymChain
+    @test FlexiChains.niters(chain) == 400
+    @test @varname("β") in FlexiChains.parameters(chain)
+    @test all(isfinite, chain[@varname("β"), stack=true])
 end
 
 @testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
@@ -131,11 +130,11 @@ end
         sampler,
         800;
         initial_params=zeros(_LR_D),
-        chain_type=MCMCChains.Chains,
+        chain_type=VNChain,
         progress=false,
     )
 
-    post = Array(chain[201:end, [Symbol("β[1]"), Symbol("β[2]")], 1])
+    post = chain[@varname("β"), stack=true][201:end, :, :]
     β_mean = vec(mean(post; dims=1))
 
     @test sign(β_mean[1]) == sign(_LR_β_true[1])
@@ -160,11 +159,11 @@ end
         model,
         AdaptiveMALASampler(0.1; n_warmup=1000),
         5000;
-        chain_type=MCMCChains.Chains,
+        chain_type=SymChain,
         progress=false,
         discard_warmup=true,
     )
-    β_mala = vec(mean(Array(mala_chain[:, [Symbol("x[1]"), Symbol("x[2]")], 1]); dims=1))
+    β_mala = vec(mean(mala_chain[:x, stack=true]; dims=1))
 
     deer_chain = sample(
         MersenneTwister(42),
@@ -179,12 +178,10 @@ end
             backend=ADTypes.AutoEnzyme(),
         ),
         800;
-        chain_type=MCMCChains.Chains,
+        chain_type=SymChain,
         progress=false,
     )
-    β_deer = vec(
-        mean(Array(deer_chain[201:end, [Symbol("x[1]"), Symbol("x[2]")], 1]); dims=1)
-    )
+    β_deer = vec(mean(deer_chain[:x, stack=true][201:end, :, :]; dims=1))
 
     @test abs(β_deer[1] - β_mala[1]) < 0.25
     @test abs(β_deer[2] - β_mala[2]) < 0.25

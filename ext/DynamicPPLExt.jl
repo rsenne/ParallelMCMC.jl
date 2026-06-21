@@ -125,7 +125,7 @@ function ParallelMCMC._construct_flexichain(
     ::Type{VarName},
     vals::AbstractMatrix{<:Real},
     internals::AbstractMatrix{<:Real},
-    ::Vector{<:VarName},
+    ::Any,
     internal_names::Vector{Symbol},
     model::DensityModelLDF,
 )
