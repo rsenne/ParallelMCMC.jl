@@ -195,19 +195,19 @@ end
     @test FlexiChains.niters(chain) == 150
 
     extras_names = FlexiChains.extras(chain)
-    @test :logp in extras_names
-    @test :accepted in extras_names
-    @test :step_size in extras_names
-    @test :is_warmup in extras_names
+    @test FlexiChains.Extra(:logp) in extras_names
+    @test FlexiChains.Extra(:accepted) in extras_names
+    @test FlexiChains.Extra(:step_size) in extras_names
+    @test FlexiChains.Extra(:is_warmup) in extras_names
 
     @test all(isfinite, chain[:logp])
-    @test all(x -> x isa Bool, chain[:accepted])
+    @test all(x -> x == 0.0 || x == 1.0, chain[:accepted])
     @test all(s -> s > 0, chain[:step_size])
 
     # Warmup samples appear at the start
-    @test chain[:is_warmup][1]
-    # Post-warmup samples have is_warmup == false
-    @test !chain[:is_warmup][end]
+    @test chain[:is_warmup][1] == 1.0
+    # Post-warmup samples have is_warmup == 0
+    @test chain[:is_warmup][end] == 0.0
 end
 
 @testset "step_size is constant after warmup" begin
@@ -225,7 +225,7 @@ end
     )
 
     # Filter by is_warmup flag to avoid off-by-one from the init transition.
-    is_wup = vec(chain[:is_warmup])
+    is_wup = vec(chain[:is_warmup]) .== 1.0
     step_sizes = vec(chain[:step_size])
     post_warmup = step_sizes[.!is_wup]
 

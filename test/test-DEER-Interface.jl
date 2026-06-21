@@ -222,7 +222,7 @@ end
 
     @test chain isa SymChain
     @test FlexiChains.niters(chain) == 100
-    @test :logp in FlexiChains.extras(chain)
+    @test FlexiChains.Extra(:logp) in FlexiChains.extras(chain)
     @test all(isfinite, chain[:logp])
 
     # Single vector-valued parameter, each sample having length 2

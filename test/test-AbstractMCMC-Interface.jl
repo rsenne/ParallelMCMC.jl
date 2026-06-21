@@ -144,17 +144,17 @@ gradlogp_iface(x) = -x
         @test FlexiChains.niters(chain) == 200
 
         # Parameter columns present
-        @test only(FlexiChains.parameters(chain)) == :x
+        @test only(FlexiChains.parameters(chain)) == @varname(x)
 
         # Internal columns present
-        @test Set(FlexiChains.extras(chain)) == Set([:logp, :accepted])
+        @test Set(FlexiChains.extras(chain)) == Set(FlexiChains.Extra.([:logp, :accepted]))
 
         # logp values should be finite
         @test all(isfinite, chain[:logp])
 
-        # accepted values should be boolean
+        # accepted values should be 0 or 1
         acc = chain[:accepted]
-        @test all(a -> a isa Bool, acc)
+        @test all(a -> a == 0.0 || a == 1.0, acc)
     end
 
     @testset "sample() with custom param_names" begin

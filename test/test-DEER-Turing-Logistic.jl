@@ -105,10 +105,10 @@ end
         progress=false,
     )
 
-    @test chain isa SymChain
+    @test chain isa VNChain
     @test FlexiChains.niters(chain) == 400
-    @test @varname("β") in FlexiChains.parameters(chain)
-    @test all(isfinite, chain[@varname("β"), stack=true])
+    @test @varname(β) in FlexiChains.parameters(chain)
+    @test all(isfinite, chain[@varname(β), stack=true])
 end
 
 @testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
@@ -134,7 +134,7 @@ end
         progress=false,
     )
 
-    post = chain[@varname("β"), stack=true][201:end, :, :]
+    post = chain[@varname(β), stack=true][201:end, :, :]
     β_mean = vec(mean(post; dims=1))
 
     @test sign(β_mean[1]) == sign(_LR_β_true[1])

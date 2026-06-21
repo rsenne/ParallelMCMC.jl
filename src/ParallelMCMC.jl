@@ -36,7 +36,7 @@ export MALA, DEER
 export pmcmc_matmul, pmcmc_dot, pmcmc_dotsum
 
 # Re-exports for convenience
-using AbstractMCMC: sample
+import AbstractMCMC: sample
 export sample
 
 end
