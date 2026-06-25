@@ -41,7 +41,7 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 | [`MALASampler`](src/interface.jl) | Baseline — sequential MALA with a fixed step size |
 | [`AdaptiveMALASampler`](src/interface.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
 
-All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`MCMCChains.Chains`](https://github.com/TuringLang/MCMCChains.jl) objects, so they slot into existing Turing.jl / AbstractMCMC workflows.
+All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects, so they slot into existing Turing.jl / AbstractMCMC workflows.
 
 
 ### Quick start
@@ -53,7 +53,7 @@ pkg> add ParallelMCMC
 ```
 
 ```julia
-using ParallelMCMC, MCMCChains
+using ParallelMCMC, FlexiChains
 using ADTypes, Enzyme
 
 logp(x)      = -0.5 * sum(abs2, x)            # 2-D standard normal
@@ -63,7 +63,7 @@ model   = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
                               backend=AutoEnzyme())
 
-chain = sample(model, sampler, 500; chain_type=MCMCChains.Chains)
+chain = sample(model, sampler, 500; chain_type=VNChain)
 ```
 
 See the [Getting Started guide](docs/src/10-getting-started.md) for worked examples, GPU usage, Turing.jl integration, and step-size tuning.
