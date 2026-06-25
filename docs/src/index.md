@@ -40,7 +40,7 @@ The included [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) are sequent
 | [`MALASampler`](@ref) | Baseline — sequential MALA with a fixed step size |
 | [`AdaptiveMALASampler`](@ref) | Baseline — sequential MALA with dual-averaging step-size adaptation |
 
-All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`MCMCChains.Chains`](https://github.com/TuringLang/MCMCChains.jl) objects.
+All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects.
 
 ## Installation
 
@@ -57,7 +57,7 @@ pkg> add ParallelMCMC
 The simplest entry point is [`DensityModel`](@ref), which wraps a log-density and its gradient:
 
 ```julia
-using ParallelMCMC, MCMCChains
+using ParallelMCMC, FlexiChains
 using ADTypes, Enzyme
 
 # Example: 2-D standard normal
@@ -75,10 +75,13 @@ sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
                               backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
-               chain_type=MCMCChains.Chains)
+               chain_type=VNChain)
 ```
 
 Each call to `sample` draws 500 samples by solving DEER trajectories of length `T=64` in parallel, re-solving from the last state when each trajectory is exhausted.
+
+`VNChain` returns a `FlexiChains.FlexiChain` which has a parameter type of `VarName`.
+This is intended for maximum ease of use; however, if you prefer parameter type of `Symbol` you can use `SymChain` instead.
 
 ### Sequential MALA baseline
 
@@ -86,7 +89,7 @@ Each call to `sample` draws 500 samples by solving DEER trajectories of length `
 sampler = AdaptiveMALASampler(0.1; n_warmup=500)
 
 chain = sample(model, sampler, 2_000;
-               chain_type=MCMCChains.Chains,
+               chain_type=VNChain,
                discard_warmup=true,
                progress=true)
 ```
@@ -97,7 +100,7 @@ When `DynamicPPL` (part of Turing.jl) is loaded, a one-argument `DensityModel` c
 Parameter names are automatically extracted, and values transformed back to the original model space:
 
 ```julia
-using Turing, ParallelMCMC, MCMCChains
+using Turing, ParallelMCMC, FlexiChains
 
 @model function normal_model(y)
     μ ~ Normal(0.0, 1.0)
@@ -108,11 +111,13 @@ model   = DensityModel(normal_model(1.5))
 sampler = AdaptiveMALASampler(0.3; n_warmup=500)
 
 chain = sample(model, sampler, 2_000;
-               chain_type=MCMCChains.Chains,
+               chain_type=VNChain,
                discard_warmup=true)
 ```
 
 See [Getting Started](10-getting-started.md) for worked examples and guidance on choosing samplers, and [Algorithm Details](20-algorithms.md) for the mathematics behind DEER.
+
+For Turing models the chain type used must be `VNChain` (not `SymChain`), as that is the natural parameter type for Turing models.
 
 ## Contributors
 

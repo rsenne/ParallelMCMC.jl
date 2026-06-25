@@ -31,7 +31,7 @@ ParallelMALASampler
 
 ## Internal types
 
-These types appear in `MCMCChains` internals and in the `AbstractMCMC` state/transition protocol.  You generally do not need to construct them directly.
+These types appear in the `AbstractMCMC` state/transition protocol.  You generally do not need to construct them directly.
 
 ```@docs
 MALATapeElement

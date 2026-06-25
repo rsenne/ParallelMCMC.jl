@@ -12,7 +12,7 @@ All samplers take a [`DensityModel`](@ref) as their first argument.  A `DensityM
 - `dim::Int` — dimension of the parameter space
 
 ```julia
-using ParallelMCMC, MCMCChains
+using ParallelMCMC, FlexiChains
 using ADTypes, Enzyme
 
 # Banana-shaped target in 2-D
@@ -40,7 +40,7 @@ sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag, damping=0.5,
                               backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
-               chain_type=MCMCChains.Chains, progress=true)
+               chain_type=VNChain, progress=true)
 ```
 
 `sample` requests 500 total samples.  Internally, DEER solves trajectories of length `T=64` and returns each column of the solved trajectory as a separate sample.  When the trajectory is exhausted a new noise tape is drawn and DEER re-solves from the last state.
@@ -90,7 +90,7 @@ ParallelMCMC.jl integrates with Turing.jl models through the `DynamicPPL` and `L
 Load `DynamicPPL` (part of Turing.jl) and a single-argument `DensityModel` constructor becomes available:
 
 ```julia
-using Turing, ParallelMCMC, MCMCChains
+using Turing, ParallelMCMC, FlexiChains
 
 @model function normal_model(y)
     μ ~ Normal(0.0, 1.0)
@@ -100,7 +100,7 @@ end
 model = DensityModel(normal_model(1.5))   # param_names=[:μ] extracted automatically
 
 chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()), 500;
-               chain_type=MCMCChains.Chains)
+               chain_type=VNChain)
 ```
 
 Much like Turing's own samplers, the resulting chain will always have parameters in the original (possibly constrained) space, even though the MCMC sampling itself is performed in unconstrained space.
@@ -116,7 +116,7 @@ directly with DynamicPPL's `adtype` interface:
 
 ```julia
 using Turing, LogDensityProblems, ADTypes
-using ParallelMCMC, MCMCChains
+using ParallelMCMC, FlexiChains
 
 ld = DynamicPPL.LogDensityFunction(
     normal_model(1.5),
@@ -140,10 +140,20 @@ All samplers support `MCMCThreads()`.  Start Julia with multiple threads (e.g. `
 ```julia
 chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()),
                MCMCThreads(), 500, 4;
-               chain_type=MCMCChains.Chains)
+               chain_type=VNChain)
 ```
 
-`MCMCChains` computes R-hat and ESS across chains automatically.
+`FlexiChains` computes R-hat and ESS across chains automatically:
+
+```julia
+ess(chain)
+```
+
+To calculate intra-chain metrics, you can pass `dims=:iter` [as described in the FlexiChains docs](https://pysm.dev/FlexiChains.jl/stable/summarising/#Individual-statistics):
+
+```julia
+ess(chain; dims=:iter)
+```
 
 ---
 
@@ -158,14 +168,14 @@ chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()),
 ```julia
 # Step 1: find a good step size with adaptive MALA
 baseline = sample(model, AdaptiveMALASampler(0.1; n_warmup=500), 600;
-                  chain_type=MCMCChains.Chains, discard_warmup=true)
+                  chain_type=VNChain, discard_warmup=true)
 
 # Read off the frozen step size from the last internal value
 eps_tuned = baseline[end, :step_size, 1]
 
 # Step 2: run DEER with the tuned step size
 chain = sample(model, ParallelMALASampler(eps_tuned; T=64, backend=AutoEnzyme()), 2_000;
-               chain_type=MCMCChains.Chains)
+               chain_type=VNChain)
 ```
 
 See the [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) reference pages for the full keyword listing.
