@@ -157,6 +157,32 @@ ess(chain; dims=:iter)
 
 ---
 
+## Specifying parameter names
+
+For manually constructed `DensityModel`s, you can optionally specify parameter names with the `param_names` keyword.
+The resulting `FlexiChain` object will then have named entries for each parameter.
+
+If you do not specify `param_names`, the chain will store a single vector-valued parameter called `x` of length `D`.
+
+You can specify parameter names as a collection of either:
+
+- `Symbol`s (e.g. `[:x1, :x2]`);
+- `VarName`s (e.g. `[@varname(x[1]), @varname(x[2])]`) if `chain_type=VNChain`; or
+- A tuple of the above, *plus* a size. In this case, a total of `prod(size)` entries will be allocated to the named parameter, and the results in the chain will be reshaped to that size.
+
+The above can be mixed and matched as desired, as long as the total number of parameters matches the dimension of the model.
+For example:
+
+```julia
+# Three scalar parameters, called `x1` through `x3`
+model = DensityModel(...; param_names=[:x1, :x2, :x3])
+
+# One scalar parameter called `x`, and a 1x2 matrix parameter called `y`
+model = DensityModel(...; param_names=[:x, (:y, (1, 2))])
+```
+
+---
+
 ## Sequential MALA baselines
 
 [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) are standard sequential MALA implementations.  They are useful for:
