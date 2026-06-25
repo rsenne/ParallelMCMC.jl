@@ -181,6 +181,8 @@ model = DensityModel(...; param_names=[:x1, :x2, :x3])
 model = DensityModel(...; param_names=[:x, (:y, (1, 2))])
 ```
 
+For Turing.jl models, parameter names are automatically derived from the model and do not need to be specified manually.
+
 ---
 
 ## Sequential MALA baselines
