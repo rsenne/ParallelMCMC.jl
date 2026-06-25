@@ -27,6 +27,8 @@ product helpers for use with ParallelMCMC samplers.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional collection of parameter names used in `FlexiChains` output. If
   `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
+  See the [`Parameter names`](@ref parameter-names) section of the docs for more
+  information.
 
 When `logdensity_batch` and `grad_logdensity_batch` are provided,
 `ParallelMALASampler` enables the batched DEER update path.

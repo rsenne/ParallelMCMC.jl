@@ -157,7 +157,7 @@ ess(chain; dims=:iter)
 
 ---
 
-## Specifying parameter names
+## [Specifying parameter names](@id parameter-names)
 
 For manually constructed `DensityModel`s, you can optionally specify parameter names with the `param_names` keyword.
 The resulting `FlexiChain` object will then have named entries for each parameter.
