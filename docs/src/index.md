@@ -80,8 +80,9 @@ chain = sample(model, sampler, 500;
 
 Each call to `sample` draws 500 samples by solving DEER trajectories of length `T=64` in parallel, re-solving from the last state when each trajectory is exhausted.
 
-`VNChain` returns a `FlexiChains.FlexiChain` which has a parameter type of `VarName`.
+Specifying `chain_type=VNChain` returns a `FlexiChain{VarName}`, which has a parameter type of `VarName`.
 This is intended for maximum ease of use; however, if you prefer parameter type of `Symbol` you can use `SymChain` instead.
+See [the FlexiChains.jl docs](https://pysm.dev/FlexiChains.jl/) for more information about how to analyze and visualize chains.
 
 ### Sequential MALA baseline
 
