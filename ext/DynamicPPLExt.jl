@@ -105,7 +105,7 @@ for (Ttrans, Tspl, Tstate) in (
             model::DensityModelLDF,
             spl::$Tspl,
             state::$Tstate,
-            chain_type::Type{VNChain},
+            chain_type::Type{VNChain};
             discard_warmup::Bool=false,
             kwargs...,
         )
@@ -116,6 +116,19 @@ for (Ttrans, Tspl, Tstate) in (
                 DynamicPPL.ParamsWithStats(t.x, model.logdensity.ld, getstats(t))
             end
             return AbstractMCMC.from_samples(VNChain, hcat(pwss))
+        end
+    end
+
+    @eval begin
+        function AbstractMCMC.bundle_samples(
+            ts::Vector{<:$Ttrans},
+            model::DensityModelLDF,
+            spl::$Tspl,
+            state::$Tstate,
+            chain_type::Type{SymChain};
+            kwargs...,
+        )
+            throw(ArgumentError("FlexiChains.SymChain is not supported for DynamicPPL models; please use VNChain instead."))
         end
     end
 end
