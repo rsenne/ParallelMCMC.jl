@@ -520,17 +520,6 @@ function _trajectory_logps(model::DensityModel, S::AbstractMatrix)
     return [model.logdensity(S[:, t]) for t in 1:T]
 end
 
-function _default_param_names(model::DensityModel, D::Int, param_names)
-    if param_names !== nothing
-        return param_names
-    elseif model.param_names !== nothing
-        return model.param_names
-    else
-        # One vector-valued parameter `:x` with shape `(D,)`
-        return (:x => (D,),)
-    end
-end
-
 function _parallel_mala_initial_x(
     rng::Random.AbstractRNG, model::DensityModel, ::ParallelMALASampler{FP}, initial_params
 ) where {FP}
@@ -882,8 +871,6 @@ for TKey in (Symbol, VarName)
         N = length(samples)
         D = model.dim
 
-        names = _default_param_names(model, D, param_names)
-
         internal_names = [:logp]
 
         vals = Matrix{Float64}(undef, N, D)
@@ -894,7 +881,7 @@ for TKey in (Symbol, VarName)
             internals[i, 1] = samples[i].logp
         end
 
-        return _construct_flexichain($TKey, vals, internals, names, internal_names, model)
+        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
     end
 end
 
