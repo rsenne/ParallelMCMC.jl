@@ -4,7 +4,7 @@ using ParallelMCMC
 using ADTypes: ADTypes
 using DynamicPPL: DynamicPPL
 using AbstractMCMC: AbstractMCMC
-using FlexiChains: FlexiChain, VarName, VNChain
+using FlexiChains: FlexiChain, VarName, VNChain, SymChain
 using LogDensityProblems: LogDensityProblems
 
 """
