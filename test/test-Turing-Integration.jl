@@ -85,6 +85,15 @@ end
         progress=false,
     )
     @test only(FlexiChains.parameters(chain)) == @varname(μ)
+
+    @test_throws "SymChain is not supported" sample(
+        MersenneTwister(1),
+        model,
+        AdaptiveMALASampler(0.3; n_warmup=200),
+        600;
+        chain_type=SymChain,
+        progress=false,
+    )
 end
 
 @testset "DynamicPPLExt: convenience constructor uses linked space for constrained models" begin
