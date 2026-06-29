@@ -232,6 +232,29 @@ end
     @test size(chain[name, stack=true], 3) == 2
 end
 
+@testset "ParallelMALASampler bundle_samples fallback path (thinning)" begin
+    #= A non-default kwarg forces ParallelMALA's `mcmcsample`
+    override down the generic step/bundle_samples path instead of the
+    batched `_sample_parallel_mala_chain` shortcut =#
+    model = DensityModel(logp_deer, gradlogp_deer, 2)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
+
+    chain = sample(
+        MersenneTwister(1),
+        model,
+        sampler,
+        100;
+        chain_type=SymChain,
+        thinning=2,
+        progress=false,
+    )
+
+    @test chain isa SymChain
+    @test FlexiChains.niters(chain) == 100
+    @test FlexiChains.Extra(:logp) in FlexiChains.extras(chain)
+    @test all(isfinite, chain[:logp])
+end
+
 @testset "ParallelMALASampler sample() with custom param_names" begin
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
