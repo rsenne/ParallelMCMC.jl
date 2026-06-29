@@ -220,6 +220,33 @@ gradlogp_iface(x) = -x
         end
     end
 
+    @testset "invalid param_names throws" begin
+        model = DensityModel(logp_iface, gradlogp_iface, 2)
+        @test_throws "param_names must be a collection" sample(
+            model, MALASampler(0.15), 50;
+            chain_type=SymChain, progress=false, param_names=["mu", "sigma"],
+        )
+    end
+
+    @testset "model.param_names used when sample() omits param_names" begin
+        # Constructing the model with `param_names` and then calling `sample` *without*
+        # the `param_names` keyword should fall back to `model.param_names`.
+        model = DensityModel(logp_iface, gradlogp_iface, 2; param_names=[:mu, :sigma])
+        sampler = MALASampler(0.15)
+
+        @testset "SymChain" begin
+            chain = sample(model, sampler, 50; chain_type=SymChain, progress=false)
+            @test chain isa SymChain
+            @test FlexiChains.parameters(chain) == [:mu, :sigma]
+        end
+
+        @testset "VNChain" begin
+            chain = sample(model, sampler, 50; chain_type=VNChain, progress=false)
+            @test chain isa VNChain
+            @test FlexiChains.parameters(chain) == [@varname(mu), @varname(sigma)]
+        end
+    end
+
     @testset "stationary distribution via sample()" begin
         D = 3
         model = DensityModel(logp_iface, gradlogp_iface, D)
