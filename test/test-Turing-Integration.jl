@@ -185,6 +185,21 @@ end
     @test all(isfinite, Array(chain))
 end
 
+@testset "DynamicPPLExt: ParallelMALA bundle_samples fallback path (thinning)" begin
+    #= A non-default kwarg (here `thinning`) forces ParallelMALA's `mcmcsample` override =#
+    model = DensityModel(mvnormal_2d_model())
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
+    chain = sample(
+        MersenneTwister(3), model, sampler, 800;
+        initial_params=zeros(2), chain_type=VNChain, thinning=2, progress=false,
+    )
+    @test chain isa VNChain
+    @test only(FlexiChains.parameters(chain)) == @varname(x)
+    @test all(isfinite, Array(chain))
+end
+
 @testset "DynamicPPLExt: named columns in Chains output" begin
     model = DensityModel(normal_model(TRUE_OBS))
 

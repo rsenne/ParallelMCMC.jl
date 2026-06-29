@@ -220,6 +220,14 @@ gradlogp_iface(x) = -x
         end
     end
 
+@testset "invalid param_names throws" begin
+    model = DensityModel(logp_iface, gradlogp_iface, 2)
+    @test_throws "param_names must be a collection" sample(
+        model, MALASampler(0.15), 50;
+        chain_type=SymChain, progress=false, param_names=["mu", "sigma"],
+    )
+end
+
     @testset "stationary distribution via sample()" begin
         D = 3
         model = DensityModel(logp_iface, gradlogp_iface, D)
