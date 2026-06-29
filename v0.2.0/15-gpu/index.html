@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>GPU Execution · ParallelMCMC.jl</title><meta name="title" content="GPU Execution · ParallelMCMC.jl"/><meta property="og:title" content="GPU Execution · ParallelMCMC.jl"/><meta property="twitter:title" content="GPU Execution · ParallelMCMC.jl"/><meta name="description" content="Documentation for ParallelMCMC.jl."/><meta property="og:description" content="Documentation for ParallelMCMC.jl."/><meta property="twitter:description" content="Documentation for ParallelMCMC.jl."/><meta property="og:url" content="https://rsenne.github.io/ParallelMCMC.jl/15-gpu/"/><meta property="twitter:url" content="https://rsenne.github.io/ParallelMCMC.jl/15-gpu/"/><link rel="canonical" href="https://rsenne.github.io/ParallelMCMC.jl/15-gpu/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../"><img src="../assets/logo.png" alt="ParallelMCMC.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../">ParallelMCMC.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">ParallelMCMC.jl</a></li><li><a class="tocitem" href="../10-getting-started/">Getting Started</a></li><li class="is-active"><a class="tocitem" href>GPU Execution</a><ul class="internal"><li><a class="tocitem" href="#When-to-use-GPU"><span>When to use GPU</span></a></li><li><a class="tocitem" href="#Limitations"><span>Limitations</span></a></li><li><a class="tocitem" href="#Worked-example:-Bayesian-logistic-regression-on-GPU"><span>Worked example: Bayesian logistic regression on GPU</span></a></li><li><a class="tocitem" href="#The-AD-HVP-fallback-(and-when-to-write-your-own)"><span>The AD-HVP fallback (and when to write your own)</span></a></li><li><a class="tocitem" href="#Picking-an-AD-backend-on-GPU"><span>Picking an AD backend on GPU</span></a></li></ul></li><li><a class="tocitem" href="../20-algorithms/">Algorithm Details</a></li><li><a class="tocitem" href="../90-contributing/">Contributing guidelines</a></li><li><a class="tocitem" href="../91-developer/">Developer docs</a></li><li><a class="tocitem" href="../95-reference/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>GPU Execution</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>GPU Execution</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/rsenne/ParallelMCMC.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/rsenne/ParallelMCMC.jl/blob/main/docs/src/15-gpu.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="GPU-Execution"><a class="docs-heading-anchor" href="#GPU-Execution">GPU Execution</a><a id="GPU-Execution-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Execution" title="Permalink"></a></h1><p>DEER&#39;s prefix-scan and per-step batch evaluations are array-type-agnostic, so the same <code>ParallelMALASampler</code> runs on either CPU or GPU.  This page covers when GPU pays off, the current limitations, and a worked example.</p><hr/><h2 id="When-to-use-GPU"><a class="docs-heading-anchor" href="#When-to-use-GPU">When to use GPU</a><a id="When-to-use-GPU-1"></a><a class="docs-heading-anchor-permalink" href="#When-to-use-GPU" title="Permalink"></a></h2><p>GPU pays off when the per-Newton-step work i.e., evaluating <code>logdensity_batch</code> and <code>grad_logdensity_batch</code> across the <code>T</code>-wide trajectory and the Hutchinson <code>probes</code> is large enough to saturate the device.</p><table><tr><th style="text-align: right">Regime</th><th style="text-align: right">Reach for</th></tr><tr><td style="text-align: right"><code>D</code> ≲ a few hundred, lightweight <code>logp</code></td><td style="text-align: right"><strong>CPU.</strong> Per-step cost is dominated by overhead; GPU launch latency wins out.</td></tr><tr><td style="text-align: right">Large <code>D</code>, or <code>logp</code> is itself a batched linear-algebra / kernel workload</td><td style="text-align: right"><strong>GPU.</strong> <code>T</code> × <code>probes</code> Jacobian work fills the device.</td></tr><tr><td style="text-align: right">Many independent chains via <code>MCMCThreads()</code></td><td style="text-align: right"><strong>CPU</strong>, scaled with threads.  GPU chains do not currently share a device pool.</td></tr></table><p>A useful heuristic: if your CPU <code>grad_logdensity_batch</code> already saturates BLAS at the batch sizes DEER passes it (<code>T</code> columns, plus <code>probes</code> HVP probes), GPU is likely to help.  If not, profile before switching.</p><hr/><h2 id="Limitations"><a class="docs-heading-anchor" href="#Limitations">Limitations</a><a id="Limitations-1"></a><a class="docs-heading-anchor-permalink" href="#Limitations" title="Permalink"></a></h2><h3 id="1.-DynamicPPL-/-Turing-models-are-CPU-only"><a class="docs-heading-anchor" href="#1.-DynamicPPL-/-Turing-models-are-CPU-only">1. DynamicPPL / Turing models are CPU-only</a><a id="1.-DynamicPPL-/-Turing-models-are-CPU-only-1"></a><a class="docs-heading-anchor-permalink" href="#1.-DynamicPPL-/-Turing-models-are-CPU-only" title="Permalink"></a></h3><p>The one-argument <code>DensityModel(::DynamicPPL.Model)</code> constructor (and the <code>LogDensityProblems</code> path that backs it) executes the model with <code>Vector{Float64}</code> parameters on CPU.  There is no path today that runs a <code>@model</code> against <code>CuArray</code> parameters.</p><p>To run on GPU, hand-write <code>logdensity</code> / <code>grad_logdensity</code> (and the batched variants) directly over <code>CuArray</code>s and pass them to <code>DensityModel</code>.  This is shown in the example below.</p><h3 id="2.-Enzyme-on-GPU-currently-needs-pmcmc_matmul-/-pmcmc_dot-/-pmcmc_dotsum"><a class="docs-heading-anchor" href="#2.-Enzyme-on-GPU-currently-needs-pmcmc_matmul-/-pmcmc_dot-/-pmcmc_dotsum">2. Enzyme on GPU currently needs <code>pmcmc_matmul</code> / <code>pmcmc_dot</code> / <code>pmcmc_dotsum</code></a><a id="2.-Enzyme-on-GPU-currently-needs-pmcmc_matmul-/-pmcmc_dot-/-pmcmc_dotsum-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Enzyme-on-GPU-currently-needs-pmcmc_matmul-/-pmcmc_dot-/-pmcmc_dotsum" title="Permalink"></a></h3><p><code>ParallelMCMC</code> exports three thin wrappers:</p><pre><code class="language-julia hljs">pmcmc_matmul(A, B)  = A * B
+pmcmc_dot(a, b)     = dot(a, b)
+pmcmc_dotsum(A, B)  = sum(A .* B)</code></pre><p>These exist purely so the package can register Enzyme rules against them without committing type piracy on <code>Base.*</code>, <code>Base.dot</code>, <code>Base.sum</code>.  The rules compute primal and cotangents with plain operators <em>outside</em> Enzyme&#39;s IR rewriter, which keeps them off the reverse-mode path that aborts on GPU.</p><pre><code class="nohighlight hljs">unsupported tag gc-transition for
+  call i32 @cuMemcpyDtoHAsync_v2(...) [ &quot;jl_roots&quot;(...), &quot;gc-transition&quot;() ]
+UNREACHABLE executed at .../Enzyme/GradientUtils.cpp:309      (signal 6)</code></pre><p>When you should use them:</p><ul><li>You are on GPU <strong>and</strong> using <code>AutoEnzyme()</code> as the AD backend.</li></ul><p>When you do <strong>not</strong> need them:</p><ul><li>CPU code: plain <code>*</code>, <code>dot</code>, <code>sum</code> are faster and clearer.</li><li>GPU code with <code>AutoMooncake(; config=nothing)</code>: Mooncake&#39;s own CUDA extension handles these operations natively.</li><li>GPU code with <code>AutoZygote()</code>: Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for <code>*</code> / <code>dot</code> / <code>sum</code> on <code>CuArray</code>.</li></ul><p>These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain <code>A * B</code> on <code>CuArray</code>s will work and the wrappers will be deprecated.</p><h3 id="3.-Some-Enzyme-GPU-gradients-hit-a-gc-transition-abort.-Staging-them-as-single-ops-is-a-workaround"><a class="docs-heading-anchor" href="#3.-Some-Enzyme-GPU-gradients-hit-a-gc-transition-abort.-Staging-them-as-single-ops-is-a-workaround">3. Some Enzyme GPU gradients hit a <code>gc-transition</code> abort. Staging them as single ops is a workaround</a><a id="3.-Some-Enzyme-GPU-gradients-hit-a-gc-transition-abort.-Staging-them-as-single-ops-is-a-workaround-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Some-Enzyme-GPU-gradients-hit-a-gc-transition-abort.-Staging-them-as-single-ops-is-a-workaround" title="Permalink"></a></h3><p>Certain <code>CuArray</code> gradient expressions abort during Enzyme compilation on GPU with the same <code>gc-transition</code> failure as limitation 2. In practice the fused form below aborts while the staged form compiles, so <strong>writing the gradient as single-op stages is a reliable workaround</strong>:</p><pre><code class="language-julia hljs"># ABORTS during Enzyme compile on GPU
+gradlogp(β) = -β .- pmcmc_matmul(transpose(X), pmcmc_matmul(X, β)) ./ Float32(N)
+
+# WORKS: built up one broadcast op at a time
+function gradlogp(β)
+    Xβ = pmcmc_matmul(X, β)
+    Y  = pmcmc_matmul(transpose(X), Xβ)
+    Y  = Y ./ Float32(N)
+    Y  = Y .+ β
+    return -Y
+end</code></pre><p>Mooncake does not have this restriction.</p><hr/><h2 id="Worked-example:-Bayesian-logistic-regression-on-GPU"><a class="docs-heading-anchor" href="#Worked-example:-Bayesian-logistic-regression-on-GPU">Worked example: Bayesian logistic regression on GPU</a><a id="Worked-example:-Bayesian-logistic-regression-on-GPU-1"></a><a class="docs-heading-anchor-permalink" href="#Worked-example:-Bayesian-logistic-regression-on-GPU" title="Permalink"></a></h2><p>A standard Bayesian logistic regression with a Gaussian prior; an example model where GPU acceleration actually pays off as <code>N</code> and <code>D</code> grow.  Posterior:</p><p class="math-container">\[\log p(\beta \mid y, X) = -\tfrac{1}{2}\|\beta\|^2 + \sum_{i=1}^{N} \bigl[ y_i \, x_i^\top \beta - \log(1 + e^{x_i^\top \beta}) \bigr],\]</p><p>with gradient <span>$\nabla_\beta \log p = -\beta + X^\top (y - \sigma(X\beta))$</span>, where <span>$\sigma$</span> is the logistic sigmoid.</p><p>We use a numerically stable softplus on GPU:</p><p class="math-container">\[\log(1 + e^{z}) = \max(z, 0) + \log(1 + e^{-|z|}),\]</p><p>so neither the positive nor negative tail overflows in <code>Float32</code>.</p><h3 id="Synthetic-data"><a class="docs-heading-anchor" href="#Synthetic-data">Synthetic data</a><a id="Synthetic-data-1"></a><a class="docs-heading-anchor-permalink" href="#Synthetic-data" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Random, CUDA
+
+D = 50; N = 1000
+rng    = MersenneTwister(0)
+β_true = randn(rng, Float32, D)
+X_cpu  = randn(rng, Float32, N, D)
+probs  = 1f0 ./ (1f0 .+ exp.(-(X_cpu * β_true)))
+y_cpu  = Float32.(rand(rng, N) .&lt; probs)
+
+X_gpu = CUDA.CuMatrix(X_cpu)
+y_gpu = CUDA.CuVector(y_cpu)</code></pre><h3 id="Mooncake-backend-(plain-operators)"><a class="docs-heading-anchor" href="#Mooncake-backend-(plain-operators)">Mooncake backend (plain operators)</a><a id="Mooncake-backend-(plain-operators)-1"></a><a class="docs-heading-anchor-permalink" href="#Mooncake-backend-(plain-operators)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using ParallelMCMC, FlexiChains
+using ADTypes, Mooncake
+
+softplus(z) = log1p(exp(-abs(z))) + max(z, zero(z))
+
+logp(β)     = -0.5f0 * sum(abs2, β) + dot(y_gpu, X_gpu * β) -
+              sum(softplus.(X_gpu * β))
+gradlogp(β) = let z = X_gpu * β
+    -β .+ transpose(X_gpu) * (y_gpu .- 1f0 ./ (1f0 .+ exp.(-z)))
+end
+
+function logp_batch(B)
+    Z     = X_gpu * B
+    prior = -0.5f0 .* vec(sum(abs2, B; dims=1))
+    ll    = vec(sum(y_gpu .* Z; dims=1)) .- vec(sum(softplus.(Z); dims=1))
+    return prior .+ ll
+end
+function gradlogp_batch(B)
+    Z = X_gpu * B
+    P = 1f0 ./ (1f0 .+ exp.(-Z))
+    return -B .+ transpose(X_gpu) * (y_gpu .- P)
+end
+
+model   = DensityModel(logp, gradlogp, D;
+                       logdensity_batch=logp_batch,
+                       grad_logdensity_batch=gradlogp_batch)
+sampler = ParallelMALASampler(0.005f0;
+                              T=16, damping=0.5f0,
+                              backend=ADTypes.AutoMooncake(; config=nothing))
+
+chain = sample(model, sampler, 1_600;
+               initial_params=CUDA.zeros(Float32, D),
+               chain_type=VNChain)</code></pre><p>Posterior mean recovery error <code>‖β_post − β_true‖ / ‖β_true‖</code> should land in the 0.1–0.2 range after a few hundred post-warmup samples.</p><h3 id="Enzyme-backend-(requires-pmcmc_matmul)"><a class="docs-heading-anchor" href="#Enzyme-backend-(requires-pmcmc_matmul)">Enzyme backend (requires `pmcmc_matmul)</a><a id="Enzyme-backend-(requires-pmcmc_matmul)-1"></a><a class="docs-heading-anchor-permalink" href="#Enzyme-backend-(requires-pmcmc_matmul)" title="Permalink"></a></h3><p>Same model, with the GPU-Enzyme restrictions applied: every <code>*</code> becomes <code>pmcmc_matmul</code>, every <code>dot</code> becomes <code>pmcmc_dot</code>, and every gradient broadcast is expanded into single-op stages:</p><pre><code class="language-julia hljs">using ParallelMCMC, FlexiChains
+using ADTypes, Enzyme
+
+function logp(β)
+    z      = pmcmc_matmul(X_gpu, β)
+    az     = abs.(z)
+    ez     = exp.(.-az)
+    sp1    = log1p.(ez)
+    sp2    = max.(z, 0f0)
+    sp     = sp1 .+ sp2
+    ll     = pmcmc_dot(y_gpu, z) - sum(sp)
+    prior  = -0.5f0 * sum(abs2, β)
+    return prior + ll
+end
+
+function gradlogp(β)
+    z     = pmcmc_matmul(X_gpu, β)
+    ez    = exp.(.-z)
+    den   = 1f0 .+ ez
+    p     = 1f0 ./ den
+    resid = y_gpu .- p
+    g_ll  = pmcmc_matmul(transpose(X_gpu), resid)
+    g     = .-β
+    g     = g .+ g_ll
+    return g
+end
+
+function logp_batch(B)
+    Z      = pmcmc_matmul(X_gpu, B)
+    aZ     = abs.(Z)
+    eZ     = exp.(.-aZ)
+    sp1    = log1p.(eZ)
+    sp2    = max.(Z, 0f0)
+    SP     = sp1 .+ sp2
+    yZ     = y_gpu .* Z
+    ll     = vec(sum(yZ; dims=1)) .- vec(sum(SP; dims=1))
+    prior  = -0.5f0 .* vec(sum(abs2, B; dims=1))
+    return prior .+ ll
+end
+
+function gradlogp_batch(B)
+    Z     = pmcmc_matmul(X_gpu, B)
+    eZ    = exp.(.-Z)
+    denZ  = 1f0 .+ eZ
+    P     = 1f0 ./ denZ
+    Resid = y_gpu .- P
+    G_ll  = pmcmc_matmul(transpose(X_gpu), Resid)
+    G     = .-B
+    G     = G .+ G_ll
+    return G
+end
+
+model   = DensityModel(logp, gradlogp, D;
+                       logdensity_batch=logp_batch,
+                       grad_logdensity_batch=gradlogp_batch)
+sampler = ParallelMALASampler(0.005f0;
+                              T=16, damping=0.5f0,
+                              backend=ADTypes.AutoEnzyme())
+
+chain = sample(model, sampler, 1_600;
+               initial_params=CUDA.zeros(Float32, D),
+               chain_type=VNChain)</code></pre><p>The two snippets sample the same posterior; the difference is purely in what the AD backend can chew on.</p><hr/><h2 id="The-AD-HVP-fallback-(and-when-to-write-your-own)"><a class="docs-heading-anchor" href="#The-AD-HVP-fallback-(and-when-to-write-your-own)">The AD-HVP fallback (and when to write your own)</a><a id="The-AD-HVP-fallback-(and-when-to-write-your-own)-1"></a><a class="docs-heading-anchor-permalink" href="#The-AD-HVP-fallback-(and-when-to-write-your-own)" title="Permalink"></a></h2><p>DEER needs a Hessian–vector product <span>$H v$</span> at every Newton step.  <code>DensityModel</code> accepts both <code>gradlogp</code> and (optionally) <code>hvp</code> / <code>hvp_batch</code>.  Depending on what you supply, the sampler does one of two things:</p><ul><li><strong>You supply <code>hvp</code> / <code>hvp_batch</code>.</strong>  These run as plain kernels.  The AD backend is never invoked for HVPs.</li><li><strong>You only supply <code>gradlogp</code> / <code>grad_logdensity_batch</code>.</strong>  The sampler builds the HVP by differentiating your gradient — either a forward-mode pushforward of <code>gradlogp</code> (<a href="https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl"><code>ForwardOnGrad</code></a>, the default for most backends) or a reverse-mode gradient of <code>x -&gt; dot(gradlogp(x), v)</code> (<a href="https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl"><code>ReverseOnGrad</code></a>, used for <code>AutoMooncake</code> and <code>AutoZygote</code>).  This is the <strong>AD-HVP fallback</strong>, and it is what the logistic-regression example above uses.</li></ul><h3 id="When-the-fallback-is-the-right-call"><a class="docs-heading-anchor" href="#When-the-fallback-is-the-right-call">When the fallback is the right call</a><a id="When-the-fallback-is-the-right-call-1"></a><a class="docs-heading-anchor-permalink" href="#When-the-fallback-is-the-right-call" title="Permalink"></a></h3><ul><li><strong>Complex or composed models.</strong>  Bayesian neural nets, hierarchical models with many transformations, mixtures, or anything where the Hessian has no convenient closed form.  Deriving and maintaining <code>hvp</code> by hand for these is error-prone; AD removes a whole class of bugs.</li><li><strong>Prototyping.</strong>  You want a correct sampler running before you optimize.  Drop in <code>gradlogp</code>, lean on AD, profile later.</li><li><strong>Operations that AD libraries handle for free but are tedious to differentiate by hand.</strong>  Special functions, link functions, log-sum-exp, normalizing constants of standard distributions, etc.</li><li><strong>You want backend flexibility.</strong>  With only <code>gradlogp</code> you can swap <code>AutoMooncake</code> ↔ <code>AutoEnzyme</code> ↔ <code>AutoZygote</code> to compare without rewriting model code.</li></ul><h3 id="When-to-write-your-own-analytical-HVP"><a class="docs-heading-anchor" href="#When-to-write-your-own-analytical-HVP">When to write your own analytical HVP</a><a id="When-to-write-your-own-analytical-HVP-1"></a><a class="docs-heading-anchor-permalink" href="#When-to-write-your-own-analytical-HVP" title="Permalink"></a></h3><ul><li><strong>The HVP has a clean closed form.</strong>  Quadratic priors, Gaussian likelihoods, GLMs (logistic, Poisson, probit) — the second derivative is a known function of intermediate quantities you already compute in <code>gradlogp</code>.  A few extra lines and you skip the AD pipeline entirely.</li><li><strong>Performance matters and the AD compile is heavy.</strong>  Enzyme and Mooncake both pay a one-shot compilation cost on the user&#39;s gradient.  For long-running chains this amortizes, but for many short runs the analytical HVP wins.</li><li><strong>You&#39;re hitting AD-backend-specific GPU restrictions.</strong>  The <a href="#2-enzyme-on-gpu-currently-needs-pmcmc_matmul-pmcmc_dot-pmcmc_dotsum">Enzyme limitations</a> above (<code>pmcmc_*</code> wrappers, staged broadcasts) only matter when the AD backend is invoked.  Supplying analytical HVP sidesteps them — your <code>gradlogp</code> and <code>hvp</code> can use plain <code>*</code>, <code>dot</code>, <code>sum</code> even with <code>backend=AutoEnzyme()</code>, because the backend is held but never run.</li><li><strong>You can reuse intermediates between gradient and HVP.</strong>  When <code>hvp</code> shares <span>$X\beta$</span>, <span>$\sigma(X\beta)$</span>, or similar with the gradient computation, an analytical version can be both faster <em>and</em> shorter than what AD produces.</li></ul><h3 id="Same-example-with-analytical-HVP"><a class="docs-heading-anchor" href="#Same-example-with-analytical-HVP">Same example with analytical HVP</a><a id="Same-example-with-analytical-HVP-1"></a><a class="docs-heading-anchor-permalink" href="#Same-example-with-analytical-HVP" title="Permalink"></a></h3><p>For Bayesian logistic regression with a Gaussian prior, the Hessian is</p><p class="math-container">\[\nabla^2 \log p = -I - X^\top \, \mathrm{diag}\bigl(\sigma(X\beta) \odot (1 - \sigma(X\beta))\bigr) \, X,\]</p><p>so</p><p class="math-container">\[H v = -v - X^\top \bigl[\sigma(X\beta) \odot (1 - \sigma(X\beta)) \odot (X v)\bigr].\]</p><p>Plug it in alongside <code>gradlogp</code> and the sampler stops invoking the AD path:</p><pre><code class="language-julia hljs">function hvp(β, v)
+    z  = X_gpu * β
+    σz = 1f0 ./ (1f0 .+ exp.(-z))
+    w  = σz .* (1f0 .- σz)
+    -v .- transpose(X_gpu) * (w .* (X_gpu * v))
+end
+function hvp_batch(B, V)
+    Z = X_gpu * B
+    Σ = 1f0 ./ (1f0 .+ exp.(-Z))
+    W = Σ .* (1f0 .- Σ)
+    -V .- transpose(X_gpu) * (W .* (X_gpu * V))
+end
+
+model = DensityModel(logp, gradlogp, D;
+                     logdensity_batch=logp_batch,
+                     grad_logdensity_batch=gradlogp_batch,
+                     hvp=hvp, hvp_batch=hvp_batch)
+
+# `backend` is still required by the API, but is never invoked.
+sampler = ParallelMALASampler(0.005f0;
+                              T=16, damping=0.5f0,
+                              backend=ADTypes.AutoMooncake(; config=nothing))</code></pre><p>This recovers the same posterior as the fallback version — the only difference is that HVPs come from a plain matmul instead of a reverse-mode pass over <code>gradlogp</code>.</p><hr/><h2 id="Picking-an-AD-backend-on-GPU"><a class="docs-heading-anchor" href="#Picking-an-AD-backend-on-GPU">Picking an AD backend on GPU</a><a id="Picking-an-AD-backend-on-GPU-1"></a><a class="docs-heading-anchor-permalink" href="#Picking-an-AD-backend-on-GPU" title="Permalink"></a></h2><table><tr><th style="text-align: right">Backend</th><th style="text-align: right">GPU support</th><th style="text-align: right">Restrictions</th><th style="text-align: right">Recommended when</th></tr><tr><td style="text-align: right"><code>AutoEnzyme()</code></td><td style="text-align: right">Via <code>pmcmc_matmul</code> / <code>pmcmc_dot</code> / <code>pmcmc_dotsum</code> and single-op-broadcast gradients</td><td style="text-align: right">The restrictions above</td><td style="text-align: right">You want Enzyme&#39;s reverse-mode performance and are willing to follow the rules above</td></tr><tr><td style="text-align: right"><code>AutoMooncake(; config=nothing)</code></td><td style="text-align: right">Native (no wrappers)</td><td style="text-align: right">Slower compile</td><td style="text-align: right">You want plain Julia operators with no rewriting</td></tr><tr><td style="text-align: right"><code>AutoZygote()</code></td><td style="text-align: right">Native (no wrappers)</td><td style="text-align: right">ChainRules-based; reverse-only, plus no in-place mutation in <code>gradlogp</code></td><td style="text-align: right">You want plain Julia operators and are already on the ChainRules ecosystem</td></tr><tr><td style="text-align: right"><code>AutoForwardDiff()</code></td><td style="text-align: right">Native; works with <code>*</code> / <code>dot</code> / <code>sum</code> / broadcasts on <code>CuArray{Dual}</code></td><td style="text-align: right">Cost scales as O(D)</td><td style="text-align: right">Low-D models, prototyping, validating Mooncake/Enzyme results</td></tr></table><p>If you supply <code>hvp</code> / <code>hvp_batch</code> analytically, none of the above matters — those run as plain kernels and the sampler does not invoke a backend.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../10-getting-started/">« Getting Started</a><a class="docs-footer-nextpage" href="../20-algorithms/">Algorithm Details »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 29 June 2026 04:02">Monday 29 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
