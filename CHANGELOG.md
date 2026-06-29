@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-29
+
+### Changed
+
+- **FlexiChains is now the default (and only built-in) chain type.**
+  `sample(model, sampler, N; chain_type=...)` returns a
+  `FlexiChains.FlexiChain` instead of an `MCMCChains.Chains`. Use
+  `chain_type=SymChain` for `Symbol`-keyed chains or `chain_type=VNChain` for
+  `VarName`-keyed chains (#44).
+- DynamicPPL-backed models must use `VNChain`; requesting `SymChain` for a
+  DynamicPPL model now throws an `ArgumentError` (#44).
+- `param_names` handling is more forgiving: user-supplied names are wrapped in
+  `FlexiChains.Parameter` automatically, `Symbol` names are upgraded to
+  `VarName`s when a `VNChain` is requested, and better default names are
+  generated when none are supplied (#44).
+- `DynamicPPL` compat bumped to `0.41.6, 0.42` (#44).
+
+### Added
+
+- `FlexiChains` dependency; `DynamicPPLExt` now also loads on `FlexiChains`
+  (#44).
+
+### Removed
+
+- `MCMCChains` dependency. Chains are now built entirely on FlexiChains; there
+  is no longer any MCMCChains output (#44).
+
 ## [0.1.0] - 2026-06-17
 
 ### Added
