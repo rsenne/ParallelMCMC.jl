@@ -642,6 +642,8 @@ function _construct_flexichain(
     arr = reshape(vals, N, 1, D)
     param_chain = FlexiChains.FlexiChain{TKey}(arr, Tuple(wrapped_param_names))
 
+    isempty(internals) && return param_chain
+
     #=
     The internals have mixed element types (e.g. `Bool` for `accepted`/`is_warmup`,
     `FP` for `logp`), so they cannot share a single stacked array without widening.
@@ -651,7 +653,6 @@ function _construct_flexichain(
     extras = OrderedDict{FlexiChains.ParameterOrExtra{<:TKey},AbstractArray}(
         FlexiChains.Extra(name) => internals[name] for name in keys(internals)
     )
-    isempty(extras) && return param_chain
     extra_chain = FlexiChains.FlexiChain{TKey}(N, 1, extras)
 
     return merge(param_chain, extra_chain)
