@@ -136,13 +136,12 @@ end
 function ParallelMCMC._construct_flexichain(
     ::Type{VarName},
     vals::AbstractMatrix{<:Real},
-    internals::AbstractMatrix{<:Real},
+    internals::NamedTuple,
     ::Any,
-    internal_names::Vector{Symbol},
     model::DensityModelLDF,
 )
-    pwss = map(zip(eachrow(vals), eachrow(internals))) do (val, internal)
-        stats = NamedTuple{Tuple(internal_names)}(internal)
+    pwss = map(enumerate(eachrow(vals))) do (i, val)
+        stats = map(v -> v[i], internals)
         DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
     end
     return AbstractMCMC.from_samples(VNChain, hcat(pwss))
