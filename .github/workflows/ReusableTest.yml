@@ -49,4 +49,5 @@ jobs:
         if: ${{ inputs.run_codecov }}
         with:
           file: lcov.info
+          flags: cpu
           token: ${{ secrets.codecov_token }}

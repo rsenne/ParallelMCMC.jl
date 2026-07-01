@@ -8,3 +8,20 @@ coverage:
       default:
         target: 90%
   range: "80...90" # Yellow within this range
+
+# GPU code paths are exercised on an external GPU cluster (SCC), not on the
+# GitHub-hosted runners, which have no GPU. We therefore split coverage into
+# two flags keyed by the same commit SHA:
+#   - cpu: uploaded by CI (see ReusableTest.yml)
+#   - gpu: uploaded from the cluster after it runs the GPU test suite
+# carryforward on the gpu flag reuses the most recent GPU coverage on commits
+# where the cluster did not re-run, so the combined badge reflects both.
+flags:
+  cpu:
+    paths:
+      - src
+    carryforward: false
+  gpu:
+    paths:
+      - src
+    carryforward: true
