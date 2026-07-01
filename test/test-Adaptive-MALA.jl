@@ -201,13 +201,16 @@ end
     @test FlexiChains.Extra(:is_warmup) in extras_names
 
     @test all(isfinite, chain[:logp])
-    @test all(x -> x == 0.0 || x == 1.0, chain[:accepted])
+    # accepted / is_warmup keep their natural `Bool` type (issue #49)
+    @test eltype(chain[:accepted]) === Bool
+    @test eltype(chain[:is_warmup]) === Bool
+    @test all(x -> x == false || x == true, chain[:accepted])
     @test all(s -> s > 0, chain[:step_size])
 
     # Warmup samples appear at the start
-    @test chain[:is_warmup][1] == 1.0
-    # Post-warmup samples have is_warmup == 0
-    @test chain[:is_warmup][end] == 0.0
+    @test chain[:is_warmup][1] == true
+    # Post-warmup samples have is_warmup == false
+    @test chain[:is_warmup][end] == false
 end
 
 @testset "step_size is constant after warmup" begin

@@ -205,9 +205,12 @@ for TKey in (Symbol, VarName)
     )
         N = length(samples)
         D = model.dim
+        # Follow the sampler's working precision instead of pinning `Float64`, so a
+        # Float32 (e.g. GPU) run yields a Float32 chain rather than a silently widened one.
+        FP = typeof(sampler.epsilon)
 
-        vals = Matrix{Float64}(undef, N, D)
-        logp = Vector{Float64}(undef, N)
+        vals = Matrix{FP}(undef, N, D)
+        logp = Vector{FP}(undef, N)
         accepted = Vector{Bool}(undef, N)
 
         for i in 1:N
@@ -543,7 +546,7 @@ function _parallel_mala_update_progress!(
 end
 
 function _copy_trajectory_rows!(
-    vals::AbstractMatrix{Float64}, first_row::Int, S::AbstractMatrix, ncols::Int
+    vals::AbstractMatrix{<:Real}, first_row::Int, S::AbstractMatrix, ncols::Int
 )
     rows = first_row:(first_row + ncols - 1)
     S_host = Array(view(S, :, 1:ncols))
@@ -563,9 +566,10 @@ function _sample_parallel_mala_chain(
     progressname="Sampling",
 ) where {TKey}
     D = model.dim
+    FP = typeof(sampler.epsilon)
 
-    vals = Matrix{Float64}(undef, N, D)
-    logp = Vector{Float64}(undef, N)
+    vals = Matrix{FP}(undef, N, D)
+    logp = Vector{FP}(undef, N)
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
@@ -888,9 +892,10 @@ for TKey in (Symbol, VarName)
     )
         N = length(samples)
         D = model.dim
+        FP = typeof(sampler.epsilon)
 
-        vals = Matrix{Float64}(undef, N, D)
-        logp = Vector{Float64}(undef, N)
+        vals = Matrix{FP}(undef, N, D)
+        logp = Vector{FP}(undef, N)
 
         for i in 1:N
             vals[i, :] .= samples[i].x
@@ -1092,11 +1097,12 @@ for TKey in (Symbol, VarName)
         filtered = discard_warmup ? filter(s -> !s.is_warmup, samples) : samples
         N = length(filtered)
         D = model.dim
+        FP = typeof(sampler.epsilon_init)
 
-        vals = Matrix{Float64}(undef, N, D)
-        logp = Vector{Float64}(undef, N)
+        vals = Matrix{FP}(undef, N, D)
+        logp = Vector{FP}(undef, N)
         accepted = Vector{Bool}(undef, N)
-        step_size = Vector{Float64}(undef, N)
+        step_size = Vector{FP}(undef, N)
         is_warmup = Vector{Bool}(undef, N)
 
         for i in 1:N

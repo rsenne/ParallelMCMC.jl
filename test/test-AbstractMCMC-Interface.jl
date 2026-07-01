@@ -152,9 +152,49 @@ gradlogp_iface(x) = -x
         # logp values should be finite
         @test all(isfinite, chain[:logp])
 
-        # accepted values should be 0 or 1
+        # accepted is stored with its natural `Bool` type (issue #49)
         acc = chain[:accepted]
-        @test all(a -> a == 0.0 || a == 1.0, acc)
+        @test eltype(acc) === Bool
+        @test all(a -> a == false || a == true, acc)
+    end
+
+    @testset "chain element type follows sampler precision" begin
+        # Scalar param names so `chain[:a]` is a scalar-valued column whose eltype is the
+        # numeric type directly (a vector-valued param would nest inside a `Vector`).
+        model = DensityModel(logp_iface, gradlogp_iface, 2)
+
+        @testset "Float32 sampler → Float32 chain" begin
+            sampler = MALASampler(0.1f0)
+            @test sampler.epsilon isa Float32
+            chain = sample(
+                MersenneTwister(1),
+                model,
+                sampler,
+                50;
+                chain_type=SymChain,
+                progress=false,
+                param_names=[:a, :b],
+            )
+            @test eltype(chain[:a]) === Float32
+            @test eltype(chain[:b]) === Float32
+            @test eltype(chain[:logp]) === Float32
+            @test eltype(chain[:accepted]) === Bool
+        end
+
+        @testset "Float64 sampler → Float64 chain" begin
+            sampler = MALASampler(0.1)
+            chain = sample(
+                MersenneTwister(1),
+                model,
+                sampler,
+                50;
+                chain_type=SymChain,
+                progress=false,
+                param_names=[:a, :b],
+            )
+            @test eltype(chain[:a]) === Float64
+            @test eltype(chain[:logp]) === Float64
+        end
     end
 
     @testset "sample() with custom param_names" begin
