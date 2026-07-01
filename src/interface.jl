@@ -621,8 +621,6 @@ function _construct_flexichain(
 
     N, D = size(vals)
 
-    # Normalize parameter names to `key => dims` pairs (scalars use `()`), so we can
-    # consume the columns of `vals` uniformly below.
     if param_names === nothing
         param_names = model.param_names
     end
@@ -634,40 +632,29 @@ function _construct_flexichain(
             if n isa Pair
                 to_parameter(n.first) => n.second
             elseif n isa TKey || n isa Symbol
-                to_parameter(n) => ()
+                to_parameter(n)
             else
                 throw(ArgumentError("param_names must be a collection of Pairs, Symbols, or $TKey, got $(typeof(n))"))
             end
         end
     end
 
-    # Build a dict of per-key arrays rather than a single stacked array. This lets each
-    # key keep its natural element type — e.g. `accepted`/`is_warmup` stay `Bool` instead
-    # of being widened to `Float64` (see issue #49).
-    data = OrderedDict{FlexiChains.ParameterOrExtra{<:TKey},AbstractArray}()
+    arr = reshape(vals, N, 1, D)
+    param_chain = FlexiChains.FlexiChain{TKey}(arr, Tuple(wrapped_param_names))
 
-    offset = 1
-    for (key, sz) in wrapped_param_names
-        ncols = prod(sz)  # `prod(()) == 1`, i.e. scalar consumes one column
-        if sz === ()
-            data[key] = vals[:, offset]
-        else
-            cols = offset:(offset + ncols - 1)
-            data[key] = [collect(reshape(view(vals, i, cols), sz)) for i in 1:N]
-        end
-        offset += ncols
-    end
-    offset - 1 == D || throw(
-        ArgumentError(
-            "param_names consume $(offset - 1) columns, but there are $D parameter columns"
-        ),
+    #=
+    The internals have mixed element types (e.g. `Bool` for `accepted`/`is_warmup`,
+    `FP` for `logp`), so they cannot share a single stacked array without widening.
+    Store each in its own column via the dict-of-arrays constructor, which preserves
+    the natural element type (see issue #49), then merge with the parameters.
+    =#
+    extras = OrderedDict{FlexiChains.ParameterOrExtra{<:TKey},AbstractArray}(
+        FlexiChains.Extra(name) => internals[name] for name in keys(internals)
     )
+    isempty(extras) && return param_chain
+    extra_chain = FlexiChains.FlexiChain{TKey}(N, 1, extras)
 
-    for name in keys(internals)
-        data[FlexiChains.Extra(name)] = internals[name]
-    end
-
-    return FlexiChains.FlexiChain{TKey}(N, 1, data)
+    return merge(param_chain, extra_chain)
 end
 
 function _sample_parallel_mala_blocks(
