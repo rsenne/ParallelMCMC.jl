@@ -4,6 +4,7 @@ using AbstractMCMC
 using CUDA
 using FlexiChains
 using LinearAlgebra
+using OrderedCollections: OrderedDict
 using Random
 using Statistics
 

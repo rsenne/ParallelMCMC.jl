@@ -206,19 +206,19 @@ for TKey in (Symbol, VarName)
         N = length(samples)
         D = model.dim
 
-        internal_names = [:logp, :accepted]
-
         vals = Matrix{Float64}(undef, N, D)
-        internals = Matrix{Float64}(undef, N, 2)
+        logp = Vector{Float64}(undef, N)
+        accepted = Vector{Bool}(undef, N)
 
         for i in 1:N
             s = samples[i]
             vals[i, :] .= s.x
-            internals[i, 1] = s.logp
-            internals[i, 2] = s.accepted ? 1.0 : 0.0
+            logp[i] = s.logp
+            accepted[i] = s.accepted
         end
 
-        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
+        internals = (logp=logp, accepted=accepted)
+        return _construct_flexichain($TKey, vals, internals, param_names, model)
     end
 end
 
@@ -563,10 +563,9 @@ function _sample_parallel_mala_chain(
     progressname="Sampling",
 ) where {TKey}
     D = model.dim
-    internal_names = [:logp]
 
     vals = Matrix{Float64}(undef, N, D)
-    internals = Matrix{Float64}(undef, N, 1)
+    logp = Vector{Float64}(undef, N)
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
@@ -586,7 +585,7 @@ function _sample_parallel_mala_chain(
                 rows = first_row:(first_row + nkeep - 1)
 
                 _copy_trajectory_rows!(vals, first_row, S, nkeep)
-                internals[rows, 1] .= view(logps, 1:nkeep)
+                logp[rows] .= view(logps, 1:nkeep)
 
                 x0 = copy(view(S, :, nkeep))
                 nsteps += nkeep
@@ -599,15 +598,15 @@ function _sample_parallel_mala_chain(
         end
     end
 
-    return _construct_flexichain(TKey, vals, internals, param_names, internal_names, model)
+    internals = (logp=logp,)
+    return _construct_flexichain(TKey, vals, internals, param_names, model)
 end
 
 function _construct_flexichain(
     ::Type{TKey},
     vals::AbstractMatrix{<:Real},
-    internals::AbstractMatrix{<:Real},
+    internals::NamedTuple,
     param_names::Any,
-    internal_names::Vector{Symbol},
     model::DensityModel,
 ) where {TKey}
     # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
@@ -616,36 +615,55 @@ function _construct_flexichain(
     to_parameter(vn::VarName) = FlexiChains.Parameter(vn)
     to_parameter(s::Symbol) = FlexiChains.Parameter(TKey <: VarName ? VarName{s}() : s)
 
-    # vals and internals are both `iters x params`
-    # FlexiChains expects `iters x chains x params`
-    arr = hcat(vals, internals)
-    arr = reshape(arr, size(arr, 1), 1, size(arr, 2))
+    N, D = size(vals)
 
-    # Wrap parameter names in the format that FlexiChains expects. Ref:
-    # https://pysm.dev/FlexiChains.jl/stable/arrays/#api-fromarray
+    # Normalize parameter names to `key => dims` pairs (scalars use `()`), so we can
+    # consume the columns of `vals` uniformly below.
     if param_names === nothing
         param_names = model.param_names
     end
     wrapped_param_names = if param_names === nothing
         # Wasn't defined either as `param_names` or `model.param_names`, so make some up
-        (to_parameter(:x) => (size(vals, 2),),)
+        (to_parameter(:x) => (D,),)
     else
         map(param_names) do n
             if n isa Pair
                 to_parameter(n.first) => n.second
             elseif n isa TKey || n isa Symbol
-                to_parameter(n)
+                to_parameter(n) => ()
             else
                 throw(ArgumentError("param_names must be a collection of Pairs, Symbols, or $TKey, got $(typeof(n))"))
             end
         end
     end
 
-    all_names = (
-        wrapped_param_names...,
-        FlexiChains.Extra.(internal_names)...
+    # Build a dict of per-key arrays rather than a single stacked array. This lets each
+    # key keep its natural element type — e.g. `accepted`/`is_warmup` stay `Bool` instead
+    # of being widened to `Float64` (see issue #49).
+    data = OrderedDict{FlexiChains.ParameterOrExtra{<:TKey},AbstractArray}()
+
+    offset = 1
+    for (key, sz) in wrapped_param_names
+        ncols = prod(sz)  # `prod(()) == 1`, i.e. scalar consumes one column
+        if sz === ()
+            data[key] = vals[:, offset]
+        else
+            cols = offset:(offset + ncols - 1)
+            data[key] = [collect(reshape(view(vals, i, cols), sz)) for i in 1:N]
+        end
+        offset += ncols
+    end
+    offset - 1 == D || throw(
+        ArgumentError(
+            "param_names consume $(offset - 1) columns, but there are $D parameter columns"
+        ),
     )
-    return FlexiChains.FlexiChain{TKey}(arr, all_names)
+
+    for name in keys(internals)
+        data[FlexiChains.Extra(name)] = internals[name]
+    end
+
+    return FlexiChains.FlexiChain{TKey}(N, 1, data)
 end
 
 function _sample_parallel_mala_blocks(
@@ -871,17 +889,16 @@ for TKey in (Symbol, VarName)
         N = length(samples)
         D = model.dim
 
-        internal_names = [:logp]
-
         vals = Matrix{Float64}(undef, N, D)
-        internals = Matrix{Float64}(undef, N, 1)
+        logp = Vector{Float64}(undef, N)
 
         for i in 1:N
             vals[i, :] .= samples[i].x
-            internals[i, 1] = samples[i].logp
+            logp[i] = samples[i].logp
         end
 
-        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
+        internals = (logp=logp,)
+        return _construct_flexichain($TKey, vals, internals, param_names, model)
     end
 end
 
@@ -1076,20 +1093,22 @@ for TKey in (Symbol, VarName)
         N = length(filtered)
         D = model.dim
 
-        internal_names = [:logp, :accepted, :step_size, :is_warmup]
-
         vals = Matrix{Float64}(undef, N, D)
-        internals = Matrix{Float64}(undef, N, 4)
+        logp = Vector{Float64}(undef, N)
+        accepted = Vector{Bool}(undef, N)
+        step_size = Vector{Float64}(undef, N)
+        is_warmup = Vector{Bool}(undef, N)
 
         for i in 1:N
             s = filtered[i]
             vals[i, :] .= s.x
-            internals[i, 1] = s.logp
-            internals[i, 2] = s.accepted ? 1.0 : 0.0
-            internals[i, 3] = s.step_size
-            internals[i, 4] = s.is_warmup ? 1.0 : 0.0
+            logp[i] = s.logp
+            accepted[i] = s.accepted
+            step_size[i] = s.step_size
+            is_warmup[i] = s.is_warmup
         end
 
-        return _construct_flexichain($TKey, vals, internals, param_names, internal_names, model)
+        internals = (logp=logp, accepted=accepted, step_size=step_size, is_warmup=is_warmup)
+        return _construct_flexichain($TKey, vals, internals, param_names, model)
     end
 end
