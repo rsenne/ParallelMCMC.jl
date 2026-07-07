@@ -70,7 +70,7 @@ end
 end
 
 @testset "DynamicPPLExt: convenience constructor" begin
-    model = DensityModel(normal_model(TRUE_OBS))
+    model = DensityModel(normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff())
 
     @test model.dim == 1
     @test isfinite(model.logdensity([0.0]))
@@ -97,7 +97,7 @@ end
 end
 
 @testset "DynamicPPLExt: convenience constructor uses linked space for constrained models" begin
-    model = DensityModel(beta_model())
+    model = DensityModel(beta_model(); ad_backend=ADTypes.AutoForwardDiff())
 
     @test model.dim == 1
     @test isfinite(model.logdensity([-0.4]))
@@ -105,7 +105,7 @@ end
 end
 
 @testset "DynamicPPLExt: generic Turing model works with ParallelMALA and default Enzyme HVP" begin
-    model = DensityModel(normal_model(TRUE_OBS))
+    model = DensityModel(normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff())
 
     @test model.hvp === nothing
 
@@ -133,7 +133,7 @@ end
 end
 
 @testset "DynamicPPLExt: MvNormal(zeros(2), I) runs with ParallelMALA" begin
-    model = DensityModel(mvnormal_2d_model())
+    model = DensityModel(mvnormal_2d_model(); ad_backend=ADTypes.AutoForwardDiff())
 
     @test model.dim == 2
     @test isfinite(model.logdensity(zeros(2)))
@@ -163,7 +163,7 @@ end
     Dirichlet(ones(3)) lives on a 2-simplex, so its unconstrained
     representation has dim 2. Bijectors handles the link/unlink.
     =#
-    model = DensityModel(dirichlet_3_model())
+    model = DensityModel(dirichlet_3_model(); ad_backend=ADTypes.AutoForwardDiff())
 
     @test model.dim == 2
     @test isfinite(model.logdensity(zeros(2)))
@@ -187,7 +187,7 @@ end
 
 @testset "DynamicPPLExt: ParallelMALA bundle_samples fallback path (thinning)" begin
     #= A non-default kwarg (here `thinning`) forces ParallelMALA's `mcmcsample` override =#
-    model = DensityModel(mvnormal_2d_model())
+    model = DensityModel(mvnormal_2d_model(); ad_backend=ADTypes.AutoForwardDiff())
     sampler = ParallelMALASampler(
         0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
     )
@@ -201,7 +201,7 @@ end
 end
 
 @testset "DynamicPPLExt: named columns in Chains output" begin
-    model = DensityModel(normal_model(TRUE_OBS))
+    model = DensityModel(normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff())
 
     chain = sample(
         MersenneTwister(2),
@@ -219,7 +219,7 @@ end
 end
 
 @testset "discard_warmup=true removes warmup samples" begin
-    model = DensityModel(normal_model(TRUE_OBS))
+    model = DensityModel(normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff())
     n_warmup = 200
     n_total = 800
     sampler = AdaptiveMALASampler(0.3; n_warmup=n_warmup)
@@ -248,7 +248,7 @@ end
 end
 
 @testset "posterior mean and variance match analytic solution" begin
-    model = DensityModel(normal_model(TRUE_OBS))
+    model = DensityModel(normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff())
     n_warmup = 2_000
     n_draw = 10_000
     sampler = AdaptiveMALASampler(0.3; n_warmup=n_warmup)
@@ -271,7 +271,7 @@ end
 
 @testset "multivariate model: named columns for each dimension" begin
     obs = [1.0, -1.0]
-    model = DensityModel(mv_model(obs))
+    model = DensityModel(mv_model(obs); ad_backend=ADTypes.AutoForwardDiff())
 
     # 2 from linked Dirichlet + 2 from product_distribution
     @test model.dim == 4

@@ -8,3 +8,11 @@ coverage:
       default:
         target: 90%
   range: "80...90" # Yellow within this range
+
+# ext/EnzymeExt.jl holds custom EnzymeRules (forward/augmented_primal/reverse).
+# Enzyme runs those rule bodies through its own compiled derivative pipeline,
+# which does not emit Julia's --code-coverage line counters, so they report as
+# uncovered even though test-Owned-Matmul.jl exercises them and asserts correct
+# numerics.
+ignore:
+  - "ext/EnzymeExt.jl"

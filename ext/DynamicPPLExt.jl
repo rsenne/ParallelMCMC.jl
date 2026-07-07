@@ -8,7 +8,7 @@ using FlexiChains: FlexiChain, VarName, VNChain, SymChain
 using LogDensityProblems: LogDensityProblems
 
 """
-    DensityModel(turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing)
+    DensityModel(turing_model::DynamicPPL.Model; ad_backend, hvp=nothing)
 
 Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
@@ -19,22 +19,20 @@ triggers for this extension), plus any AD backend that is used.
 
 # Example
 ```julia
-using Turing, ParallelMCMC, FlexiChains
+using Turing, ParallelMCMC, FlexiChains, ForwardDiff
 
 @model function mymodel(y)
     μ ~ Normal(0, 1)
     y ~ Normal(μ, 0.5)
 end
 
-# AutoForwardDiff is the default. For larger models pass an explicit backend
-# and `using` the corresponding package (Enzyme, Mooncake).
-model = DensityModel(mymodel(1.5))
+model = DensityModel(mymodel(1.5); ad_backend=AutoForwardDiff())
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
                chain_type=FlexiChains.VNChain, discard_warmup=true, progress=true)
 ```
 """
 function ParallelMCMC.DensityModel(
-    turing_model::DynamicPPL.Model; ad_backend=ADTypes.AutoForwardDiff(), hvp=nothing
+    turing_model::DynamicPPL.Model; ad_backend, hvp=nothing
 )
     # Sample in linked/unconstrained space and let DynamicPPL provide the gradient.
     ld = DynamicPPL.LogDensityFunction(
