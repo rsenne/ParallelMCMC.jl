@@ -189,23 +189,34 @@ statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
 concrete method (and one concrete return type) at compile time, without
 relying on constant propagation through `===`.
 
-Mooncake/Zygote: We route them through
-`ReverseOnGrad` as the default. both CPU and GPU run this path fine (see the
-Mooncake GPU test). `AutoEnzyme` stays on `ForwardOnGrad`: its reverse mode
-hits the gc-transition abort on GPU (see `ext/EnzymeExt.jl`), whereas
-`Enzyme.Forward` is robust on CuArrays once the matmul is wrapped.
+The choice derives from DI's `pushforward_performance` trait
+mirroring how DI's `hvp_mode` picks its composition:
+backends with a fast pushforward (forward-capable or mode-agnostic, e.g.
+AutoForwardDiff, AutoMooncakeForward, plain AutoEnzyme) take `ForwardOnGrad`;
+reverse-only backends (AutoMooncake, AutoZygote, AutoReverseDiff, AutoTracker,
+AutoEnzyme pinned to Reverse) take `ReverseOnGrad`. Both paths are exercised
+on CPU and GPU (see the Mooncake/Zygote GPU tests). Plain
+`AutoEnzyme()` reports `ForwardOrReverseMode` and thus lands on
+`ForwardOnGrad`. This is fine, since Enzyme's reverse mode hits the 
+gc-transition abort on GPU (see `ext/EnzymeExt.jl`) whereas `Enzyme.Forward` is 
+robust on CuArrays once the matmul is wrapped.
 
-Note: forward mode is also supported for these backends via their forward counterparts.
+For a `DI.SecondOrder` backend the outer backend differentiates `gradlogp`,
+so the strategy comes from the outer backend's trait.
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
 
-_hvp_strategy(::AbstractADType) = ForwardOnGrad()
-_hvp_strategy(::ADTypes.AutoMooncake) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
+_strategy_from(::DI.PushforwardFast) = ForwardOnGrad()
+_strategy_from(::DI.PushforwardSlow) = ReverseOnGrad()
+
+function _hvp_strategy(backend::AbstractADType)
+    return _strategy_from(DI.pushforward_performance(backend))
+end
+function _hvp_strategy(backend::DI.SecondOrder)
+    return _strategy_from(DI.pushforward_performance(DI.outer(backend)))
+end
 
 #=
 Hooks for backend-specific normalization of the user's `backend`.
