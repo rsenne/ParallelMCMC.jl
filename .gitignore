@@ -1,6 +1,10 @@
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
+lcov.info
+# codecov uploader binaries fetched by dev/gpu-coverage.sh
+/codecov
+/codecov-legacy
 *.rej
 .DS_Store
 .benchmarkci
