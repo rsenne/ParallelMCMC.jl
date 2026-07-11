@@ -245,8 +245,9 @@ function _prepare_model(
     if grad_batch isa AbstractADType ||
         hvp_batch isa AbstractADType ||
         (batch_active && hvp_batch === nothing)
+        # Prepare at x0 in every column: a real point in the support, unlike zeros.
         X_template = similar(x_template, length(x_template), T)
-        fill!(X_template, zero(eltype(X_template)))
+        X_template .= x_template
 
         if grad_batch isa AbstractADType
             grad_batch = _resolve_gradient_batch(
@@ -772,7 +773,9 @@ function _sample_parallel_mala_chain(
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    model = _prepare_model(model, x0, sampler.T, sampler.backend)
+    # Postprocessing below dispatches on the user's model type (e.g. the
+    # DynamicPPL extension), so keep `model` unprepped.
+    prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
     next_update = N / AbstractMCMC.get_n_updates(progress)
@@ -782,8 +785,8 @@ function _sample_parallel_mala_chain(
         AbstractMCMC.init_progress!(progress)
         try
             while nsteps < N
-                S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0; workspace=ws)
-                logps = _trajectory_logps(model, S)
+                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
+                logps = _trajectory_logps(prepped, S)
                 nkeep = min(sampler.T, N - nsteps)
                 first_row = nsteps + 1
                 rows = first_row:(first_row + nkeep - 1)
@@ -811,7 +814,7 @@ function _construct_flexichain(
     vals::AbstractMatrix{<:Real},
     internals::NamedTuple,
     param_names::Any,
-    model::Union{DensityModel,PreppedDensityModel},
+    model::DensityModel,
 ) where {TKey}
     # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
     # `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
@@ -874,7 +877,7 @@ function _sample_parallel_mala_blocks(
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    model = _prepare_model(model, x0, sampler.T, sampler.backend)
+    prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
     next_update = N / AbstractMCMC.get_n_updates(progress)
@@ -885,8 +888,8 @@ function _sample_parallel_mala_blocks(
         AbstractMCMC.init_progress!(progress)
         try
             while nsteps < N
-                S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0; workspace=ws)
-                logps = _trajectory_logps(model, S)
+                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
+                logps = _trajectory_logps(prepped, S)
                 nkeep = min(sampler.T, N - nsteps)
                 S_keep = copy(view(S, :, 1:nkeep))
                 logps_keep = collect(view(logps, 1:nkeep))
@@ -895,7 +898,7 @@ function _sample_parallel_mala_blocks(
                 push!(blocks, S_keep)
                 push!(logp_blocks, logps_keep)
                 final_state = ParallelMALAState(
-                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep, model
+                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep, prepped
                 )
 
                 nsteps += nkeep
