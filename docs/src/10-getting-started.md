@@ -29,6 +29,27 @@ end
 model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 ```
 
+### AD backends in derivative slots
+
+Every derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
+`hvp_batch`) also accepts an `ADTypes.AbstractADType` backend instead of a
+callable, meaning "derive this quantity with AD".  In particular you can
+define a model from the log-density alone:
+
+```julia
+model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
+```
+
+Backend slots are resolved into prepared
+[DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl)
+callables when sampling starts, and the preparation is reused for every
+subsequent step.  Hand-written and AD-derived derivatives can be mixed
+freely — e.g. an analytical gradient with `hvp=AutoForwardDiff()`.
+
+When the model specifies its own `hvp`, the `backend` keyword of
+[`ParallelMALASampler`](@ref) may be omitted; it remains as the fallback
+source for Hessian-vector products.
+
 ---
 
 ## ParallelMALASampler

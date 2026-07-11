@@ -11,19 +11,27 @@ Defines model/sampler/state/transition types and implements
 Wraps a log-density function, its gradient, and optional Hessian-vector
 product helpers for use with ParallelMCMC samplers.
 
+Each derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
+`hvp_batch`) accepts either a callable or an `ADTypes.AbstractADType`
+backend, meaning "derive this quantity with AD". Backends are resolved into
+prepared DifferentiationInterface callables when sampling starts; a backend
+that cannot differentiate the model fails with its own error at that point.
+In particular, a model can be built from the log-density alone:
+
+    DensityModel(logp, AutoForwardDiff(), dim)
+
 - `logdensity(x::AbstractVector) -> Real`
-- `grad_logdensity(x::AbstractVector) -> AbstractVector`
-- `hvp(x::AbstractVector, v::AbstractVector) -> AbstractVector` — optional
-  model-specific Hessian-vector product used by DEER to avoid AD through
-  problematic kernels when available. If omitted, the sampler differentiates
-  `logdensity` directly via DifferentiationInterface.
+- `grad_logdensity` — callable `x -> AbstractVector`, or a backend applied to
+  `logdensity`.
+- `hvp` — optional callable `(x, v) -> AbstractVector`, or a backend applied
+  to `grad_logdensity`. If `nothing`, DEER builds the HVP from the sampler's
+  `backend`.
 - `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
-  log-density over columns.
-- `grad_logdensity_batch(X::AbstractMatrix) -> AbstractMatrix` — optional batched
-  gradient over columns.
-- `hvp_batch(X::AbstractMatrix, V::AbstractMatrix) -> AbstractMatrix` — optional
-  batched Hessian-vector product over columns. If omitted, the sampler can
-  differentiate `grad_logdensity_batch` to keep the batched DEER path enabled.
+  log-density over columns (callable only).
+- `grad_logdensity_batch` — optional callable `X -> AbstractMatrix`, or a
+  backend applied to `logdensity_batch` (which must then be provided).
+- `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend
+  applied to `grad_logdensity_batch`.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional collection of parameter names used in `FlexiChains` output. If
   `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
@@ -57,6 +65,35 @@ function DensityModel(
     grad_logdensity_batch=nothing,
     hvp_batch=nothing,
 )
+    logdensity isa AbstractADType && throw(
+        ArgumentError(
+            "logdensity must be a callable, not an AD backend; there is nothing to derive it from",
+        ),
+    )
+    logdensity_batch isa AbstractADType && throw(
+        ArgumentError(
+            "logdensity_batch must be a callable, not an AD backend; there is nothing to derive it from",
+        ),
+    )
+    grad_logdensity === nothing && throw(
+        ArgumentError(
+            "grad_logdensity must be a callable or an ADTypes.AbstractADType backend",
+        ),
+    )
+    if grad_logdensity_batch isa AbstractADType && logdensity_batch === nothing
+        throw(
+            ArgumentError(
+                "grad_logdensity_batch given as an AD backend requires logdensity_batch to differentiate",
+            ),
+        )
+    end
+    if hvp_batch isa AbstractADType && grad_logdensity_batch === nothing
+        throw(
+            ArgumentError(
+                "hvp_batch given as an AD backend requires grad_logdensity_batch to differentiate",
+            ),
+        )
+    end
     return DensityModel(
         logdensity,
         grad_logdensity,
@@ -66,6 +103,184 @@ function DensityModel(
         hvp_batch,
         dim,
         param_names,
+    )
+end
+
+"""
+A [`DensityModel`](@ref) whose backend slots have been resolved into
+prepared DifferentiationInterface callables by `_prepare_model`. Sampler
+internals dispatch on this type, so an unprepared model cannot reach them.
+Only the slots the target sampler consumes are resolved: the sequential
+form touches just `grad_logdensity`, the DEER form all derivative slots.
+"""
+struct PreppedDensityModel{F,G,H,FB,GB,HB,PN}
+    logdensity::F
+    grad_logdensity::G
+    hvp::H
+    logdensity_batch::FB
+    grad_logdensity_batch::GB
+    hvp_batch::HB
+    dim::Int
+    param_names::PN
+end
+
+#=
+Resolved gradient wrappers. Structs rather than anonymous closures because
+DI keys preparations on function identity. `TX` pins the input type the
+preparation was made for; other input types (e.g. the `Dual`s an outer AD
+pass feeds in when building an HVP over this gradient) fall back to
+unprepared `DI.gradient`.
+=#
+struct _ADGradient{F,B<:AbstractADType,P,TX}
+    logdensity::F
+    backend::B
+    prep::P
+end
+function (g::_ADGradient{F,B,P,TX})(x) where {F,B,P,TX}
+    if x isa TX
+        return DI.gradient(g.logdensity, g.prep, g.backend, x)
+    else
+        return DI.gradient(g.logdensity, g.backend, x)
+    end
+end
+
+# Columns of X are independent samples, so ∇_X sum(logdensity_batch(X))
+# stacks the per-column gradients.
+struct _BatchLogdensitySum{F}
+    logdensity_batch::F
+end
+(c::_BatchLogdensitySum)(X) = sum(c.logdensity_batch(X))
+
+struct _ADGradientBatch{C<:_BatchLogdensitySum,B<:AbstractADType,P,TX}
+    closure::C
+    backend::B
+    prep::P
+end
+function (g::_ADGradientBatch{C,B,P,TX})(X) where {C,B,P,TX}
+    if X isa TX
+        return DI.gradient(g.closure, g.prep, g.backend, X)
+    else
+        return DI.gradient(g.closure, g.backend, X)
+    end
+end
+
+function _resolve_gradient(logdensity, backend::AbstractADType, x_template::AbstractVector)
+    prep = DI.prepare_gradient(logdensity, backend, x_template)
+    return _ADGradient{
+        typeof(logdensity),typeof(backend),typeof(prep),typeof(x_template)
+    }(
+        logdensity, backend, prep
+    )
+end
+
+function _resolve_gradient_batch(
+    logdensity_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    closure = _BatchLogdensitySum(logdensity_batch)
+    prep = DI.prepare_gradient(closure, backend, X_template)
+    return _ADGradientBatch{
+        typeof(closure),typeof(backend),typeof(prep),typeof(X_template)
+    }(
+        closure, backend, prep
+    )
+end
+
+"""
+    _prepare_model(model, x_template)                    -> PreppedDensityModel
+    _prepare_model(model, x_template, T::Int, backend)   -> PreppedDensityModel
+
+Resolve backend slots of `model` into prepared DI callables, using
+`x_template` as the preparation input. The two-argument form resolves only
+`grad_logdensity` (all a sequential sampler needs). The DEER form also
+resolves the HVP and batched slots (templates have size `(dim, T)`), with
+the sampler's `backend` as the fallback source for a missing
+`hvp` / `hvp_batch`.
+"""
+function _prepare_model(model::DensityModel, x_template::AbstractVector)
+    grad = if model.grad_logdensity isa AbstractADType
+        _resolve_gradient(model.logdensity, model.grad_logdensity, x_template)
+    else
+        model.grad_logdensity
+    end
+    return PreppedDensityModel(
+        model.logdensity,
+        grad,
+        model.hvp,
+        model.logdensity_batch,
+        model.grad_logdensity_batch,
+        model.hvp_batch,
+        model.dim,
+        model.param_names,
+    )
+end
+
+function _prepare_model(
+    model::DensityModel, x_template::AbstractVector, T::Int, backend
+)
+    grad = if model.grad_logdensity isa AbstractADType
+        _resolve_gradient(model.logdensity, model.grad_logdensity, x_template)
+    else
+        model.grad_logdensity
+    end
+
+    hvp = if model.hvp isa AbstractADType
+        b = model.hvp
+        DEER._make_hvp_fn(DEER._hvp_strategy(b), grad, b, x_template)
+    elseif model.hvp === nothing
+        backend === nothing && throw(
+            ArgumentError(
+                "ParallelMALASampler needs a Hessian-vector product: supply `hvp` " *
+                "on the DensityModel (callable or AD backend), or pass `backend=` " *
+                "to ParallelMALASampler",
+            ),
+        )
+        DEER._make_hvp_fn(DEER._hvp_strategy(backend), grad, backend, x_template)
+    else
+        model.hvp
+    end
+
+    grad_batch = model.grad_logdensity_batch
+    hvp_batch = model.hvp_batch
+    batch_active = model.logdensity_batch !== nothing && grad_batch !== nothing
+    if grad_batch isa AbstractADType ||
+        hvp_batch isa AbstractADType ||
+        (batch_active && hvp_batch === nothing)
+        X_template = similar(x_template, length(x_template), T)
+        fill!(X_template, zero(eltype(X_template)))
+
+        if grad_batch isa AbstractADType
+            grad_batch = _resolve_gradient_batch(
+                model.logdensity_batch, grad_batch, X_template
+            )
+        end
+        if hvp_batch isa AbstractADType
+            b = hvp_batch
+            hvp_batch = DEER._make_hvp_batch_fn(
+                DEER._hvp_strategy(b), grad_batch, b, X_template
+            )
+        elseif batch_active && hvp_batch === nothing
+            backend === nothing && throw(
+                ArgumentError(
+                    "the batched DEER path needs a batched Hessian-vector product: " *
+                    "supply `hvp_batch` on the DensityModel (callable or AD backend), " *
+                    "or pass `backend=` to ParallelMALASampler",
+                ),
+            )
+            hvp_batch = DEER._make_hvp_batch_fn(
+                DEER._hvp_strategy(backend), grad_batch, backend, X_template
+            )
+        end
+    end
+
+    return PreppedDensityModel(
+        model.logdensity,
+        grad,
+        hvp,
+        model.logdensity_batch,
+        grad_batch,
+        hvp_batch,
+        model.dim,
+        model.param_names,
     )
 end
 
@@ -101,14 +316,16 @@ function MALASampler(epsilon::Real; cholM=nothing)
 end
 
 """
-State for a `MALASampler` chain.
+State for a `MALASampler` chain. Carries the prepped model so later steps
+reuse its AD preparation.
 """
-struct MALAState{V<:AbstractVector,L<:Real,W,NV<:AbstractVector,H}
+struct MALAState{V<:AbstractVector,L<:Real,W,NV<:AbstractVector,H,DM<:PreppedDensityModel}
     x::V
     logp::L
     workspace::W
     noise::NV
     noise_host::H
+    model::DM
 end
 
 """
@@ -152,21 +369,23 @@ function AbstractMCMC.step(
     else
         randn(rng, FP, model.dim)
     end
+    model = _prepare_model(model, x)
     logp_val = model.logdensity(x)
     ws = MALA.MALAWorkspace(x)
     noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     t = MALATransition(x, logp_val, true)
-    s = MALAState(x, logp_val, ws, noise, noise_host)
+    s = MALAState(x, logp_val, ws, noise, noise_host, model)
     return t, s
 end
 
 function AbstractMCMC.step(
     rng::Random.AbstractRNG,
-    model::DensityModel,
+    ::DensityModel,
     sampler::MALASampler,
     state::MALAState;
     kwargs...,
 )
+    model = state.model
     x = state.x
     ϵ = sampler.epsilon
     D = model.dim
@@ -189,7 +408,7 @@ function AbstractMCMC.step(
 
     logp_val = accepted ? model.logdensity(x_next) : state.logp
     t = MALATransition(x_next, logp_val, accepted)
-    s = MALAState(x_next, logp_val, state.workspace, state.noise, state.noise_host)
+    s = MALAState(x_next, logp_val, state.workspace, state.noise, state.noise_host, model)
     return t, s
 end
 
@@ -244,6 +463,10 @@ DEER-parallelized MALA sampler.
 
 Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
 estimator) and `:diag` (exact diagonal via `D` JVPs).
+
+`backend` is the AD backend used to build Hessian-vector products when the
+`DensityModel` does not specify `hvp` / `hvp_batch`; it may be omitted when
+the model does.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -268,7 +491,7 @@ function ParallelMALASampler(
     damping::Real=0.5,
     probes::Int=1,
     cholM=nothing,
-    backend,
+    backend=nothing,
 )
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
     (jacobian === :stoch_diag || jacobian === :diag) ||
@@ -290,9 +513,12 @@ function ParallelMALASampler(
 end
 
 """
-State for a `ParallelMALASampler` chain.
+State for a `ParallelMALASampler` chain. Carries the prepped model so later
+steps reuse its AD preparation.
 """
-struct ParallelMALAState{V<:AbstractVector,L<:Real,M<:AbstractMatrix,LV<:AbstractVector,W}
+struct ParallelMALAState{
+    V<:AbstractVector,L<:Real,M<:AbstractMatrix,LV<:AbstractVector,W,DM<:PreppedDensityModel
+}
     x::V
     logp::L
     trajectory::M
@@ -300,6 +526,7 @@ struct ParallelMALAState{V<:AbstractVector,L<:Real,M<:AbstractMatrix,LV<:Abstrac
     workspace::W
     tape::Vector{<:MALATapeElement}
     t::Int
+    model::DM
 end
 
 """
@@ -358,34 +585,19 @@ function _make_mala_tape_block(
 end
 
 function _build_mala_deer_rec(
-    model::DensityModel,
+    model::PreppedDensityModel,
     ε::Real,
     tape::Vector{<:MALATapeElement},
     x0_like::AbstractVector;
     cholM=nothing,
-    backend,
     tape_noise=nothing,
     tape_uniforms=nothing,
 )
     logp = model.logdensity
     gradlogp = model.grad_logdensity
 
-    #=
-    Use a model-provided HVP when available. Otherwise compute Hv via AD,
-    picking the path from the backend's `DI.hvp_mode` (see
-    `DEER._hvp_strategy`):
-
-      ForwardOnGrad() — `pushforward(gradlogp, x, v)`
-      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`
-
-    Either path can be bypassed by providing an analytical `hvp` /
-    `hvp_batch` on the `DensityModel`.
-    =#
-    hvp_fn = if model.hvp !== nothing
-        model.hvp
-    else
-        DEER._make_hvp_fn(DEER._hvp_strategy(backend), gradlogp, backend, x0_like)
-    end
+    # `hvp` / `hvp_batch` were resolved to callables in `_prepare_model`.
+    hvp_fn = model.hvp
 
     # Exact forward step.
     step_fwd =
@@ -435,16 +647,7 @@ function _build_mala_deer_rec(
             batch_ws = MALA.MALABatchedWorkspace(X_template)
             FT = similar(X_template)
             Jt = similar(X_template)
-            hvp_batch = if model.hvp_batch !== nothing
-                model.hvp_batch
-            else
-                DEER._make_hvp_batch_fn(
-                    DEER._hvp_strategy(backend),
-                    model.grad_logdensity_batch,
-                    backend,
-                    X_template,
-                )
-            end
+            hvp_batch = model.hvp_batch
 
             (Xbar, Z) -> MALA.mala_step_batched_fwd_and_jvp!(
                 FT,
@@ -471,7 +674,7 @@ end
 
 function _deer_solve_new_tape(
     rng::Random.AbstractRNG,
-    model::DensityModel,
+    model::PreppedDensityModel,
     sampler::ParallelMALASampler,
     x0::AbstractVector;
     workspace=nothing,
@@ -488,7 +691,6 @@ function _deer_solve_new_tape(
         tape,
         x0;
         cholM=sampler.cholM,
-        backend=sampler.backend,
         tape_noise=Xi,
         tape_uniforms=U,
     )
@@ -511,7 +713,7 @@ function _deer_solve_new_tape(
     return S, tape, ws
 end
 
-function _trajectory_logps(model::DensityModel, S::AbstractMatrix)
+function _trajectory_logps(model::PreppedDensityModel, S::AbstractMatrix)
     if model.logdensity_batch !== nothing
         return Array(model.logdensity_batch(S))
     end
@@ -570,6 +772,7 @@ function _sample_parallel_mala_chain(
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
+    model = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
     next_update = N / AbstractMCMC.get_n_updates(progress)
@@ -608,7 +811,7 @@ function _construct_flexichain(
     vals::AbstractMatrix{<:Real},
     internals::NamedTuple,
     param_names::Any,
-    model::DensityModel,
+    model::Union{DensityModel,PreppedDensityModel},
 ) where {TKey}
     # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
     # `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
@@ -671,6 +874,7 @@ function _sample_parallel_mala_blocks(
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
+    model = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
     next_update = N / AbstractMCMC.get_n_updates(progress)
@@ -691,7 +895,7 @@ function _sample_parallel_mala_blocks(
                 push!(blocks, S_keep)
                 push!(logp_blocks, logps_keep)
                 final_state = ParallelMALAState(
-                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep
+                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep, model
                 )
 
                 nsteps += nkeep
@@ -817,23 +1021,25 @@ function AbstractMCMC.step(
     else
         randn(rng, FP, model.dim)
     end
+    model = _prepare_model(model, x0, sampler.T, sampler.backend)
 
     S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0)
     logps = _trajectory_logps(model, S)
     x1 = S[:, 1]
     logp1 = logps[1]
     trans = ParallelMALATransition(x1, logp1)
-    state = ParallelMALAState(x1, logp1, S, logps, ws, tape, 1)
+    state = ParallelMALAState(x1, logp1, S, logps, ws, tape, 1, model)
     return trans, state
 end
 
 function AbstractMCMC.step(
     rng::Random.AbstractRNG,
-    model::DensityModel,
+    ::DensityModel,
     sampler::ParallelMALASampler,
     state::ParallelMALAState;
     kwargs...,
 )
+    model = state.model
     T = sampler.T
     t_next = state.t + 1
 
@@ -849,6 +1055,7 @@ function AbstractMCMC.step(
             state.workspace,
             state.tape,
             t_next,
+            model,
         )
         return trans, new_state
     else
@@ -860,7 +1067,7 @@ function AbstractMCMC.step(
         x_new = S_new[:, 1]
         logp_new = logps[1]
         trans = ParallelMALATransition(x_new, logp_new)
-        new_state = ParallelMALAState(x_new, logp_new, S_new, logps, ws, tape, 1)
+        new_state = ParallelMALAState(x_new, logp_new, S_new, logps, ws, tape, 1, model)
         return trans, new_state
     end
 end
@@ -930,9 +1137,11 @@ end
 
 """
 State for an `AdaptiveMALASampler` chain, including dual-averaging adaptation
-statistics.
+statistics. Carries the prepped model so later steps reuse its AD preparation.
 """
-struct AdaptiveMALAState{V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVector,H}
+struct AdaptiveMALAState{
+    V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVector,H,DM<:PreppedDensityModel
+}
     x::V
     logp::FP
     epsilon::FP
@@ -942,6 +1151,7 @@ struct AdaptiveMALAState{V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVecto
     workspace::W
     noise::NV
     noise_host::H
+    model::DM
 end
 
 """
@@ -992,6 +1202,7 @@ function AbstractMCMC.step(
     else
         randn(rng, FP, model.dim)
     end
+    model = _prepare_model(model, x)
     logp_val = FP(model.logdensity(x))
     ws = MALA.MALAWorkspace(x)
     noise, noise_host = _make_noise_buffer(x, FP, model.dim)
@@ -1006,17 +1217,19 @@ function AbstractMCMC.step(
         ws,
         noise,
         noise_host,
+        model,
     )
     return trans, state
 end
 
 function AbstractMCMC.step(
     rng::Random.AbstractRNG,
-    model::DensityModel,
+    ::DensityModel,
     sampler::AdaptiveMALASampler{FP},
     state::AdaptiveMALAState;
     kwargs...,
 ) where {FP}
+    model = state.model
     D = model.dim
     in_warmup = state.step < sampler.n_warmup
     ε = in_warmup ? state.epsilon : state.epsilon_bar
@@ -1064,6 +1277,7 @@ function AbstractMCMC.step(
         state.workspace,
         state.noise,
         state.noise_host,
+        model,
     )
     return trans, new_state
 end

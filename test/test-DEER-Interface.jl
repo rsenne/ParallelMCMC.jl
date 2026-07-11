@@ -78,7 +78,8 @@ end
     tape = [ParallelMCMC.MALATapeElement(randn(rng, D), rand(rng)) for _ in 1:T]
     model = DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D)
 
-    rec_ad = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D); backend=_AD)
+    model_p = ParallelMCMC._prepare_model(model, zeros(D), T, _AD)
+    rec_ad = ParallelMCMC._build_mala_deer_rec(model_p, ε, tape, zeros(D))
     x = randn(rng, D)
     v = randn(rng, D)
     te = tape[1]
@@ -106,7 +107,8 @@ end
         grad_logdensity_batch=gradlogp_batch_deer,
     )
 
-    rec = ParallelMCMC._build_mala_deer_rec(model, ε, tape, zeros(D); backend=_AD)
+    model_p = ParallelMCMC._prepare_model(model, zeros(D), T, _AD)
+    rec = ParallelMCMC._build_mala_deer_rec(model_p, ε, tape, zeros(D))
     @test rec.fwd_and_jvp_batch !== nothing
 
     X = randn(rng, D, T)
