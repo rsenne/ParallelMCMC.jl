@@ -23,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The AD-HVP fallback strategy (forward-on-grad vs reverse-on-grad) is now
-  derived from DifferentiationInterface's `pushforward_performance` trait
-  instead of a hardcoded per-backend list. `AutoEnzyme(mode=Enzyme.Reverse)`
-  now correctly routes to the reverse-on-grad path (#38).
+  derived from DifferentiationInterface's `hvp_mode` trait instead of a
+  hardcoded per-backend list. `AutoEnzyme(mode=Enzyme.Reverse)` now
+  correctly routes to the reverse-on-grad path (#38).
 
 ### Removed
 
