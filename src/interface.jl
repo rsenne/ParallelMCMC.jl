@@ -372,16 +372,11 @@ function _build_mala_deer_rec(
 
     #=
     Use a model-provided HVP when available. Otherwise compute Hv via AD,
-    picking the path from the user's `backend` via DI's
-    `pushforward_performance` trait (see `DEER._hvp_strategy`):
+    picking the path from the backend's `DI.hvp_mode` (see
+    `DEER._hvp_strategy`):
 
-      ForwardOnGrad() — `pushforward(gradlogp, x, v)`. Used for backends with
-                        a fast pushforward (AutoEnzyme, AutoForwardDiff,
-                        AutoMooncakeForward).
-      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Used for
-                        reverse-only backends (AutoMooncake / AutoZygote /
-                        AutoReverseDiff), which also have forward counterparts — see 
-                        `DEER._hvp_strategy` for the nuance.
+      ForwardOnGrad() — `pushforward(gradlogp, x, v)`
+      ReverseOnGrad() — `gradient(x -> pmcmc_dot(gradlogp(x), v))`
 
     Either path can be bypassed by providing an analytical `hvp` /
     `hvp_batch` on the `DensityModel`.

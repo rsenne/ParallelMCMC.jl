@@ -6,12 +6,7 @@ using ParallelMCMC
 const DEER_STRAT = ParallelMCMC.DEER
 const DI_STRAT = ParallelMCMC.DEER.DI
 
-#=
-The AD-HVP fallback strategy is derived from DI's `pushforward_performance`
-trait (see #38): backends with a fast pushforward take ForwardOnGrad, and
-reverse-only backends take ReverseOnGrad — no per-backend enumeration.
-=#
-@testset "HVP strategy from DI mode traits" begin
+@testset "HVP strategy from DI.hvp_mode" begin
     @testset "forward-capable backends → ForwardOnGrad" begin
         @test DEER_STRAT._hvp_strategy(AutoForwardDiff()) isa DEER_STRAT.ForwardOnGrad
         @test DEER_STRAT._hvp_strategy(AutoEnzyme()) isa DEER_STRAT.ForwardOnGrad
@@ -29,12 +24,16 @@ reverse-only backends take ReverseOnGrad — no per-backend enumeration.
             DEER_STRAT.ReverseOnGrad
     end
 
-    @testset "SecondOrder picks the strategy from the outer backend" begin
+    @testset "SecondOrder follows hvp_mode's composition" begin
         so_fwd_outer = DI_STRAT.SecondOrder(AutoForwardDiff(), AutoZygote())
         @test DEER_STRAT._hvp_strategy(so_fwd_outer) isa DEER_STRAT.ForwardOnGrad
 
         so_rev_outer = DI_STRAT.SecondOrder(AutoZygote(), AutoForwardDiff())
         @test DEER_STRAT._hvp_strategy(so_rev_outer) isa DEER_STRAT.ReverseOnGrad
+
+        # mode-agnostic outer + forward-only inner → ReverseOverForward
+        so_agnostic_outer = DI_STRAT.SecondOrder(AutoEnzyme(), AutoForwardDiff())
+        @test DEER_STRAT._hvp_strategy(so_agnostic_outer) isa DEER_STRAT.ReverseOnGrad
     end
 
     @testset "strategy resolution is type-stable" begin
