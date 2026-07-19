@@ -189,23 +189,23 @@ statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
 concrete method (and one concrete return type) at compile time, without
 relying on constant propagation through `===`.
 
-Mooncake/Zygote: We route them through
-`ReverseOnGrad` as the default. both CPU and GPU run this path fine (see the
-Mooncake GPU test). `AutoEnzyme` stays on `ForwardOnGrad`: its reverse mode
-hits the gc-transition abort on GPU (see `ext/EnzymeExt.jl`), whereas
-`Enzyme.Forward` is robust on CuArrays once the matmul is wrapped.
-
-Note: forward mode is also supported for these backends via their forward counterparts.
+The routing follows DI's `hvp_mode`: a forward outer pass
+(`DI.ForwardOverAnything`) takes `ForwardOnGrad`, anything else
+`ReverseOnGrad`. Only the outer direction matters since we differentiate
+the already-built `gradlogp`. Plain `AutoEnzyme()` lands on `ForwardOnGrad`,
+which we need: Enzyme reverse hits the gc-transition abort on GPU (see
+`ext/EnzymeExt.jl`).
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
 
-_hvp_strategy(::AbstractADType) = ForwardOnGrad()
-_hvp_strategy(::ADTypes.AutoMooncake) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoZygote) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoReverseDiff) = ReverseOnGrad()
-_hvp_strategy(::ADTypes.AutoTracker) = ReverseOnGrad()
+_strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
+_strategy_from(::DI.HVPMode) = ReverseOnGrad()
+
+function _hvp_strategy(backend::Union{AbstractADType, DI.SecondOrder})
+    return _strategy_from(DI.hvp_mode(backend))
+end
 
 #=
 Hooks for backend-specific normalization of the user's `backend`.
