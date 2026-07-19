@@ -285,10 +285,10 @@ function _prepare_model(
     )
 end
 
-# Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
-# the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
-# However, structs defined in extensions are hard to get hold of so we define them here.
-# The callable behaviour itself is implemented in LogDensityProblemsExt.
+#= Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
+the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
+However, structs defined in extensions are hard to get hold of so we define them here.
+The callable behaviour itself is implemented in LogDensityProblemsExt =#
 struct LogDensityProblemPrimal{L}
     ld::L
 end
@@ -816,9 +816,9 @@ function _construct_flexichain(
     param_names::Any,
     model::DensityModel,
 ) where {TKey}
-    # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
-    # `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
-    # 'upgrade' symbol parameter names to VarNames if the user requested a VNChain.
+    #= Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
+    `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
+    'upgrade' symbol parameter names to VarNames if the user requested a VNChain. =#
     to_parameter(vn::VarName) = FlexiChains.Parameter(vn)
     to_parameter(s::Symbol) = FlexiChains.Parameter(TKey <: VarName ? VarName{s}() : s)
 
