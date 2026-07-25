@@ -10,22 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The derivative slots of `DensityModel` (`grad_logdensity`, `hvp`,
-  `grad_logdensity_batch`, `hvp_batch`) now accept an
-  `ADTypes.AbstractADType` backend in place of a callable, meaning "derive
-  this quantity with AD". In particular a model can be built from the
-  log-density alone: `DensityModel(logp, AutoForwardDiff(), dim)`. Backends
-  are resolved into prepared DifferentiationInterface callables when
-  sampling starts, and the preparation is reused across steps (#40, #52).
-- `ParallelMALASampler`'s `backend` keyword is now optional: it is only the
-  fallback source for Hessian-vector products when the `DensityModel` does
-  not specify `hvp` / `hvp_batch` itself (#52).
+  `grad_logdensity_batch`, `hvp_batch`) now take an `ADTypes.AbstractADType`
+  in place of a callable, so `DensityModel(logp, AutoForwardDiff(), dim)`
+  builds a model from the log-density alone. Backends are turned into
+  prepared DifferentiationInterface callables when sampling starts, and that
+  preparation is reused across steps (#40, #52).
+- `ParallelMALASampler`'s `backend` keyword is now optional. It is only the
+  fallback source of Hessian-vector products, so a `DensityModel` carrying
+  its own `hvp` / `hvp_batch` does not need it (#52).
 
 ### Changed
 
-- The AD-HVP fallback strategy (forward-on-grad vs reverse-on-grad) is now
-  derived from DifferentiationInterface's `hvp_mode` trait instead of a
-  hardcoded per-backend list. `AutoEnzyme(mode=Enzyme.Reverse)` now
-  correctly routes to the reverse-on-grad path (#38).
+- The AD-HVP fallback strategy (forward-on-grad vs reverse-on-grad) now comes
+  from DifferentiationInterface's `hvp_mode` trait rather than a hardcoded
+  per-backend list, so `AutoEnzyme(mode=Enzyme.Reverse)` routes to the
+  reverse-on-grad path (#38).
 
 ### Removed
 

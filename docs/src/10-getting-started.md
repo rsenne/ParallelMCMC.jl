@@ -31,24 +31,15 @@ model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 
 ### AD backends in derivative slots
 
-Every derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
-`hvp_batch`) also accepts an `ADTypes.AbstractADType` backend instead of a
-callable, meaning "derive this quantity with AD".  In particular you can
-define a model from the log-density alone:
+Any of the derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, `hvp_batch`) can be given an `ADTypes.AbstractADType` instead of a callable, in which case that derivative is taken with AD.  A model can therefore be written with nothing but the log-density:
 
 ```julia
 model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
 ```
 
-Backend slots are resolved into prepared
-[DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl)
-callables when sampling starts, and the preparation is reused for every
-subsequent step.  Hand-written and AD-derived derivatives can be mixed
-freely — e.g. an analytical gradient with `hvp=AutoForwardDiff()`.
+Backends are turned into prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` is fine.
 
-When the model specifies its own `hvp`, the `backend` keyword of
-[`ParallelMALASampler`](@ref) may be omitted; it remains as the fallback
-source for Hessian-vector products.
+`backend` on [`ParallelMALASampler`](@ref) is only the fallback source of Hessian-vector products, so it can be left out if the model supplies its own `hvp`.
 
 ---
 

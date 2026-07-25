@@ -11,12 +11,11 @@ Defines model/sampler/state/transition types and implements
 Wraps a log-density function, its gradient, and optional Hessian-vector
 product helpers for use with ParallelMCMC samplers.
 
-Each derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
-`hvp_batch`) accepts either a callable or an `ADTypes.AbstractADType`
-backend, meaning "derive this quantity with AD". Backends are resolved into
-prepared DifferentiationInterface callables when sampling starts; a backend
-that cannot differentiate the model fails with its own error at that point.
-In particular, a model can be built from the log-density alone:
+The derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
+`hvp_batch`) take either a callable or an `ADTypes.AbstractADType`. Backends
+are turned into prepared DifferentiationInterface callables when sampling
+starts, and any AD failure surfaces there. So a model needs nothing beyond
+the log-density:
 
     DensityModel(logp, AutoForwardDiff(), dim)
 
@@ -107,11 +106,12 @@ function DensityModel(
 end
 
 """
-A [`DensityModel`](@ref) whose backend slots have been resolved into
-prepared DifferentiationInterface callables by `_prepare_model`. Sampler
-internals dispatch on this type, so an unprepared model cannot reach them.
-Only the slots the target sampler consumes are resolved: the sequential
-form touches just `grad_logdensity`, the DEER form all derivative slots.
+A [`DensityModel`](@ref) with its backend slots resolved to prepared
+DifferentiationInterface callables. `_prepare_model` builds these, and the
+sampler internals take them rather than a `DensityModel`, so nothing
+downstream has to re-check whether a slot holds a backend. Which slots get
+resolved depends on the sampler: the sequential samplers only need
+`grad_logdensity`, DEER needs the rest too.
 """
 struct PreppedDensityModel{F,G,H,FB,GB,HB,PN}
     logdensity::F
@@ -125,11 +125,10 @@ struct PreppedDensityModel{F,G,H,FB,GB,HB,PN}
 end
 
 #=
-Resolved gradient wrappers. Structs rather than anonymous closures because
-DI keys preparations on function identity. `TX` pins the input type the
-preparation was made for; other input types (e.g. the `Dual`s an outer AD
-pass feeds in when building an HVP over this gradient) fall back to
-unprepared `DI.gradient`.
+Resolved gradient wrappers. Structs rather than anonymous closures since DI
+keys preparations on function identity. `TX` is the input type the prep was
+made for; anything else (e.g. the `Dual`s an outer AD pass pushes through
+this gradient when forming an HVP) goes through unprepared `DI.gradient`.
 =#
 struct _ADGradient{F,B<:AbstractADType,P,TX}
     logdensity::F
@@ -189,12 +188,11 @@ end
     _prepare_model(model, x_template)                    -> PreppedDensityModel
     _prepare_model(model, x_template, T::Int, backend)   -> PreppedDensityModel
 
-Resolve backend slots of `model` into prepared DI callables, using
-`x_template` as the preparation input. The two-argument form resolves only
-`grad_logdensity` (all a sequential sampler needs). The DEER form also
-resolves the HVP and batched slots (templates have size `(dim, T)`), with
-the sampler's `backend` as the fallback source for a missing
-`hvp` / `hvp_batch`.
+Resolve the backend slots of `model` into prepared DI callables, preparing
+at `x_template`. The two-argument form only does `grad_logdensity`, which is
+all the sequential samplers use. The four-argument form also does the HVP and
+batched slots, preparing those at a `(dim, T)` template, and falls back to the
+sampler's `backend` when `hvp` / `hvp_batch` are missing.
 """
 function _prepare_model(model::DensityModel, x_template::AbstractVector)
     grad = if model.grad_logdensity isa AbstractADType
@@ -245,7 +243,7 @@ function _prepare_model(
     if grad_batch isa AbstractADType ||
         hvp_batch isa AbstractADType ||
         (batch_active && hvp_batch === nothing)
-        # Prepare at x0 in every column: a real point in the support, unlike zeros.
+        # Prepare on x0 in every column; zeros need not be in the support.
         X_template = similar(x_template, length(x_template), T)
         X_template .= x_template
 
@@ -317,8 +315,8 @@ function MALASampler(epsilon::Real; cholM=nothing)
 end
 
 """
-State for a `MALASampler` chain. Carries the prepped model so later steps
-reuse its AD preparation.
+State for a `MALASampler` chain. Holds the prepped model so AD preparation
+happens once per chain.
 """
 struct MALAState{V<:AbstractVector,L<:Real,W,NV<:AbstractVector,H,DM<:PreppedDensityModel}
     x::V
@@ -465,9 +463,8 @@ DEER-parallelized MALA sampler.
 Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
 estimator) and `:diag` (exact diagonal via `D` JVPs).
 
-`backend` is the AD backend used to build Hessian-vector products when the
-`DensityModel` does not specify `hvp` / `hvp_batch`; it may be omitted when
-the model does.
+`backend` supplies Hessian-vector products when the `DensityModel` has no
+`hvp` / `hvp_batch` of its own; if the model has them, it can be omitted.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -514,8 +511,8 @@ function ParallelMALASampler(
 end
 
 """
-State for a `ParallelMALASampler` chain. Carries the prepped model so later
-steps reuse its AD preparation.
+State for a `ParallelMALASampler` chain. Holds the prepped model so AD
+preparation happens once per chain.
 """
 struct ParallelMALAState{
     V<:AbstractVector,L<:Real,M<:AbstractMatrix,LV<:AbstractVector,W,DM<:PreppedDensityModel
@@ -773,8 +770,8 @@ function _sample_parallel_mala_chain(
 
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    # Postprocessing below dispatches on the user's model type (e.g. the
-    # DynamicPPL extension), so keep `model` unprepped.
+    # Postprocessing dispatches on the user's model type (e.g. from the
+    # DynamicPPL extension), so `model` itself stays unprepped.
     prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
@@ -1140,7 +1137,7 @@ end
 
 """
 State for an `AdaptiveMALASampler` chain, including dual-averaging adaptation
-statistics. Carries the prepped model so later steps reuse its AD preparation.
+statistics. Holds the prepped model so AD preparation happens once per chain.
 """
 struct AdaptiveMALAState{
     V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVector,H,DM<:PreppedDensityModel

@@ -9,8 +9,8 @@ using Enzyme: Enzyme
 using ForwardDiff: ForwardDiff
 
 #=
-Backend-or-callable slots on `DensityModel` (issues #52 / #40). The Gaussian
-target keeps everything analytically checkable: ∇logp = -x, hvp(x, v) = -v.
+Backend-or-callable slots on `DensityModel` (#52, #40). A standard Gaussian
+target so every resolved slot has a closed form: ∇logp = -x, hvp(x, v) = -v.
 =#
 logp_slots(x) = -0.5 * dot(x, x)
 gradlogp_slots(x) = -x
@@ -83,7 +83,7 @@ end
         m_r = ParallelMCMC._prepare_model(model, x0, 8, AutoForwardDiff())
         @test m_r.hvp(x0, v) ≈ -v
 
-        # no hvp source anywhere → informative error
+        # no hvp source anywhere
         @test_throws ArgumentError ParallelMCMC._prepare_model(model, x0, 8, nothing)
     end
 
@@ -223,7 +223,7 @@ end
     @test size(chain) == (64, 1)
     @test all(x -> all(isfinite, x), chain[:x])
 
-    # neither model hvp nor sampler backend → informative error at sampling start
+    # neither a model hvp nor a sampler backend: errors when sampling starts
     bare = DensityModel(logp_slots, gradlogp_slots, D_SLOTS)
     @test_throws ArgumentError sample(
         MersenneTwister(62), bare, s, 32; chain_type=CT_SLOTS, progress=false
