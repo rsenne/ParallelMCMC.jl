@@ -30,13 +30,11 @@ else
     indexing) is valid.
     =#
     _gpu_backends = Pair{String,ADTypes.AbstractADType}[]
-    if !Sys.iswindows()
-        try
-            using Enzyme: Enzyme
-            push!(_gpu_backends, "Enzyme" => ADTypes.AutoEnzyme())
-        catch
-            @warn "Enzyme not loadable — skipping Enzyme GPU DEER tests"
-        end
+    try
+        using Enzyme: Enzyme
+        push!(_gpu_backends, "Enzyme" => ADTypes.AutoEnzyme())
+    catch
+        @warn "Enzyme not loadable — skipping Enzyme GPU DEER tests"
     end
 
     # Convenience alias used by tests that don't need to sweep over all backends.
