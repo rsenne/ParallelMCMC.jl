@@ -29,7 +29,6 @@ end
 if !_PERF_GPU_AVAILABLE
     @info "GPU performance test: CUDA not functional — skipping"
 else
-
     #=
     Multivariate Gaussian target — well-conditioned, optimal MALA acceptance from
     any start. Lets ε be set analytically so the chain actually moves and DEER

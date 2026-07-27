@@ -212,12 +212,7 @@ end
     sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
     chain = sample(
-        MersenneTwister(1),
-        model,
-        sampler,
-        100;
-        chain_type=SymChain,
-        progress=false,
+        MersenneTwister(1), model, sampler, 100; chain_type=SymChain, progress=false
     )
 
     @test chain isa SymChain
@@ -229,7 +224,7 @@ end
     param_names = FlexiChains.parameters(chain)
     @test length(param_names) == 1
     name = only(param_names)
-    @test size(chain[name, stack=true], 3) == 2
+    @test size(chain[name, stack = true], 3) == 2
 end
 
 @testset "ParallelMALASampler bundle_samples fallback path (thinning)" begin
@@ -279,12 +274,7 @@ end
     sampler = ParallelMALASampler(0.1; T=32, damping=0.5, backend=_AD)
 
     chain = sample(
-        MersenneTwister(2025),
-        model,
-        sampler,
-        5_000;
-        chain_type=SymChain,
-        progress=false,
+        MersenneTwister(2025), model, sampler, 5_000; chain_type=SymChain, progress=false
     )
 
     burn = 500

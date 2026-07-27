@@ -35,7 +35,7 @@ function make_tape(rng::Random.AbstractRNG, x0::AbstractVector, dim::Int, t_len:
     FP = typeof(epsilon)
     return map(1:t_len) do _
         xi = copyto!(similar(x0, dim), randn(rng, FP, dim))
-        ParallelMCMC.MALATapeElement(xi, FP(rand(rng)))
+        return ParallelMCMC.MALATapeElement(xi, FP(rand(rng)))
     end
 end
 

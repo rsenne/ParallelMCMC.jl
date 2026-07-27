@@ -282,7 +282,7 @@ end
 function write_results(path::AbstractString, results::Dict{String,Any})
     mkpath(dirname(path))
     open(path, "w") do io
-        TOML.print(io, results; sorted=true)
+        return TOML.print(io, results; sorted=true)
     end
     return path
 end
@@ -312,7 +312,7 @@ function write_markdown(path::AbstractString, results::Dict{String,Any})
                 " B |",
             )
         end
-        println(io)
+        return println(io)
     end
     return path
 end

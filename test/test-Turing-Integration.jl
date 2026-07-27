@@ -151,7 +151,7 @@ end
         chain_type=VNChain,
         progress=false,
     )
-    samples = chain[@varname(x), stack=true]
+    samples = chain[@varname(x), stack = true]
     @test all(isfinite, samples)
     # Standard normal in 2-D: posterior mean should be near zero.
     posterior_means = mean(samples; dims=1)
@@ -192,8 +192,14 @@ end
         0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
     )
     chain = sample(
-        MersenneTwister(3), model, sampler, 800;
-        initial_params=zeros(2), chain_type=VNChain, thinning=2, progress=false,
+        MersenneTwister(3),
+        model,
+        sampler,
+        800;
+        initial_params=zeros(2),
+        chain_type=VNChain,
+        thinning=2,
+        progress=false,
     )
     @test chain isa VNChain
     @test only(FlexiChains.parameters(chain)) == @varname(x)
@@ -225,12 +231,7 @@ end
     sampler = AdaptiveMALASampler(0.3; n_warmup=n_warmup)
 
     chain_full = sample(
-        MersenneTwister(3),
-        model,
-        sampler,
-        n_total;
-        chain_type=VNChain,
-        progress=false,
+        MersenneTwister(3), model, sampler, n_total; chain_type=VNChain, progress=false
     )
     chain_trimmed = sample(
         MersenneTwister(3),
@@ -288,5 +289,5 @@ end
     # Check that the chain contains parameters in original space.
     # The Dirichlet parameter should have length 3.
     @test Set(FlexiChains.parameters(chain)) == Set([@varname(c), @varname(μ)])
-    @test all(chain[@varname(c), stack=true] .>= 0.0)  # Dirichlet samples should be non-negative
+    @test all(chain[@varname(c), stack = true] .>= 0.0)  # Dirichlet samples should be non-negative
 end

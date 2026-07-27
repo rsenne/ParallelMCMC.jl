@@ -61,7 +61,7 @@ function build_raw_deer_problem(
 
     tape = map(1:T) do _
         ξ = copyto!(similar(x0, D), randn(rng, FP, D))
-        ParallelMCMC.MALATapeElement(ξ, FP(rand(rng)))
+        return ParallelMCMC.MALATapeElement(ξ, FP(rand(rng)))
     end
 
     rec = ParallelMCMC._build_mala_deer_rec(

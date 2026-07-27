@@ -23,13 +23,13 @@ Base.axes(x::TaggedVector) = axes(x.data)
 Base.getindex(x::TaggedVector, i::Int) = x.data[i]
 Base.setindex!(x::TaggedVector, v, i::Int) = setindex!(x.data, v, i)
 function Base.similar(x::TaggedVector, ::Type{T}, dims::Dims{1}) where {T}
-    TaggedVector(Vector{T}(undef, dims[1]))
+    return TaggedVector(Vector{T}(undef, dims[1]))
 end
 function Base.similar(x::TaggedVector, ::Type{T}, n::Int) where {T}
-    TaggedVector(Vector{T}(undef, n))
+    return TaggedVector(Vector{T}(undef, n))
 end
 function Base.similar(x::TaggedVector, dims::Dims{1})
-    TaggedVector(Vector{eltype(x)}(undef, dims[1]))
+    return TaggedVector(Vector{eltype(x)}(undef, dims[1]))
 end
 Base.similar(x::TaggedVector, n::Int) = TaggedVector(Vector{eltype(x)}(undef, n))
 Base.copy(x::TaggedVector) = TaggedVector(copy(x.data))

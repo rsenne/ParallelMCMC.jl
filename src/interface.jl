@@ -631,7 +631,11 @@ function _construct_flexichain(
             elseif n isa TKey || n isa Symbol
                 to_parameter(n)
             else
-                throw(ArgumentError("param_names must be a collection of Pairs, Symbols, or $TKey, got $(typeof(n))"))
+                throw(
+                    ArgumentError(
+                        "param_names must be a collection of Pairs, Symbols, or $TKey, got $(typeof(n))",
+                    ),
+                )
             end
         end
     end
