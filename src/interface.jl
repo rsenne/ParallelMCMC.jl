@@ -85,7 +85,7 @@ function DensityModel(
     )
     grad_logdensity === nothing && throw(
         ArgumentError(
-            "grad_logdensity must be a callable or an ADTypes.AbstractADType backend",
+            "grad_logdensity must be a callable or an ADTypes.AbstractADType backend"
         ),
     )
     if grad_logdensity_batch isa AbstractADType && logdensity_batch === nothing
@@ -174,9 +174,7 @@ end
 
 function _resolve_gradient(logdensity, backend::AbstractADType, x_template::AbstractVector)
     prep = DI.prepare_gradient(logdensity, backend, x_template)
-    return _ADGradient{
-        typeof(logdensity),typeof(backend),typeof(prep),typeof(x_template)
-    }(
+    return _ADGradient{typeof(logdensity),typeof(backend),typeof(prep),typeof(x_template)}(
         logdensity, backend, prep
     )
 end
@@ -186,9 +184,7 @@ function _resolve_gradient_batch(
 )
     closure = _BatchLogdensitySum(logdensity_batch)
     prep = DI.prepare_gradient(closure, backend, X_template)
-    return _ADGradientBatch{
-        typeof(closure),typeof(backend),typeof(prep),typeof(X_template)
-    }(
+    return _ADGradientBatch{typeof(closure),typeof(backend),typeof(prep),typeof(X_template)}(
         closure, backend, prep
     )
 end
@@ -230,9 +226,7 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector)
     )
 end
 
-function _prepare_model(
-    model::DensityModel, x_template::AbstractVector, T::Int, backend
-)
+function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int, backend)
     grad = if model.grad_logdensity isa AbstractADType
         _resolve_gradient(model.logdensity, model.grad_logdensity, x_template)
     else

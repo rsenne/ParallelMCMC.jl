@@ -71,7 +71,9 @@ end
         m_r = ParallelMCMC._prepare_model(model, x0, 8, nothing)
         @test m_r.hvp(x0, v) ≈ -v
 
-        model_ad = DensityModel(logp_slots, AutoForwardDiff(), D_SLOTS; hvp=AutoForwardDiff())
+        model_ad = DensityModel(
+            logp_slots, AutoForwardDiff(), D_SLOTS; hvp=AutoForwardDiff()
+        )
         m_ad = ParallelMCMC._prepare_model(model_ad, x0, 8, nothing)
         @test m_ad.hvp(x0, v) ≈ -v
     end
@@ -201,24 +203,40 @@ end
 
     @testset "MALASampler" begin
         c_ad = sample(
-            MersenneTwister(21), model_ad, MALASampler(0.2), 100;
-            chain_type=CT_SLOTS, progress=false,
+            MersenneTwister(21),
+            model_ad,
+            MALASampler(0.2),
+            100;
+            chain_type=CT_SLOTS,
+            progress=false,
         )
         c_an = sample(
-            MersenneTwister(21), model_an, MALASampler(0.2), 100;
-            chain_type=CT_SLOTS, progress=false,
+            MersenneTwister(21),
+            model_an,
+            MALASampler(0.2),
+            100;
+            chain_type=CT_SLOTS,
+            progress=false,
         )
         @test c_ad[:x] ≈ c_an[:x]
     end
 
     @testset "AdaptiveMALASampler" begin
         c_ad = sample(
-            MersenneTwister(22), model_ad, AdaptiveMALASampler(0.2; n_warmup=50), 100;
-            chain_type=CT_SLOTS, progress=false,
+            MersenneTwister(22),
+            model_ad,
+            AdaptiveMALASampler(0.2; n_warmup=50),
+            100;
+            chain_type=CT_SLOTS,
+            progress=false,
         )
         c_an = sample(
-            MersenneTwister(22), model_an, AdaptiveMALASampler(0.2; n_warmup=50), 100;
-            chain_type=CT_SLOTS, progress=false,
+            MersenneTwister(22),
+            model_an,
+            AdaptiveMALASampler(0.2; n_warmup=50),
+            100;
+            chain_type=CT_SLOTS,
+            progress=false,
         )
         @test c_ad[:x] ≈ c_an[:x]
     end
@@ -259,8 +277,12 @@ end
     @test m_r.grad_logdensity(x0) ≈ -x0
 
     chain = sample(
-        MersenneTwister(42), model, MALASampler(0.2), 100;
-        chain_type=CT_SLOTS, progress=false,
+        MersenneTwister(42),
+        model,
+        MALASampler(0.2),
+        100;
+        chain_type=CT_SLOTS,
+        progress=false,
     )
     @test all(x -> all(isfinite, x), chain[:x])
 end
@@ -285,9 +307,7 @@ end
 end
 
 @testset "sampler backend is optional when the model specifies hvp" begin
-    model = DensityModel(
-        logp_slots, AutoForwardDiff(), D_SLOTS; hvp=AutoForwardDiff()
-    )
+    model = DensityModel(logp_slots, AutoForwardDiff(), D_SLOTS; hvp=AutoForwardDiff())
     s = ParallelMALASampler(0.05; T=16)   # no backend
     chain = sample(MersenneTwister(61), model, s, 64; chain_type=CT_SLOTS, progress=false)
     @test size(chain) == (64, 1)
