@@ -26,7 +26,6 @@ end
 if !_ADHVP_GPU_AVAILABLE
     @info "GPU AD-HVP test: CUDA not functional — skipping"
 else
-
     #=
     Multivariate Gaussian target with X'X/N perturbation:
       logp(β) = -0.5 (||β||^2 + ||Xβ||^2 / N)
@@ -39,7 +38,7 @@ else
     function _logp_single(β, X)
         Xβ = pmcmc_matmul(X, β)
         N = oftype(zero(eltype(β)), size(X, 1))
-        -oftype(zero(eltype(β)), 0.5) * (sum(abs2, β) + sum(abs2, Xβ) / N)
+        return -oftype(zero(eltype(β)), 0.5) * (sum(abs2, β) + sum(abs2, Xβ) / N)
     end
 
     function _gradlogp_single(β, X)
@@ -54,8 +53,8 @@ else
     function _logp_batch(B, X)
         XB = pmcmc_matmul(X, B)
         N = oftype(zero(eltype(B)), size(X, 1))
-        -oftype(zero(eltype(B)), 0.5) .*
-        (vec(sum(abs2, B; dims=1)) .+ vec(sum(abs2, XB; dims=1)) ./ N)
+        return -oftype(zero(eltype(B)), 0.5) .*
+               (vec(sum(abs2, B; dims=1)) .+ vec(sum(abs2, XB; dims=1)) ./ N)
     end
 
     function _gradlogp_batch(B, X)

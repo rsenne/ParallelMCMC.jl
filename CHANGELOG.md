@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Adds `JuliaFormatter` testing which was forgotten (#60).
+
 ### Removed
 
 - `DynamicPPLExt` no longer requires `ForwardDiff` as a triggering library to load.

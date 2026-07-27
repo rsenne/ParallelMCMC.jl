@@ -203,7 +203,7 @@ struct ReverseOnGrad <: HVPStrategy end
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
 _strategy_from(::DI.HVPMode) = ReverseOnGrad()
 
-function _hvp_strategy(backend::Union{AbstractADType, DI.SecondOrder})
+function _hvp_strategy(backend::Union{AbstractADType,DI.SecondOrder})
     return _strategy_from(DI.hvp_mode(backend))
 end
 
@@ -320,9 +320,8 @@ end
 @inline _rademacher!(z::AbstractArray, rng::AbstractRNG, ::Nothing) = _rademacher!(z, rng)
 
 @inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG) = _rademacher!(Z, rng)
-@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) = _rademacher!(
-    Z, rng, host
-)
+@inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) =
+    _rademacher!(Z, rng, host)
 
 function jac_diag_via_jvps(rec::TapedRecursion, x::AbstractVector, t::Int)
     D = length(x)
