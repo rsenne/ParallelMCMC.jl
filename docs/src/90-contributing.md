@@ -23,3 +23,11 @@ Otherwise, say what your proposed solution is and wait for a discussion around i
 
 If your solution involves code, tests, benchmarks, or documentation builds, check the [developer documentation](91-developer.md).
 Otherwise, you can use the GitHub interface directly to create your pull request.
+
+## Pull request checklist
+
+Before submitting a pull request, please make sure:
+
+- You have added tests for your feature or fix, where applicable.
+- You have formatted the code with `JuliaFormatter` using the version specified by the `test` project’s compatibility bounds.
+- All tests pass.
