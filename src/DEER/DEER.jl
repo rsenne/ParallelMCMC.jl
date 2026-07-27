@@ -223,9 +223,14 @@ EnzymeExt specializes it to set `function_annotation=Enzyme.Const` so
 Enzyme doesn't throw `EnzymeMutabilityException` on a closure that captures
 `gradlogp`.
 
+Both default to `DI.outer`, since the pass we are about to run is the outer
+one i.e., the inner derivative is whatever `gradlogp` already is. For a plain
+backend `DI.outer` is the identity; for a `SecondOrder` it keeps the half
+`_hvp_strategy` routed on, so the strategy and the backend that carries it
+out can't end up disagreeing.
 =#
 _hvp_forward_backend(backend::AbstractADType) = DI.outer(backend)
-_hvp_closure_backend(backend::AbstractADType) = DI.inner(backend)
+_hvp_closure_backend(backend::AbstractADType) = DI.outer(backend)
 
 function _prepare_hvp_via_grad_reverse(
     gradlogp, backend::AbstractADType, x_template::AbstractVector

@@ -36,6 +36,15 @@ const DI_STRAT = ParallelMCMC.DEER.DI
         @test DEER_STRAT._hvp_strategy(so_agnostic_outer) isa DEER_STRAT.ReverseOnGrad
     end
 
+    @testset "the backend that runs is the one routed on" begin
+        # both paths differentiate the already-built gradlogp, so both take the outer
+        so_fwd = DI_STRAT.SecondOrder(AutoForwardDiff(), AutoZygote())
+        @test DEER_STRAT._hvp_forward_backend(so_fwd) === AutoForwardDiff()
+
+        so_rev = DI_STRAT.SecondOrder(AutoZygote(), AutoForwardDiff())
+        @test DEER_STRAT._hvp_closure_backend(so_rev) === AutoZygote()
+    end
+
     @testset "strategy resolution is type-stable" begin
         @test @inferred(DEER_STRAT._hvp_strategy(AutoForwardDiff())) isa
             DEER_STRAT.ForwardOnGrad

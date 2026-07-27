@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ParallelMALASampler`'s `backend` keyword is now optional. It is only the
   fallback source of Hessian-vector products, so a `DensityModel` carrying
   its own `hvp` / `hvp_batch` does not need it (#52).
+- A `logdensity_batch` given without a `grad_logdensity_batch` now has the
+  batched gradient derived for it, from the gradient slot's backend if it has
+  one and the sampler's otherwise, rather than leaving the batched DEER path
+  switched off (#52).
+
+### Fixed
+
+- The reverse-on-grad HVP path differentiated with `DI.inner(backend)` while
+  its strategy was routed on `DI.outer(backend)`, so an `hvp` or `backend`
+  given as a `DifferentiationInterface.SecondOrder` ran the wrong half of the
+  pair. Both paths now take the outer, which is the pass being run--the
+  gradient slot is the inner one.
+- A batched HVP is now derived from the model's own `hvp` backend when the
+  sampler has no `backend`, instead of erroring.
 
 ### Changed
 

@@ -19,6 +19,13 @@ the log-density:
 
     DensityModel(logp, AutoForwardDiff(), dim)
 
+A backend in `hvp` / `hvp_batch` differentiates whatever the gradient slot
+holds; it does not take a second derivative of `logdensity`. Over an
+AD-derived gradient that composition is second-order AD, and over a
+hand-written gradient it is a single AD pass across your own code. Only the
+outer half of a `DifferentiationInterface.SecondOrder` is used, the gradient
+slot being the inner one.
+
 - `logdensity(x::AbstractVector) -> Real`
 - `grad_logdensity` — callable `x -> AbstractVector`, or a backend applied to
   `logdensity`.
@@ -28,7 +35,9 @@ the log-density:
 - `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
   log-density over columns (callable only).
 - `grad_logdensity_batch` — optional callable `X -> AbstractMatrix`, or a
-  backend applied to `logdensity_batch` (which must then be provided).
+  backend applied to `logdensity_batch` (which must then be provided). Left
+  out alongside a `logdensity_batch`, it is derived from whichever backend is
+  available.
 - `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend
   applied to `grad_logdensity_batch`.
 - `dim::Int` — dimensionality of the parameter space
@@ -108,10 +117,10 @@ end
 """
 A [`DensityModel`](@ref) with its backend slots resolved to prepared
 DifferentiationInterface callables. `_prepare_model` builds these, and the
-sampler internals take them rather than a `DensityModel`, so nothing
-downstream has to re-check whether a slot holds a backend. Which slots get
-resolved depends on the sampler: the sequential samplers only need
-`grad_logdensity`, DEER needs the rest too.
+sampler internals take them rather than a `DensityModel`, so no slot of one
+of these ever holds an `AbstractADType`. Which slots are filled depends on
+the sampler: the sequential samplers only need `grad_logdensity` and get
+`nothing` for the DEER-only slots, DEER fills the rest.
 """
 struct PreppedDensityModel{F,G,H,FB,GB,HB,PN}
     logdensity::F
@@ -190,9 +199,14 @@ end
 
 Resolve the backend slots of `model` into prepared DI callables, preparing
 at `x_template`. The two-argument form only does `grad_logdensity`, which is
-all the sequential samplers use. The four-argument form also does the HVP and
-batched slots, preparing those at a `(dim, T)` template, and falls back to the
-sampler's `backend` when `hvp` / `hvp_batch` are missing.
+all the sequential samplers use, and leaves the DEER-only slots `nothing`.
+
+The four-argument form also does the HVP and batched slots, preparing those at
+a `(dim, T)` template. A missing `hvp` / `hvp_batch` is derived from the
+model's own `hvp` backend if it has one and the sampler's `backend` otherwise;
+a missing `grad_logdensity_batch` likewise comes from the gradient slot's
+backend or the sampler's. The batched slots are only filled when
+`logdensity_batch` is there to derive them from.
 """
 function _prepare_model(model::DensityModel, x_template::AbstractVector)
     grad = if model.grad_logdensity isa AbstractADType
@@ -200,13 +214,17 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector)
     else
         model.grad_logdensity
     end
+    #= The derivative slots DEER alone reads are dropped rather than passed
+    along: a sequential sampler never looks at them, and carrying an
+    unresolved backend would break the invariant that no slot here holds an
+    `AbstractADType`. =#
     return PreppedDensityModel(
         model.logdensity,
         grad,
-        model.hvp,
+        nothing,
         model.logdensity_batch,
-        model.grad_logdensity_batch,
-        model.hvp_batch,
+        nothing,
+        nothing,
         model.dim,
         model.param_names,
     )
@@ -239,6 +257,25 @@ function _prepare_model(
 
     grad_batch = model.grad_logdensity_batch
     hvp_batch = model.hvp_batch
+
+    # Whatever can hand us a batched HVP: the model's own backend, else the sampler's.
+    hvp_source = model.hvp isa AbstractADType ? model.hvp : backend
+
+    #= A batched log-density with no batched gradient still enables the batched
+    DEER path, deriving the gradient from the gradient slot's own backend if it
+    has one, else the sampler's. Only worth starting if the batched HVP can be
+    built too, and if either is unreachable the path just stays off: the
+    unbatched update is a complete fallback. =#
+    if model.logdensity_batch !== nothing &&
+        grad_batch === nothing &&
+        (hvp_batch !== nothing || hvp_source !== nothing)
+        grad_batch = if model.grad_logdensity isa AbstractADType
+            model.grad_logdensity
+        else
+            backend
+        end
+    end
+
     batch_active = model.logdensity_batch !== nothing && grad_batch !== nothing
     if grad_batch isa AbstractADType ||
         hvp_batch isa AbstractADType ||
@@ -258,7 +295,7 @@ function _prepare_model(
                 DEER._hvp_strategy(b), grad_batch, b, X_template
             )
         elseif batch_active && hvp_batch === nothing
-            backend === nothing && throw(
+            hvp_source === nothing && throw(
                 ArgumentError(
                     "the batched DEER path needs a batched Hessian-vector product: " *
                     "supply `hvp_batch` on the DensityModel (callable or AD backend), " *
@@ -266,7 +303,7 @@ function _prepare_model(
                 ),
             )
             hvp_batch = DEER._make_hvp_batch_fn(
-                DEER._hvp_strategy(backend), grad_batch, backend, X_template
+                DEER._hvp_strategy(hvp_source), grad_batch, hvp_source, X_template
             )
         end
     end

@@ -117,11 +117,81 @@ end
         @test_throws ArgumentError ParallelMCMC._prepare_model(model_fb, x0, T, nothing)
     end
 
-    @testset "two-argument form leaves DEER-only slots untouched" begin
-        model = DensityModel(logp_slots, gradlogp_slots, D_SLOTS; hvp=AutoForwardDiff())
+    @testset "two-argument form drops the DEER-only slots" begin
+        model = DensityModel(
+            logp_slots,
+            gradlogp_slots,
+            D_SLOTS;
+            hvp=AutoForwardDiff(),
+            logdensity_batch=logp_batch_slots,
+            grad_logdensity_batch=AutoForwardDiff(),
+            hvp_batch=AutoForwardDiff(),
+        )
         m_r = ParallelMCMC._prepare_model(model, x0)
         @test m_r isa ParallelMCMC.PreppedDensityModel
-        @test m_r.hvp isa ADTypes.AbstractADType
+        # no slot of a prepped model is left holding a backend
+        @test m_r.hvp === nothing
+        @test m_r.grad_logdensity_batch === nothing
+        @test m_r.hvp_batch === nothing
+    end
+
+    @testset "batched gradient derived from logdensity_batch" begin
+        T = 8
+        X = randn(rng, D_SLOTS, T)
+        V = randn(rng, D_SLOTS, T)
+
+        # grad_logdensity_batch omitted: taken from the gradient slot's backend
+        model = DensityModel(
+            logp_slots,
+            AutoForwardDiff(),
+            D_SLOTS;
+            hvp=AutoForwardDiff(),
+            logdensity_batch=logp_batch_slots,
+        )
+        m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+        @test m_r.grad_logdensity_batch(X) ≈ -X
+        @test m_r.hvp_batch(X, V) ≈ -V
+
+        # analytic gradient, so the sampler backend supplies it instead
+        model_an = DensityModel(
+            logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=logp_batch_slots
+        )
+        m_an = ParallelMCMC._prepare_model(model_an, x0, T, AutoForwardDiff())
+        @test m_an.grad_logdensity_batch(X) ≈ -X
+        @test m_an.hvp_batch(X, V) ≈ -V
+
+        #= No backend anywhere to derive from, so the batched path stays off
+        rather than erroring i.e., an analytic hvp still covers the unbatched one. =#
+        m_off = ParallelMCMC._prepare_model(
+            DensityModel(
+                logp_slots,
+                gradlogp_slots,
+                D_SLOTS;
+                hvp=(x, v) -> -v,
+                logdensity_batch=logp_batch_slots,
+            ),
+            x0,
+            T,
+            nothing,
+        )
+        @test m_off.grad_logdensity_batch === nothing
+        @test m_off.hvp_batch === nothing
+    end
+
+    @testset "model hvp backend feeds the batched HVP without a sampler backend" begin
+        T = 8
+        X = randn(rng, D_SLOTS, T)
+        V = randn(rng, D_SLOTS, T)
+        model = DensityModel(
+            logp_slots,
+            gradlogp_slots,
+            D_SLOTS;
+            hvp=AutoForwardDiff(),
+            logdensity_batch=logp_batch_slots,
+            grad_logdensity_batch=gradlogp_batch_slots,
+        )
+        m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+        @test m_r.hvp_batch(X, V) ≈ -V
     end
 end
 

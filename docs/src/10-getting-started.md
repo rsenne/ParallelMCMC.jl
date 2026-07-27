@@ -39,6 +39,8 @@ model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
 
 Backends are turned into prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` is fine.
 
+A backend in `hvp` differentiates whatever the gradient slot holds; it is not a second derivative of `logdensity`.  Over an AD-derived gradient that composition is second-order AD, and over a hand-written one it is a single AD pass across your own code.  The same goes for the batched pair, and a `logdensity_batch` supplied without a `grad_logdensity_batch` has the batched gradient derived for it.
+
 `backend` on [`ParallelMALASampler`](@ref) is only the fallback source of Hessian-vector products, so it can be left out if the model supplies its own `hvp`.
 
 ---
