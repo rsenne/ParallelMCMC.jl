@@ -14,14 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in place of a callable, so `DensityModel(logp, AutoForwardDiff(), dim)`
   builds a model from the log-density alone. Backends are turned into
   prepared DifferentiationInterface callables when sampling starts, and that
-  preparation is reused across steps (#40, #52).
+  preparation is reused across steps (#40, #52). The prepared model rides
+  along in the sampler state to get that reuse; a state handed to `step` for a
+  different model, which `initial_state` allows, is re-prepared from the model
+  passed rather than reused, so the model given to `sample` is the one sampled.
 - `ParallelMALASampler`'s `backend` keyword is now optional. It is only the
   fallback source of Hessian-vector products, so a `DensityModel` carrying
-  its own `hvp` / `hvp_batch` does not need it (#52).
+  its own `hvp` / `hvp_batch` does not need it (#52). With no sampler
+  `backend`, a batched HVP is derived from the model's own `hvp` backend.
 - A `logdensity_batch` given without a `grad_logdensity_batch` now has the
   batched gradient derived for it, from the gradient slot's backend if it has
   one and the sampler's otherwise, rather than leaving the batched DEER path
-  switched off (#52).
+  switched off (#52). `hvp_batch` can be a backend in that case too, and
+  differentiates the derived gradient; with no backend anywhere to derive from,
+  it raises when sampling starts.
 - Adds `JuliaFormatter` testing which was forgotten (#60).
 
 ### Fixed
@@ -30,9 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its strategy was routed on `DI.outer(backend)`, so an `hvp` or `backend`
   given as a `DifferentiationInterface.SecondOrder` ran the wrong half of the
   pair. Both paths now take the outer, which is the pass being run--the
-  gradient slot is the inner one.
-- A batched HVP is now derived from the model's own `hvp` backend when the
-  sampler has no `backend`, instead of erroring.
+  gradient slot is the inner one. Unwrapping to the outer half happens before
+  the backend-specific normalization hooks are dispatched on, so a
+  `SecondOrder(AutoEnzyme(), ...)` still reaches `EnzymeExt` and gets its mode
+  and function annotation pinned rather than running as a bare `AutoEnzyme()`
+  (which aborts on GPU).
 
 ### Changed
 
@@ -40,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from DifferentiationInterface's `hvp_mode` trait rather than a hardcoded
   per-backend list, so `AutoEnzyme(mode=Enzyme.Reverse)` routes to the
   reverse-on-grad path (#38).
+- Because a `logdensity_batch` without a `grad_logdensity_batch` now has the
+  batched gradient derived rather than switching the batched DEER path off, a
+  model in that shape runs the batched update where it used to run the unbatched
+  one, and AD is applied to its `logdensity_batch`. On GPU that subjects a
+  function nothing was differentiating before to the backend's restrictions
+  (`pmcmc_*` wrappers for Enzyme). Supply `grad_logdensity_batch` to keep AD out
+  of the batched path.
 
 ### Removed
 
