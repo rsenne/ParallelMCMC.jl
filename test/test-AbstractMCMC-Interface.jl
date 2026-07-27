@@ -241,7 +241,7 @@ gradlogp_iface(x) = -x
 
             @test chain isa SymChain
             @test FlexiChains.parameters(chain) == [:param]
-            @test size(chain[:param, stack=true]) == (50, 1, 2)
+            @test size(chain[:param, stack = true]) == (50, 1, 2)
         end
 
         @testset "with vector-valued varnames" begin
@@ -256,15 +256,19 @@ gradlogp_iface(x) = -x
 
             @test chain isa VNChain
             @test FlexiChains.parameters(chain) == [@varname(param)]
-            @test size(chain[@varname(param), stack=true]) == (50, 1, 2)
+            @test size(chain[@varname(param), stack = true]) == (50, 1, 2)
         end
     end
 
     @testset "invalid param_names throws" begin
         model = DensityModel(logp_iface, gradlogp_iface, 2)
         @test_throws "param_names must be a collection" sample(
-            model, MALASampler(0.15), 50;
-            chain_type=SymChain, progress=false, param_names=["mu", "sigma"],
+            model,
+            MALASampler(0.15),
+            50;
+            chain_type=SymChain,
+            progress=false,
+            param_names=["mu", "sigma"],
         )
     end
 

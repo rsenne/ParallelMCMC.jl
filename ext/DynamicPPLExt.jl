@@ -31,9 +31,7 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
                chain_type=FlexiChains.VNChain, discard_warmup=true, progress=true)
 ```
 """
-function ParallelMCMC.DensityModel(
-    turing_model::DynamicPPL.Model; ad_backend, hvp=nothing
-)
+function ParallelMCMC.DensityModel(turing_model::DynamicPPL.Model; ad_backend, hvp=nothing)
     # Sample in linked/unconstrained space and let DynamicPPL provide the gradient.
     ld = DynamicPPL.LogDensityFunction(
         turing_model,
@@ -126,7 +124,11 @@ for (Ttrans, Tspl, Tstate) in (
             chain_type::Type{SymChain};
             kwargs...,
         )
-            throw(ArgumentError("FlexiChains.SymChain is not supported for DynamicPPL models; please use VNChain instead."))
+            throw(
+                ArgumentError(
+                    "FlexiChains.SymChain is not supported for DynamicPPL models; please use VNChain instead.",
+                ),
+            )
         end
     end
 end
@@ -140,7 +142,7 @@ function ParallelMCMC._construct_flexichain(
 )
     pwss = map(enumerate(eachrow(vals))) do (i, val)
         stats = map(v -> v[i], internals)
-        DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
+        return DynamicPPL.ParamsWithStats(val, model.logdensity.ld, stats)
     end
     return AbstractMCMC.from_samples(VNChain, hcat(pwss))
 end

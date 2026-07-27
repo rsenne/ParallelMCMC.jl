@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   batched gradient derived for it, from the gradient slot's backend if it has
   one and the sampler's otherwise, rather than leaving the batched DEER path
   switched off (#52).
+- Adds `JuliaFormatter` testing which was forgotten (#60).
 
 ### Fixed
 

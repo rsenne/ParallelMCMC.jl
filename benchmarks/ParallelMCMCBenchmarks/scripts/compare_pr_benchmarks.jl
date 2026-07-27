@@ -135,7 +135,7 @@ function write_markdown(path, rows; warn_ratio, fail_ratio)
                 " |",
             )
         end
-        println(io)
+        return println(io)
     end
     return path
 end

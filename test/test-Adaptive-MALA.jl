@@ -183,12 +183,7 @@ end
     sampler = AdaptiveMALASampler(0.2; n_warmup=50)
 
     chain = sample(
-        MersenneTwister(1),
-        model,
-        sampler,
-        150;
-        chain_type=SymChain,
-        progress=false,
+        MersenneTwister(1), model, sampler, 150; chain_type=SymChain, progress=false
     )
 
     @test chain isa SymChain
@@ -219,12 +214,7 @@ end
     sampler = AdaptiveMALASampler(0.1; n_warmup=n_w)
 
     chain = sample(
-        MersenneTwister(3),
-        model,
-        sampler,
-        n_w + 50;
-        chain_type=VNChain,
-        progress=false,
+        MersenneTwister(3), model, sampler, n_w + 50; chain_type=VNChain, progress=false
     )
 
     # Filter by is_warmup flag to avoid off-by-one from the init transition.

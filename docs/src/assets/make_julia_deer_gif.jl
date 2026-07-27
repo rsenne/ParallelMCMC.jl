@@ -370,13 +370,13 @@ function main()
         animation_paths = vcat(frame_paths, fill(last(frame_paths), 8))
         tmp_output = joinpath(frame_dir, "julia_deer_posterior.gif")
         run(`$convert -delay 7 -loop 0 $animation_paths -layers Optimize $tmp_output`)
-        cp(tmp_output, output; force=true)
+        return cp(tmp_output, output; force=true)
     end
 
     final_error = maximum(abs.(last(iterates) .- final_trajectory))
     println("wrote ", output)
     println("last DEER metric: ", @sprintf("%.3g", last(metrics)))
-    println("max error vs sequential taped MALA: ", @sprintf("%.3g", final_error))
+    return println("max error vs sequential taped MALA: ", @sprintf("%.3g", final_error))
 end
 
 main()

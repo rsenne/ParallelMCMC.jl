@@ -1,4 +1,7 @@
 indent = 4
 margin = 92
 normalize_line_endings = "unix"
+v2_stable_multiline_strings = true
+conditional_to_if = false
+pipe_to_function_call = false
 style="blue"
