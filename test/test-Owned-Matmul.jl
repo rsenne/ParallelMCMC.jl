@@ -178,9 +178,9 @@ end
 @testset "Enzyme Const-arg forward JVP — pmcmc_matmul" begin
     rng = MersenneTwister(100)
     M, K, N = 5, 4, 3
-    A = randn(rng, M, K);
+    A = randn(rng, M, K)
     B = randn(rng, K, N)
-    dA = randn(rng, M, K);
+    dA = randn(rng, M, K)
     dB = randn(rng, K, N)
 
     # Const(A), Duplicated(B): dY = A * dB
@@ -214,8 +214,8 @@ end
     # f(A, B) = pmcmc_dot(pmcmc_matmul(A, B), w);  dA = w * B', dB = A' * w
     rng = MersenneTwister(101)
     M, K = 5, 4
-    A = randn(rng, M, K);
-    b = randn(rng, K);
+    A = randn(rng, M, K)
+    b = randn(rng, K)
     w = randn(rng, M)
 
     # Const(A): only B accumulates; expect db = A' * w
@@ -245,9 +245,9 @@ end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_dot" begin
     rng = MersenneTwister(110)
-    a = randn(rng, 6);
+    a = randn(rng, 6)
     b = randn(rng, 6)
-    da = randn(rng, 6);
+    da = randn(rng, 6)
     db = randn(rng, 6)
 
     (dv1,) = Enzyme.autodiff(
@@ -276,7 +276,7 @@ end
 
 @testset "Enzyme Const-arg reverse pullback — pmcmc_dot" begin
     rng = MersenneTwister(111)
-    a = randn(rng, 6);
+    a = randn(rng, 6)
     b = randn(rng, 6)
 
     da_buf = zero(a)
@@ -302,9 +302,9 @@ end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_dotsum" begin
     rng = MersenneTwister(120)
-    A = randn(rng, 4, 3);
+    A = randn(rng, 4, 3)
     B = randn(rng, 4, 3)
-    dA = randn(rng, 4, 3);
+    dA = randn(rng, 4, 3)
     dB = randn(rng, 4, 3)
 
     (dv1,) = Enzyme.autodiff(
@@ -333,7 +333,7 @@ end
 
 @testset "Enzyme Const-arg reverse pullback — pmcmc_dotsum" begin
     rng = MersenneTwister(121)
-    A = randn(rng, 4, 3);
+    A = randn(rng, 4, 3)
     B = randn(rng, 4, 3)
 
     dA_buf = zero(A)

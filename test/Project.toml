@@ -26,4 +26,4 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 CUDA_Runtime_jll = "76a88914-d11a-5bdc-97e0-2f5a05c973a2"
 
 [compat]
-JuliaFormatter = "2.10"
+JuliaFormatter = "2.12"
