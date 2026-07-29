@@ -22,7 +22,7 @@ const CT_SLOTS = FlexiChains.FlexiChain{Symbol}
 const DI_SLOTS = ParallelMCMC.DI
 
 @testset "constructor validation" begin
-    # primal slots cannot be backends — nothing to derive them from
+    # primal slots cannot be backends: nothing to derive them from
     @test_throws ArgumentError DensityModel(AutoForwardDiff(), gradlogp_slots, D_SLOTS)
     @test_throws ArgumentError DensityModel(
         logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=AutoForwardDiff()
@@ -39,7 +39,7 @@ const DI_SLOTS = ParallelMCMC.DI
             logp_slots, gradlogp_slots, D_SLOTS; hvp_batch=slot
         )
     end
-    # a logdensity_batch on its own is fine — it scores whole trajectories
+    # a logdensity_batch on its own is allowed: it scores whole trajectories
     @test DensityModel(
         logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=logp_batch_slots
     ) isa DensityModel
@@ -173,9 +173,9 @@ end
         @test m_r.hvp_batch(X, V) ≈ -V
 
         #= A hand-written gradient is not opted into AD, so the sampler backend
-        does not derive a batched gradient from `logdensity_batch` and the
-        batched path stays off — the unbatched update covers it. Were it
-        otherwise, `backend=` would decide which update path runs. =#
+        does not derive a batched gradient from `logdensity_batch` and the batched
+        path stays off. Were it otherwise, `backend=` would decide which update
+        path runs. =#
         model_an = DensityModel(
             logp_slots,
             gradlogp_slots,

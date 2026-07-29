@@ -20,17 +20,15 @@ triggers for this extension), plus any AD backend that is used.
 
 `ad_backend` is DynamicPPL's own `adtype`, not a `DensityModel` slot: it goes to
 the `LogDensityFunction` that fills the log-density and gradient slots, which is
-why it takes a backend only and never a callable. Everything else here is a
-`DensityModel` slot forwarded unchanged, so `hvp` and the batched slots take a
-callable or a backend as they do on the main constructor.
+why it takes a backend only and never a callable. The rest are `DensityModel`
+slots forwarded unchanged.
 
-For `ParallelMALASampler`, which also needs an HVP, pass either a callable or a
-`DifferentiationInterface.SecondOrder` — the latter differentiates the
-log-density twice, bypassing DynamicPPL's gradient. A plain backend does not
-work here: it would differentiate the gradient `ad_backend` produced, whose AD
-preparation rejects the tangents an outer pass pushes through it. DynamicPPL
-supplies no batched log-density either, so `logdensity_batch` has to be written
-out by hand to reach the batched DEER path.
+`ParallelMALASampler` also needs an HVP. Give it a callable or a
+`DifferentiationInterface.SecondOrder`, which differentiates the log-density and
+so bypasses DynamicPPL's gradient. A plain backend fails, since it would
+differentiate the gradient `ad_backend` produced and that preparation rejects an
+outer pass's tangents. DynamicPPL supplies no batched log-density either, so
+reaching the batched DEER path means writing `logdensity_batch` by hand.
 
 # Example
 ```julia

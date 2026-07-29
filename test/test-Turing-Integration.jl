@@ -134,10 +134,10 @@ end
 
 @testset "DynamicPPLExt: SecondOrder hvp on a Turing model" begin
     #= The gradient slot of a Turing model is DynamicPPL's own AD-prepared
-    gradient, and its preparation rejects the tangents an outer pass would push
-    through it — so a plain backend in `hvp` cannot differentiate it. A
-    `SecondOrder` differentiates the log-density twice instead, bypassing that
-    gradient, which is what makes an AD HVP reachable for a Turing model at all.
+    gradient, whose preparation rejects the tangents an outer pass would push
+    through it, so a plain backend in `hvp` cannot differentiate it. A
+    `SecondOrder` differentiates the log-density instead, bypassing that gradient,
+    which is what makes an AD HVP reachable for a Turing model at all.
 
     normal_model(y) in unconstrained space is
       logp(μ) = logpdf(Normal(0,1), μ) + logpdf(Normal(μ, 0.5), y),
@@ -161,11 +161,10 @@ end
     )
     @test all(isfinite, vec(chain[@varname(μ)]))
 
-    #= A plain backend is the case that cannot work. Preparing it succeeds — DI
-    only builds the pushforward against the Float64 template — and it is the
-    first call, pushing tangents into DynamicPPL's prepared gradient, that
-    fails. Pinned as a test so that if DynamicPPL ever lifts this, the
-    `SecondOrder`-only advice in the extension docstring gets revisited. =#
+    #= Preparing a plain backend succeeds, since DI only builds the pushforward
+    against the Float64 template. The first call is what fails, pushing tangents
+    into DynamicPPL's prepared gradient. Pinned so that if DynamicPPL ever lifts
+    this, the `SecondOrder`-only advice in the extension docstring is revisited. =#
     model_plain = DensityModel(
         normal_model(TRUE_OBS);
         ad_backend=ADTypes.AutoForwardDiff(),

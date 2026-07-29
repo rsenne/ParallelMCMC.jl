@@ -37,11 +37,9 @@ Any of the derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, 
 model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
 ```
 
-Backends are turned into prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` is fine.
+Backends become prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` works.
 
 ### What a backend in `hvp` differentiates
-
-How the HVP is taken depends on what the gradient slot holds:
 
 | `grad_logdensity` | `hvp` | what runs |
 |---|---|---|
@@ -49,13 +47,13 @@ How the HVP is taken depends on what the gradient slot holds:
 | backend | backend | `SecondOrder(hvp, grad_logdensity)` on `logdensity` |
 | either | `SecondOrder(...)` | that pair on `logdensity`, gradient slot unused |
 
-So a hand-written gradient with `hvp=AutoForwardDiff()` differentiates *your* code once, whereas a log-density-only model gets genuine second-order AD through DI's own second-order operator rather than one AD call nested inside another.  Passing a `SecondOrder` yourself always means the log-density is differentiated twice — both passes are named, so the gradient slot is not the inner one even when you wrote it by hand.  That is also the only AD route to an HVP for a Turing or LogDensityProblems model, whose gradient comes pre-prepared and cannot be differentiated again.
+Naming both passes yourself is the one route that ignores the gradient slot, hand-written or not.  It is also the only AD route to an HVP for a Turing or LogDensityProblems model, whose gradient arrives already prepared and cannot be differentiated again.
 
-Which combinations actually work is up to the backends, and second-order support is the thinnest part of the ecosystem.  On CPU, ForwardDiff, ReverseDiff, Zygote and Enzyme all serve a log-density-only model; `AutoMooncake` does not, in either direction — it has no reverse-over-reverse, and its gradient will not accept an outer pass's tangents, so a `SecondOrder` with a forward outer fails too.  Write `grad_logdensity` out by hand for Mooncake and the single pass over it works normally.  None of the second-order combinations work on GPU yet (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37) and the [GPU page](15-gpu.md)).
+Which pairs work is up to the backends.  On CPU, ForwardDiff, ReverseDiff, Zygote and Enzyme all serve a log-density-only model.  `AutoMooncake` serves neither direction: it has no reverse-over-reverse, and its gradient rejects an outer pass's tangents.  Give Mooncake a hand-written `grad_logdensity` instead.  No second-order pair works on GPU yet (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37) and the [GPU page](15-gpu.md)).
 
-The batched pair works the same way, on `sum(logdensity_batch(X))`.  Its gradient is the stacked per-column gradients only because the columns are independent, so `logdensity_batch` must not couple them.  A `logdensity_batch` given without a `grad_logdensity_batch` has one derived when `grad_logdensity` is a backend; with a hand-written gradient the batched path stays off and the unbatched update covers it.  Both batched derivative slots require `logdensity_batch`, but `logdensity_batch` on its own is fine — it is also used to score a whole trajectory at once.
+The batched pair works the same way, on `sum(logdensity_batch(X))`.  That sum's gradient is the stacked per-column gradients only because the columns are independent, so `logdensity_batch` must not couple them.  Omitting `grad_logdensity_batch` derives one when `grad_logdensity` is a backend; with a hand-written gradient the batched path stays off and the unbatched update covers it.  Both batched derivative slots require `logdensity_batch`, which is also useful on its own for scoring a whole trajectory at once.
 
-`backend` on [`ParallelMALASampler`](@ref) is the fallback source of Hessian-vector products, for a model that brings no `hvp` / `hvp_batch` of its own.  That is all it does: it never supplies a gradient, so it cannot change which update path runs.  A model carrying its own HVPs can leave it out.
+`backend` on [`ParallelMALASampler`](@ref) supplies Hessian-vector products for a model that brings no `hvp` / `hvp_batch` of its own, and nothing else.  A model carrying its own can leave it out.
 
 ---
 

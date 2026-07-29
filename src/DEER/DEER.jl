@@ -177,8 +177,8 @@ end
 (c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
 
 #=
-Pick the AD-HVP fallback strategy from the user's backend. These two apply
-when the HVP is one AD pass over a gradient we already have — a hand-written
+Pick the AD-HVP fallback strategy from the user's backend. These two apply when
+the HVP is one AD pass over a gradient we already have, i.e., a hand-written
 `gradlogp`, which neither of them differentiates twice:
 
   ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
@@ -186,8 +186,7 @@ when the HVP is one AD pass over a gradient we already have — a hand-written
   ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
                       through the matmul and dot/sum rrules.
 
-An AD-derived gradient takes neither, going to `_make_hvp_fn_second_order`
-below instead, so nothing here ever nests one DI call inside another.
+An AD-derived gradient takes neither and goes to `_make_hvp_fn_second_order`.
 
 These are singleton types rather than symbols so the choice dispatches
 statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
@@ -311,21 +310,17 @@ end
 
 #=
 ---------------------------------------------------------------------------
-True second-order HVP. `DI.hvp` with a `SecondOrder` backend differentiates
-the log-density twice, so unlike the two strategies above this never touches
-the gradient slot — the inner half of the pair is what produces the gradient.
+Second-order HVP, for a model whose gradient is itself AD-derived. `DI.hvp`
+takes both passes over the log-density, so these never touch the gradient slot.
+Preferred over pushing tangents through a prepared DI gradient, which drops out
+of its preparation once the outer pass hands it an unexpected tangent type.
 
-This is the path for a model whose gradient is itself AD-derived. Pushing
-tangents through an already-prepared DI gradient would compute the same thing,
-but the inner call falls out of its preparation as soon as the outer pass
-hands it a tangent type the prep wasn't made for, so DI's own second-order
-operator is both what the user asked for and the cheaper way to get it.
+Only the outer half is normalized: `_hvp_forward_backend` selects it out of the
+pair. The inner is a plain first-order gradient and needs no pinning.
 
-Normalization applies to the outer half, the pass whose mode and annotations
-the backend extensions care about. `_hvp_forward_backend` already unwraps a
-`SecondOrder` to its outer, so it selects the right half out of `backend`
-itself; the inner is left alone, since it is a plain first-order gradient of
-the log-density and needs none of the pushforward-specific pinning.
+The batched form differentiates `sum(logdensity_batch(X))`, whose Hessian is
+block-diagonal by column independence, so its HVP along `V` is the columnwise
+HVP. Same argument the batched gradient rests on.
 ---------------------------------------------------------------------------
 =#
 function _normalized_second_order(backend::DI.SecondOrder)
@@ -346,12 +341,6 @@ function _make_hvp_fn_second_order(
     end
 end
 
-#=
-Batched form. The scalar function is `sum(logdensity_batch(X))`, whose
-Hessian is block-diagonal because the columns are independent, so its HVP
-along `V` is the columnwise HVP — the same argument the batched gradient
-rests on.
-=#
 function _make_hvp_batch_fn_second_order(
     logdensity_batch_sum, backend::DI.SecondOrder, X_template::AbstractMatrix
 )

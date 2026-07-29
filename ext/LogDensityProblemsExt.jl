@@ -20,18 +20,15 @@ The optional `param_names` keyword accepts a collection of parameter names that 
 for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
 parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
-`hvp` and the batched slots are forwarded to the main `DensityModel`
-constructor and keep their meaning there. Since `ld` fills the gradient slot
-with a callable, a *plain* backend in `hvp` would differentiate that callable —
-which does not work for a gradient `ld` computes by AD, because its preparation
-is tied to the input type it was made for and rejects the tangents an outer
-pass pushes through. For an AD HVP here, pass a
-`DifferentiationInterface.SecondOrder`: it differentiates the log-density twice
-and so never goes near `ld`'s gradient. A hand-written `hvp` callable works too.
+`hvp` and the batched slots are forwarded to the main `DensityModel` constructor
+and keep their meaning there, with one caveat. `ld` fills the gradient slot, and
+a gradient `ld` computes by AD carries a preparation tied to its input type, so
+it rejects the tangents a plain `hvp` backend would push through it. Use a
+callable, or a `DifferentiationInterface.SecondOrder` which differentiates the
+log-density instead. Same for `hvp_batch`.
 
-The batched slots are how a LogDensityProblems model reaches the batched DEER
-path. `ld` supplies no batched log-density, so `logdensity_batch` has to be
-written out by hand, and the same `SecondOrder` caveat applies to `hvp_batch`.
+`ld` supplies no batched log-density, so reaching the batched DEER path means
+writing `logdensity_batch` by hand.
 
 # Turing.jl / DynamicPPL example
 ```julia
