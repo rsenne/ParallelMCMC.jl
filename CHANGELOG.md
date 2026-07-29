@@ -23,24 +23,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own `hvp` / `hvp_batch` does not need it (#52). With no sampler
   `backend`, a batched HVP is derived from the model's own `hvp` backend.
 - A `logdensity_batch` given without a `grad_logdensity_batch` now has the
-  batched gradient derived for it, from the gradient slot's backend if it has
-  one and the sampler's otherwise, rather than leaving the batched DEER path
-  switched off (#52). `hvp_batch` can be a backend in that case too, and
-  differentiates the derived gradient; with no backend anywhere to derive from,
-  it raises when sampling starts.
+  batched gradient derived for it when `grad_logdensity` is a backend, rather
+  than leaving the batched DEER path switched off (#52). `hvp_batch` can be a
+  backend in that case too, and differentiates the derived gradient.
+- An HVP backend over an AD-derived gradient is now taken as true second-order
+  AD, `DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` handed
+  to `DI.hvp`, instead of an outer AD pass over the prepared DI gradient (#37).
+  That nesting dropped out of its preparation as soon as the outer pass pushed
+  tangents in, so the composed operator is both what was asked for and cheaper:
+  around 10x fewer allocations for a `logdensity`-only model. A backend over a
+  hand-written gradient still differentiates that gradient once, as before.
+- `hvp` / `hvp_batch` accept a `SecondOrder` with both halves honoured, meaning
+  the log-density is differentiated twice and the gradient slot is not the inner
+  pass. Previously the inner half was silently discarded and only the outer used.
+  This is the one AD route to an HVP for a Turing or LogDensityProblems model,
+  whose gradient arrives already prepared and so cannot be differentiated again.
+- The `DensityModel` constructors in `DynamicPPLExt` and `LogDensityProblemsExt`
+  forward `logdensity_batch`, `grad_logdensity_batch` and `hvp_batch`, so a
+  Turing or LogDensityProblems model can reach the batched DEER path. Neither
+  provides a batched log-density, so `logdensity_batch` has to be written by hand.
 - Adds `JuliaFormatter` testing which was forgotten (#60).
 
 ### Fixed
 
 - The reverse-on-grad HVP path differentiated with `DI.inner(backend)` while
-  its strategy was routed on `DI.outer(backend)`, so an `hvp` or `backend`
-  given as a `DifferentiationInterface.SecondOrder` ran the wrong half of the
-  pair. Both paths now take the outer, which is the pass being run--the
-  gradient slot is the inner one. Unwrapping to the outer half happens before
-  the backend-specific normalization hooks are dispatched on, so a
-  `SecondOrder(AutoEnzyme(), ...)` still reaches `EnzymeExt` and gets its mode
-  and function annotation pinned rather than running as a bare `AutoEnzyme()`
-  (which aborts on GPU).
+  its strategy was routed on `DI.outer(backend)`, so a
+  `DifferentiationInterface.SecondOrder` ran the wrong half of the pair. A
+  `SecondOrder` now goes to the true second-order path instead of either
+  strategy, and the half-selecting helpers it still uses agree: normalization
+  applies to the outer, the pass whose mode the backend extensions care about.
+  Unwrapping to that half happens before the normalization hooks are dispatched
+  on, so a `SecondOrder(AutoEnzyme(), ...)` still reaches `EnzymeExt` and gets
+  its mode and function annotation pinned rather than running as a bare
+  `AutoEnzyme()` (which aborts on GPU).
 
 ### Changed
 
@@ -50,11 +65,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reverse-on-grad path (#38).
 - Because a `logdensity_batch` without a `grad_logdensity_batch` now has the
   batched gradient derived rather than switching the batched DEER path off, a
-  model in that shape runs the batched update where it used to run the unbatched
-  one, and AD is applied to its `logdensity_batch`. On GPU that subjects a
-  function nothing was differentiating before to the backend's restrictions
-  (`pmcmc_*` wrappers for Enzyme). Supply `grad_logdensity_batch` to keep AD out
-  of the batched path.
+  model whose `grad_logdensity` is a backend runs the batched update where it
+  used to run the unbatched one, and AD is applied to its `logdensity_batch`. On
+  GPU that subjects a function nothing was differentiating before to the
+  backend's restrictions (`pmcmc_*` wrappers for Enzyme). Supply
+  `grad_logdensity_batch` to keep AD out of the batched path. A model with a
+  hand-written `grad_logdensity` is unaffected: nothing derives a batched
+  gradient for it, so the batched path stays off as before.
+- `ParallelMALASampler`'s `backend` no longer derives a batched gradient, only
+  Hessian-vector products. It could previously switch the batched DEER path on
+  for a model with a hand-written gradient, which made a keyword that reads as
+  an HVP fallback decide which update path ran and put AD on a
+  `logdensity_batch` the user had not opted into differentiating. Models that
+  relied on that should pass `grad_logdensity_batch` explicitly, or a backend in
+  `grad_logdensity` for one to be derived from.
+- Both batched derivative slots now require `logdensity_batch`, which the
+  batched update evaluates directly, and the constructor rejects them without
+  one. A callable `grad_logdensity_batch` or `hvp_batch` supplied on its own
+  used to be accepted and then silently ignored. `logdensity_batch` alone is
+  still valid and still used to score whole trajectories.
+- An `hvp_batch` that reaches sampling with no batched gradient to pair it with
+  now raises rather than silently falling back to the unbatched update.
 
 ### Removed
 

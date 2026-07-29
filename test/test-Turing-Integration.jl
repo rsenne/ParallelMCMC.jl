@@ -132,6 +132,92 @@ end
     end
 end
 
+@testset "DynamicPPLExt: SecondOrder hvp on a Turing model" begin
+    #= The gradient slot of a Turing model is DynamicPPL's own AD-prepared
+    gradient, and its preparation rejects the tangents an outer pass would push
+    through it — so a plain backend in `hvp` cannot differentiate it. A
+    `SecondOrder` differentiates the log-density twice instead, bypassing that
+    gradient, which is what makes an AD HVP reachable for a Turing model at all.
+
+    normal_model(y) in unconstrained space is
+      logp(μ) = logpdf(Normal(0,1), μ) + logpdf(Normal(μ, 0.5), y),
+    so H = -1 - 1/0.5^2 = -5 and Hv = -5v. =#
+    so = ParallelMCMC.DI.SecondOrder(ADTypes.AutoForwardDiff(), ADTypes.AutoForwardDiff())
+    model = DensityModel(
+        normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff(), hvp=so
+    )
+    @test model.hvp === so
+
+    prepped = ParallelMCMC._prepare_model(model, [0.0], 8, nothing)
+    @test prepped.hvp([0.0], [1.0]) ≈ [-5.0]
+    # the model brought its own HVP, so no sampler backend is needed
+    chain = sample(
+        MersenneTwister(12),
+        model,
+        ParallelMALASampler(0.02; T=8),
+        64;
+        chain_type=VNChain,
+        progress=false,
+    )
+    @test all(isfinite, vec(chain[@varname(μ)]))
+
+    #= A plain backend is the case that cannot work. Preparing it succeeds — DI
+    only builds the pushforward against the Float64 template — and it is the
+    first call, pushing tangents into DynamicPPL's prepared gradient, that
+    fails. Pinned as a test so that if DynamicPPL ever lifts this, the
+    `SecondOrder`-only advice in the extension docstring gets revisited. =#
+    model_plain = DensityModel(
+        normal_model(TRUE_OBS);
+        ad_backend=ADTypes.AutoForwardDiff(),
+        hvp=ADTypes.AutoForwardDiff(),
+    )
+    prepped_plain = ParallelMCMC._prepare_model(model_plain, [0.0], 8, nothing)
+    @test_throws Exception prepped_plain.hvp([0.0], [1.0])
+end
+
+@testset "DynamicPPLExt: batched slots reach the batched DEER path" begin
+    #= DynamicPPL supplies no batched log-density, so the batched slots are the
+    only way a Turing model reaches the batched update. Written out by hand for
+    normal_model, including the normalizing constants so that the log-densities
+    reported for a trajectory agree with `model.logdensity`. =#
+    σ = 0.5
+    logp_b(X) =
+        vec(-0.5 .* X .^ 2 .- 0.5 .* ((TRUE_OBS .- X) ./ σ) .^ 2 .- log(2π) .- log(σ))
+    grad_b(X) = -X .+ (TRUE_OBS .- X) ./ σ^2
+    hvp_b(X, V) = (-1 - 1 / σ^2) .* V
+
+    model = DensityModel(
+        normal_model(TRUE_OBS);
+        ad_backend=ADTypes.AutoForwardDiff(),
+        hvp=(x, v) -> (-1 - 1 / σ^2) .* v,
+        logdensity_batch=logp_b,
+        grad_logdensity_batch=grad_b,
+        hvp_batch=hvp_b,
+    )
+
+    @test model.logdensity_batch === logp_b
+    @test model.grad_logdensity_batch === grad_b
+    @test model.hvp_batch === hvp_b
+
+    # the hand-written batched log-density agrees with the model's own, column by column
+    X = reshape([-0.5, 0.0, 0.7, 1.4], 1, 4)
+    @test logp_b(X) ≈ [model.logdensity(X[:, t]) for t in 1:size(X, 2)]
+
+    prepped = ParallelMCMC._prepare_model(model, [0.0], 4, nothing)
+    @test prepped.grad_logdensity_batch === grad_b
+    @test prepped.hvp_batch === hvp_b
+
+    chain = sample(
+        MersenneTwister(13),
+        model,
+        ParallelMALASampler(0.02; T=8),
+        64;
+        chain_type=VNChain,
+        progress=false,
+    )
+    @test all(isfinite, vec(chain[@varname(μ)]))
+end
+
 @testset "DynamicPPLExt: MvNormal(zeros(2), I) runs with ParallelMALA" begin
     model = DensityModel(mvnormal_2d_model(); ad_backend=ADTypes.AutoForwardDiff())
 
