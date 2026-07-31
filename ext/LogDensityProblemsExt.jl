@@ -4,7 +4,8 @@ using ParallelMCMC
 using LogDensityProblems: LogDensityProblems
 
 """
-    DensityModel(ld; param_names=nothing, hvp=nothing)
+    DensityModel(ld; param_names=nothing, hvp=nothing,
+                 logdensity_batch=nothing, grad_logdensity_batch=nothing, hvp_batch=nothing)
 
 Construct a `DensityModel` from any object implementing the
 [LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface.
@@ -19,7 +20,15 @@ The optional `param_names` keyword accepts a collection of parameter names that 
 for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
 parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
-The `hvp` keyword argument is forwarded to the main `DensityModel` constructor.
+`hvp` and the batched slots are forwarded to the main `DensityModel` constructor
+and keep their meaning there, with one caveat. `ld` fills the gradient slot, and
+a gradient `ld` computes by AD carries a preparation tied to its input type, so
+it rejects the tangents a plain `hvp` backend would push through it. Use a
+callable, or a `DifferentiationInterface.SecondOrder` which differentiates the
+log-density instead. Same for `hvp_batch`.
+
+`ld` supplies no batched log-density, so reaching the batched DEER path means
+writing `logdensity_batch` by hand.
 
 # Turing.jl / DynamicPPL example
 ```julia
@@ -46,7 +55,14 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
 If DynamicPPL is loaded, the simpler one-step constructor `DensityModel(mymodel(obs))`
 is also available and extracts parameter names automatically.
 """
-function ParallelMCMC.DensityModel(ld; param_names=nothing, hvp=nothing)
+function ParallelMCMC.DensityModel(
+    ld;
+    param_names=nothing,
+    hvp=nothing,
+    logdensity_batch=nothing,
+    grad_logdensity_batch=nothing,
+    hvp_batch=nothing,
+)
     caps = LogDensityProblems.capabilities(ld)
     caps isa LogDensityProblems.LogDensityOrder{0} && error(
         "LogDensityProblems model must support gradients (LogDensityOrder{1} or higher). " *
@@ -58,7 +74,16 @@ function ParallelMCMC.DensityModel(ld; param_names=nothing, hvp=nothing)
     logp = ParallelMCMC.LogDensityProblemPrimal(ld)
     gradlogp = ParallelMCMC.LogDensityProblemGradient(ld)
 
-    return ParallelMCMC.DensityModel(logp, gradlogp, dim; param_names=param_names, hvp=hvp)
+    return ParallelMCMC.DensityModel(
+        logp,
+        gradlogp,
+        dim;
+        param_names=param_names,
+        hvp=hvp,
+        logdensity_batch=logdensity_batch,
+        grad_logdensity_batch=grad_logdensity_batch,
+        hvp_batch=hvp_batch,
+    )
 end
 
 (l::ParallelMCMC.LogDensityProblemPrimal)(x) = LogDensityProblems.logdensity(l.ld, x)

@@ -8,7 +8,8 @@ using FlexiChains: FlexiChain, VarName, VNChain, SymChain
 using LogDensityProblems: LogDensityProblems
 
 """
-    DensityModel(turing_model::DynamicPPL.Model; ad_backend, hvp=nothing)
+    DensityModel(turing_model::DynamicPPL.Model; ad_backend, hvp=nothing,
+                 logdensity_batch=nothing, grad_logdensity_batch=nothing, hvp_batch=nothing)
 
 Convenience constructor: wraps a DynamicPPL/Turing `@model` directly as a
 `DensityModel`, automatically extracting parameter names and wiring up gradient
@@ -16,6 +17,18 @@ computation via DynamicPPL's `adtype` interface.
 
 Requires `DynamicPPL` and `LogDensityProblems` to be loaded (these are the weak-dependency
 triggers for this extension), plus any AD backend that is used.
+
+`ad_backend` is DynamicPPL's own `adtype`, not a `DensityModel` slot: it goes to
+the `LogDensityFunction` that fills the log-density and gradient slots, which is
+why it takes a backend only and never a callable. The rest are `DensityModel`
+slots forwarded unchanged.
+
+`ParallelMALASampler` also needs an HVP. Give it a callable or a
+`DifferentiationInterface.SecondOrder`, which differentiates the log-density and
+so bypasses DynamicPPL's gradient. A plain backend fails, since it would
+differentiate the gradient `ad_backend` produced and that preparation rejects an
+outer pass's tangents. DynamicPPL supplies no batched log-density either, so
+reaching the batched DEER path means writing `logdensity_batch` by hand.
 
 # Example
 ```julia
@@ -31,7 +44,14 @@ chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
                chain_type=FlexiChains.VNChain, discard_warmup=true, progress=true)
 ```
 """
-function ParallelMCMC.DensityModel(turing_model::DynamicPPL.Model; ad_backend, hvp=nothing)
+function ParallelMCMC.DensityModel(
+    turing_model::DynamicPPL.Model;
+    ad_backend,
+    hvp=nothing,
+    logdensity_batch=nothing,
+    grad_logdensity_batch=nothing,
+    hvp_batch=nothing,
+)
     # Sample in linked/unconstrained space and let DynamicPPL provide the gradient.
     ld = DynamicPPL.LogDensityFunction(
         turing_model,
@@ -40,7 +60,13 @@ function ParallelMCMC.DensityModel(turing_model::DynamicPPL.Model; ad_backend, h
         adtype=ad_backend,
     )
     # Requires LogDensityProblemsExt to be loaded
-    return ParallelMCMC.DensityModel(ld; hvp=hvp)
+    return ParallelMCMC.DensityModel(
+        ld;
+        hvp=hvp,
+        logdensity_batch=logdensity_batch,
+        grad_logdensity_batch=grad_logdensity_batch,
+        hvp_batch=hvp_batch,
+    )
 end
 
 ######################

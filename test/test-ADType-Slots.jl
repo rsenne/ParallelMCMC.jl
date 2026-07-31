@@ -19,20 +19,30 @@ gradlogp_batch_slots(X) = -X
 
 const D_SLOTS = 5
 const CT_SLOTS = FlexiChains.FlexiChain{Symbol}
+const DI_SLOTS = ParallelMCMC.DI
 
 @testset "constructor validation" begin
-    # primal slots cannot be backends — nothing to derive them from
+    # primal slots cannot be backends: nothing to derive them from
     @test_throws ArgumentError DensityModel(AutoForwardDiff(), gradlogp_slots, D_SLOTS)
     @test_throws ArgumentError DensityModel(
         logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=AutoForwardDiff()
     )
-    # batched AD slots need their primal/gradient counterpart
-    @test_throws ArgumentError DensityModel(
-        logp_slots, gradlogp_slots, D_SLOTS; grad_logdensity_batch=AutoForwardDiff()
-    )
-    @test_throws ArgumentError DensityModel(
-        logp_slots, gradlogp_slots, D_SLOTS; hvp_batch=AutoForwardDiff()
-    )
+    #= Batched derivative slots need a logdensity_batch, callables included: the
+    batched update evaluates it, so without one the slot could never be reached. =#
+    for slot in (AutoForwardDiff(), gradlogp_batch_slots)
+        @test_throws ArgumentError DensityModel(
+            logp_slots, gradlogp_slots, D_SLOTS; grad_logdensity_batch=slot
+        )
+    end
+    for slot in (AutoForwardDiff(), (X, V) -> -V)
+        @test_throws ArgumentError DensityModel(
+            logp_slots, gradlogp_slots, D_SLOTS; hvp_batch=slot
+        )
+    end
+    # a logdensity_batch on its own is allowed: it scores whole trajectories
+    @test DensityModel(
+        logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=logp_batch_slots
+    ) isa DensityModel
     # grad slot is mandatory (callable or backend)
     @test_throws ArgumentError DensityModel(logp_slots, nothing, D_SLOTS)
 
@@ -162,50 +172,32 @@ end
         @test m_r.grad_logdensity_batch(X) ≈ -X
         @test m_r.hvp_batch(X, V) ≈ -V
 
-        # analytic gradient, so the sampler backend supplies it instead
+        #= A hand-written gradient is not opted into AD, so the sampler backend
+        does not derive a batched gradient from `logdensity_batch` and the batched
+        path stays off. Were it otherwise, `backend=` would decide which update
+        path runs. =#
         model_an = DensityModel(
-            logp_slots, gradlogp_slots, D_SLOTS; logdensity_batch=logp_batch_slots
+            logp_slots,
+            gradlogp_slots,
+            D_SLOTS;
+            hvp=(x, v) -> -v,        # so the unbatched HVP is covered either way
+            logdensity_batch=logp_batch_slots,
         )
-        m_an = ParallelMCMC._prepare_model(model_an, x0, T, AutoForwardDiff())
-        @test m_an.grad_logdensity_batch(X) ≈ -X
-        @test m_an.hvp_batch(X, V) ≈ -V
-
-        #= No backend anywhere to derive from, so the batched path stays off
-        rather than erroring i.e., an analytic hvp still covers the unbatched one. =#
-        m_off = ParallelMCMC._prepare_model(
-            DensityModel(
-                logp_slots,
-                gradlogp_slots,
-                D_SLOTS;
-                hvp=(x, v) -> -v,
-                logdensity_batch=logp_batch_slots,
-            ),
-            x0,
-            T,
-            nothing,
-        )
-        @test m_off.grad_logdensity_batch === nothing
-        @test m_off.hvp_batch === nothing
+        for spl_backend in (AutoForwardDiff(), nothing)
+            m_an = ParallelMCMC._prepare_model(model_an, x0, T, spl_backend)
+            @test m_an.grad_logdensity_batch === nothing
+            @test m_an.hvp_batch === nothing
+            # still kept, since `_trajectory_logps` scores a whole block with it
+            @test m_an.logdensity_batch === logp_batch_slots
+        end
     end
 
-    @testset "hvp_batch backend with the batched gradient only derivable" begin
+    @testset "hvp_batch backend over a derived batched gradient" begin
         T = 8
         X = randn(rng, D_SLOTS, T)
         V = randn(rng, D_SLOTS, T)
 
-        # no grad_logdensity_batch: derived from the sampler backend, then differentiated
-        model = DensityModel(
-            logp_slots,
-            gradlogp_slots,
-            D_SLOTS;
-            logdensity_batch=logp_batch_slots,
-            hvp_batch=AutoForwardDiff(),
-        )
-        m_r = ParallelMCMC._prepare_model(model, x0, T, AutoForwardDiff())
-        @test m_r.grad_logdensity_batch(X) ≈ -X
-        @test m_r.hvp_batch(X, V) ≈ -V
-
-        # same, derived from the gradient slot's backend instead
+        # no grad_logdensity_batch: derived from the gradient slot's backend
         model_gs = DensityModel(
             logp_slots,
             AutoForwardDiff(),
@@ -215,9 +207,12 @@ end
             hvp_batch=AutoForwardDiff(),
         )
         m_gs = ParallelMCMC._prepare_model(model_gs, x0, T, nothing)
+        @test m_gs.grad_logdensity_batch(X) ≈ -X
         @test m_gs.hvp_batch(X, V) ≈ -V
 
-        #= Nowhere to derive the batched gradient from. =#
+        #= Hand-written gradient, so nothing derives a batched one, and an
+        `hvp_batch` was supplied explicitly: raise instead of silently running
+        the unbatched update. The sampler backend does not rescue this. =#
         model_nd = DensityModel(
             logp_slots,
             gradlogp_slots,
@@ -226,14 +221,16 @@ end
             logdensity_batch=logp_batch_slots,
             hvp_batch=AutoForwardDiff(),
         )
-        err = try
-            ParallelMCMC._prepare_model(model_nd, x0, T, nothing)
-            nothing
-        catch e
-            e
+        for spl_backend in (AutoForwardDiff(), nothing)
+            err = try
+                ParallelMCMC._prepare_model(model_nd, x0, T, spl_backend)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ArgumentError
+            @test occursin("no batched gradient", err.msg)
         end
-        @test err isa ArgumentError
-        @test occursin("no batched gradient", err.msg)
     end
 
     @testset "model hvp backend feeds the batched HVP without a sampler backend" begin
@@ -250,6 +247,138 @@ end
         )
         m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
         @test m_r.hvp_batch(X, V) ≈ -V
+    end
+end
+
+@testset "second-order HVP semantics" begin
+    #= How an `hvp` backend gets its second derivative depends on the gradient
+    slot, so the three cases are told apart with a gradient that is deliberately
+    not ∇logp: a path that differentiates the slot sees `-2x` and reports `-2v`,
+    one that differentiates `logdensity` twice reports `-v`. =#
+    off_grad(x) = -2 .* x
+    rng = MersenneTwister(61)
+    x0 = randn(rng, D_SLOTS)
+    v = randn(rng, D_SLOTS)
+    T = 8
+    X = randn(rng, D_SLOTS, T)
+    V = randn(rng, D_SLOTS, T)
+
+    @testset "plain backend over a hand-written gradient is one pass over it" begin
+        #= Both `HVPStrategy` paths stay reachable end to end and keep routing on
+        `DI.hvp_mode`: a hand-written gradient is differentiated once, never
+        twice, whichever direction the backend reports. `-2v` rather than `-v` is
+        what distinguishes that from the second-order paths below. =#
+        for backend in (
+            AutoForwardDiff(),                      # ForwardOnGrad
+            AutoEnzyme(),                           # ForwardOnGrad
+            AutoEnzyme(; mode=Enzyme.Reverse),      # ReverseOnGrad
+        )
+            model = DensityModel(logp_slots, off_grad, D_SLOTS; hvp=backend)
+            m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+            @test m_r.hvp(x0, v) ≈ -2 .* v
+        end
+    end
+
+    @testset "an explicit SecondOrder differentiates logdensity twice" begin
+        #= Both passes are named, so the gradient slot is not the inner one even
+        when hand-written, and the inner half is honoured rather than dropped. =#
+        model = DensityModel(
+            logp_slots,
+            off_grad,
+            D_SLOTS;
+            hvp=DI_SLOTS.SecondOrder(AutoForwardDiff(), AutoForwardDiff()),
+        )
+        m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+        @test m_r.hvp(x0, v) ≈ -v
+
+        # same when it arrives as the sampler's fallback backend
+        model_fb = DensityModel(logp_slots, off_grad, D_SLOTS)
+        m_fb = ParallelMCMC._prepare_model(
+            model_fb, x0, T, DI_SLOTS.SecondOrder(AutoForwardDiff(), AutoForwardDiff())
+        )
+        @test m_fb.hvp(x0, v) ≈ -v
+    end
+
+    @testset "a backend over an AD-derived gradient composes into SecondOrder" begin
+        #= The gradient slot is a backend, so `hvp` becomes the outer half of a
+        true second-order pair rather than an AD pass over the prepared DI
+        gradient. Both readings agree numerically here (the derived gradient
+        really is ∇logp), so the check is structural: the slot has to hold the
+        closure the second-order factory builds, not the one a strategy builds. =#
+        second_order = ParallelMCMC.DEER._make_hvp_fn_second_order(
+            logp_slots, DI_SLOTS.SecondOrder(AutoForwardDiff(), AutoForwardDiff()), x0
+        )
+
+        model = DensityModel(logp_slots, AutoForwardDiff(), D_SLOTS; hvp=AutoForwardDiff())
+        m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+        @test typeof(m_r.hvp) === typeof(second_order)
+        @test m_r.hvp(x0, v) ≈ -v
+        # the resolved gradient is still the prepared AD one
+        @test m_r.grad_logdensity isa ParallelMCMC._ADGradient
+        @test m_r.grad_logdensity(x0) ≈ -x0
+
+        # a hand-written gradient keeps the single-pass strategy closure instead
+        model_hand = DensityModel(logp_slots, off_grad, D_SLOTS; hvp=AutoForwardDiff())
+        m_hand = ParallelMCMC._prepare_model(model_hand, x0, T, nothing)
+        @test typeof(m_hand.hvp) !== typeof(second_order)
+    end
+
+    @testset "batched HVP follows the same three cases" begin
+        off_grad_batch(X) = -2 .* X
+
+        model_hand = DensityModel(
+            logp_slots,
+            off_grad,
+            D_SLOTS;
+            hvp=(x, vv) -> -vv,
+            logdensity_batch=logp_batch_slots,
+            grad_logdensity_batch=off_grad_batch,
+            hvp_batch=AutoForwardDiff(),
+        )
+        m_hand = ParallelMCMC._prepare_model(model_hand, x0, T, nothing)
+        @test m_hand.hvp_batch(X, V) ≈ -2 .* V
+
+        model_so = DensityModel(
+            logp_slots,
+            off_grad,
+            D_SLOTS;
+            hvp=(x, vv) -> -vv,
+            logdensity_batch=logp_batch_slots,
+            grad_logdensity_batch=off_grad_batch,
+            hvp_batch=DI_SLOTS.SecondOrder(AutoForwardDiff(), AutoForwardDiff()),
+        )
+        m_so = ParallelMCMC._prepare_model(model_so, x0, T, nothing)
+        @test m_so.hvp_batch(X, V) ≈ -V
+
+        model_ad = DensityModel(
+            logp_slots,
+            AutoForwardDiff(),
+            D_SLOTS;
+            hvp=AutoForwardDiff(),
+            logdensity_batch=logp_batch_slots,
+            grad_logdensity_batch=AutoForwardDiff(),
+            hvp_batch=AutoForwardDiff(),
+        )
+        m_ad = ParallelMCMC._prepare_model(model_ad, x0, T, nothing)
+        @test m_ad.hvp_batch(X, V) ≈ -V
+    end
+
+    @testset "sampling with a SecondOrder hvp matches the analytic HVP" begin
+        model_so = DensityModel(
+            logp_slots,
+            gradlogp_slots,
+            D_SLOTS;
+            hvp=DI_SLOTS.SecondOrder(AutoForwardDiff(), AutoForwardDiff()),
+        )
+        model_an = DensityModel(logp_slots, gradlogp_slots, D_SLOTS; hvp=(x, vv) -> -vv)
+        s = ParallelMALASampler(0.05; T=16)
+        c_so = sample(
+            MersenneTwister(62), model_so, s, 64; chain_type=CT_SLOTS, progress=false
+        )
+        c_an = sample(
+            MersenneTwister(62), model_an, s, 64; chain_type=CT_SLOTS, progress=false
+        )
+        @test c_so[:x] ≈ c_an[:x]
     end
 end
 
