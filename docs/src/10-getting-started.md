@@ -29,6 +29,20 @@ end
 model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 ```
 
+### AD backends in derivative slots
+
+Any of the derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, `hvp_batch`) can be given an `ADTypes.AbstractADType` instead of a callable, in which case that derivative is taken with AD.  A model can therefore be written with nothing but the log-density:
+
+```julia
+model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
+```
+
+Backends are turned into prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` is fine.
+
+A backend in `hvp` differentiates whatever the gradient slot holds; it is not a second derivative of `logdensity`.  Over an AD-derived gradient that composition is second-order AD, and over a hand-written one it is a single AD pass across your own code.  The same goes for the batched pair, and a `logdensity_batch` supplied without a `grad_logdensity_batch` has the batched gradient derived for it — one gradient of `sum(logdensity_batch(X))`, which is the stacked per-column gradients only because columns are independent, so `logdensity_batch` must not couple them.
+
+`backend` on [`ParallelMALASampler`](@ref) is the fallback derivative source for whatever the model did not bring: Hessian-vector products, and the batched gradient in the case just described.  A model that supplies its own can leave it out.  Note that passing one can switch the batched DEER path on, which also puts AD on your `logdensity_batch` — see the [GPU page](15-gpu.md) for when that matters.
+
 ---
 
 ## ParallelMALASampler

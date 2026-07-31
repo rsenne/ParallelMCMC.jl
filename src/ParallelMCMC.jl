@@ -1,12 +1,16 @@
 module ParallelMCMC
 
 using AbstractMCMC
+using ADTypes: AbstractADType
 using CUDA
+using DifferentiationInterface: DifferentiationInterface
 using FlexiChains
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 using Random
 using Statistics
+
+const DI = DifferentiationInterface
 
 #=
 Owned wrappers: identical semantics to their Base counterparts, but provide

@@ -36,6 +36,28 @@ const DI_STRAT = ParallelMCMC.DEER.DI
         @test DEER_STRAT._hvp_strategy(so_agnostic_outer) isa DEER_STRAT.ReverseOnGrad
     end
 
+    @testset "the backend that runs is the one routed on" begin
+        # both paths differentiate the already-built gradlogp, so both take the outer
+        so_fwd = DI_STRAT.SecondOrder(AutoForwardDiff(), AutoZygote())
+        @test DEER_STRAT._hvp_forward_backend(so_fwd) === AutoForwardDiff()
+
+        so_rev = DI_STRAT.SecondOrder(AutoZygote(), AutoForwardDiff())
+        @test DEER_STRAT._hvp_closure_backend(so_rev) === AutoZygote()
+    end
+
+    @testset "unwrapping a SecondOrder still reaches backend normalization" begin
+        #= The outer half has to be taken before the backend-specific hook is
+        dispatched on, or a wrapped `AutoEnzyme()` comes out bare: unnormalized,
+        it lowers through reverse mode and aborts on GPU (see ext/EnzymeExt.jl). =#
+        so = DI_STRAT.SecondOrder(AutoEnzyme(), AutoForwardDiff())
+        @test DEER_STRAT._hvp_forward_backend(so) ===
+            DEER_STRAT._hvp_forward_backend(AutoEnzyme())
+        @test DEER_STRAT._hvp_closure_backend(so) ===
+            DEER_STRAT._hvp_closure_backend(AutoEnzyme())
+        @test DEER_STRAT._hvp_forward_backend(so).mode isa Enzyme.ForwardMode
+        @test DEER_STRAT._hvp_closure_backend(so) isa AutoEnzyme{<:Any,Enzyme.Const}
+    end
+
     @testset "strategy resolution is type-stable" begin
         @test @inferred(DEER_STRAT._hvp_strategy(AutoForwardDiff())) isa
             DEER_STRAT.ForwardOnGrad
