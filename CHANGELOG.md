@@ -50,12 +50,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its strategy was routed on `DI.outer(backend)`, so a
   `DifferentiationInterface.SecondOrder` ran the wrong half of the pair. A
   `SecondOrder` now goes to the true second-order path instead of either
-  strategy, and the half-selecting helpers it still uses agree: normalization
-  applies to the outer, the pass whose mode the backend extensions care about.
-  Unwrapping to that half happens before the normalization hooks are dispatched
-  on, so a `SecondOrder(AutoEnzyme(), ...)` still reaches `EnzymeExt` and gets
-  its mode and function annotation pinned rather than running as a bare
-  `AutoEnzyme()` (which aborts on GPU).
+  strategy, and the half-selecting helper it still uses agrees: normalization
+  applies to the outer pass. Unwrapping to that half happens before the
+  normalization hook is dispatched on, so a `SecondOrder(AutoEnzyme(), ...)` still
+  reaches `EnzymeExt` and gets its function annotation filled in rather than
+  running as a bare `AutoEnzyme()`.
+- Backend normalization no longer picks a differentiation mode on the user's
+  behalf (#62). `EnzymeExt` pinned `mode=Enzyme.Forward` (with
+  `set_runtime_activity`) onto an `AutoEnzyme()` left mode-agnostic, on the
+  grounds that reverse mode hit a gc-transition abort on GPU and that composed
+  `pmcmc_matmul` calls needed runtime activity. The `pmcmc_*` Enzyme rules keep
+  Enzyme off both paths on their own now, so the pin bought nothing — and it cost
+  correctness, because it silently rewrote the direction of a `SecondOrder`'s
+  outer half. `SecondOrder(AutoEnzyme(), AutoForwardDiff())` is
+  reverse-over-forward to `hvp_mode`, its inner half being forward-only, and came
+  out forward-over-forward. Normalization now fills in only
+  `function_annotation=Enzyme.Const`, which is about this package's own read-only
+  HVP wrappers rather than about Enzyme's mode, and leaves `mode` exactly as given
+  — unset included, for DI to resolve from the operator it runs. `hvp_mode` is
+  therefore identical before and after normalization for every backend pair.
+
+  A mode set explicitly was never overridden, so only mode-agnostic backends were
+  affected, and the HVP was a correct HVP either way; what changes is that the
+  composition asked for is the one that runs. The two normalization hooks
+  (`_hvp_forward_backend`, `_hvp_closure_backend`) collapse into a single
+  `_normalized_backend`, since without a mode to choose they no longer differ.
+  Users relying on a plain `AutoEnzyme()` being run forward should now pass
+  `AutoEnzyme(; mode=Enzyme.Forward)` explicitly.
 
 ### Changed
 
