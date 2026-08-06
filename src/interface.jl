@@ -27,8 +27,8 @@ DI's second-order operator. Passing a `SecondOrder` yourself always means the
 latter, and bypasses the gradient slot even when you wrote it by hand.
 
 - `logdensity(x::AbstractVector) -> Real`
-- `grad_logdensity` — callable `x -> AbstractVector`, or a backend applied to
-  `logdensity`.
+- `grad_logdensity` — callable `x -> AbstractVector`, or a backend to
+  differentiate `logdensity` with.
 - `hvp` — optional callable `(x, v) -> AbstractVector`, or a backend. If
   `nothing`, DEER builds the HVP from the sampler's `backend`.
 - `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
@@ -37,7 +37,7 @@ latter, and bypasses the gradient slot even when you wrote it by hand.
   A batched gradient derived from this is one gradient of its sum, so coupling
   between columns would go unnoticed and give wrong derivatives.
 - `grad_logdensity_batch` — optional callable `X -> AbstractMatrix`, or a
-  backend applied to `logdensity_batch`. Left out alongside a
+  backend to differentiate `logdensity_batch` with. Left out alongside a
   `logdensity_batch`, it is derived when `grad_logdensity` is a backend.
 - `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend,
   resolved against `grad_logdensity_batch` the same way `hvp` is against
