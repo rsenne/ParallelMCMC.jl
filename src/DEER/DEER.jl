@@ -196,9 +196,8 @@ relying on constant propagation through `===`.
 The routing follows DI's `hvp_mode`: a forward outer pass
 (`DI.ForwardOverAnything`) takes `ForwardOnGrad`, anything else
 `ReverseOnGrad`. Only the outer direction matters since we differentiate
-the already-built `gradlogp`. Plain `AutoEnzyme()` lands on `ForwardOnGrad`,
-which we need: Enzyme reverse hits the gc-transition abort on GPU (see
-`ext/EnzymeExt.jl`).
+the already-built `gradlogp`. The mode is whatever the user's backend carries;
+nothing here substitutes one (see `_normalized_backend`).
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
@@ -207,9 +206,7 @@ struct ReverseOnGrad <: HVPStrategy end
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
 _strategy_from(::DI.HVPMode) = ReverseOnGrad()
 
-function _hvp_strategy(backend::Union{AbstractADType,DI.SecondOrder})
-    return _strategy_from(DI.hvp_mode(backend))
-end
+_hvp_strategy(backend::AbstractADType) = _strategy_from(DI.hvp_mode(backend))
 
 #=
 Hook for backend-specific normalization of the user's `backend`, applied on every
@@ -227,14 +224,12 @@ when they don't; this package is not an AD package and has no business overridin
 either. Picking one here also used to corrupt a `SecondOrder`, whose halves carry
 directions of their own (see `_normalized_second_order`).
 
-A `SecondOrder` normalizes to its outer half, because the paths that call this
-differentiate the already-built `gradlogp`: the inner derivative has run, so the
-outer is the only pass left. The unwrapping recurses rather than calling
-`DI.outer` in the generic method, so that a wrapped backend still reaches its own
-specialization: dispatch happens on what comes out of `DI.outer`, not on the
-`SecondOrder` around it.
+Callers hand this a single pass, never a `SecondOrder`: the strategy paths below
+run one AD pass over a hand-written `gradlogp`, and `_resolve_hvp` sends every
+`SecondOrder` to `_make_hvp_fn_second_order` before they are reached.
+`_normalized_second_order` is the one caller that starts from a pair, and it
+selects the outer half itself.
 =#
-_normalized_backend(backend::DI.SecondOrder) = _normalized_backend(DI.outer(backend))
 _normalized_backend(backend::AbstractADType) = backend
 
 function _prepare_hvp_via_grad_reverse(
