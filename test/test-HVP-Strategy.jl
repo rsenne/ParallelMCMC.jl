@@ -36,22 +36,6 @@ const DI_STRAT = ParallelMCMC.DEER.DI
         @test DEER_STRAT._hvp_strategy(so_agnostic_outer) isa DEER_STRAT.ReverseOnGrad
     end
 
-    @testset "normalization unwraps a SecondOrder to its outer half" begin
-        # The strategy paths differentiate the already-built gradlogp, so the
-        # outer pass is the only one left to normalize.
-        so_fwd = DI_STRAT.SecondOrder(AutoForwardDiff(), AutoZygote())
-        @test DEER_STRAT._normalized_backend(so_fwd) === AutoForwardDiff()
-
-        so_rev = DI_STRAT.SecondOrder(AutoZygote(), AutoForwardDiff())
-        @test DEER_STRAT._normalized_backend(so_rev) === AutoZygote()
-
-        #= Unwrapping has to happen before the backend-specific hook is dispatched
-        on, or a wrapped `AutoEnzyme()` comes out bare and misses EnzymeExt. =#
-        so_enz = DI_STRAT.SecondOrder(AutoEnzyme(), AutoForwardDiff())
-        @test DEER_STRAT._normalized_backend(so_enz) ===
-            DEER_STRAT._normalized_backend(AutoEnzyme())
-    end
-
     @testset "normalization supplies Const but never a mode" begin
         #= The wrappers DEER differentiates are its own types, so annotating them
         `Const` is its business. The mode is not: one the user set is a decision,
@@ -97,6 +81,9 @@ const DI_STRAT = ParallelMCMC.DEER.DI
             # carries a `mode`, so this is the case that could regress.
             if DI_STRAT.outer(so) isa AutoEnzyme
                 @test DI_STRAT.outer(normalized).mode === DI_STRAT.outer(so).mode
+                #= The outer half still reaches EnzymeExt's specialization rather
+                than passing through as a bare backend. =#
+                @test DI_STRAT.outer(normalized) isa AutoEnzyme{<:Any,Enzyme.Const}
             end
         end
     end
