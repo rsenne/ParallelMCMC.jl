@@ -203,10 +203,23 @@ abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
 
+#=
+ReactantHVP — trace the HVP with Enzyme-MLIR and compile it to an XLA
+executable via Reactant.jl (see `ext/ReactantExt.jl`). Selected by
+`ADTypes.AutoReactant()`, which DI cannot drive yet, so it short-circuits ahead
+of the `hvp_mode` routing above; once DI gains Reactant support the
+`AutoReactant` specializations can be deleted. Reactant bypasses Enzyme's LLVM
+pipeline, avoiding the GPU gc-transition abort — the only path that computes a
+genuine second-order HVP on GPU. The traced functions must be Reactant-traceable
+(plain array ops).
+=#
+struct ReactantHVP <: HVPStrategy end
+
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
 _strategy_from(::DI.HVPMode) = ReverseOnGrad()
 
 _hvp_strategy(backend::AbstractADType) = _strategy_from(DI.hvp_mode(backend))
+_hvp_strategy(::ADTypes.AutoReactant) = ReactantHVP()
 
 #=
 Hook for backend-specific normalization of the user's `backend`, applied on every
@@ -298,6 +311,26 @@ function _make_hvp_batch_fn(
 )
     prep = _prepare_batch_hvp_via_grad_reverse(grad_batch, backend, X_template)
     return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
+end
+
+#=
+`ReactantHVP` fallbacks. `ReactantExt` adds methods with `backend` pinned to
+`ADTypes.AutoReactant` (strictly more specific — no method overwriting, which
+precompilation forbids); without Reactant loaded these give a clear error
+instead of a `MethodError`.
+=#
+const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using Reactant` to load ParallelMCMC's ReactantExt."
+
+function _make_hvp_fn(
+    ::ReactantHVP, gradlogp, backend::AbstractADType, x_template::AbstractVector
+)
+    return error(_REACTANT_LOAD_HINT)
+end
+
+function _make_hvp_batch_fn(
+    ::ReactantHVP, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+)
+    return error(_REACTANT_LOAD_HINT)
 end
 
 #=

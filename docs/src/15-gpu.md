@@ -233,10 +233,31 @@ DEER needs a Hessian–vector product $H v$ at every Newton step.  `DensityModel
 - **You only supply `gradlogp` / `grad_logdensity_batch`.**  The sampler builds the HVP by differentiating your gradient — either a forward-mode pushforward of `gradlogp` ([`ForwardOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), the default for most backends) or a reverse-mode gradient of `x -> dot(gradlogp(x), v)` ([`ReverseOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), used for `AutoMooncake` and `AutoZygote`).  This is the **AD-HVP fallback**, and it is what the logistic-regression example above uses.
 
 !!! warning "Log-density-only models on GPU"
-    `grad_logdensity` can itself be an AD backend (`DensityModel(logp, AutoEnzyme(), dim)`, see [Getting started](10-getting-started.md)), but don't do that with `ParallelMALASampler` on GPU.  The HVP becomes `SecondOrder(hvp_backend, grad_backend)` on your log-density, which currently fails on GPU with both Enzyme and Mooncake (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  The same goes for passing a `SecondOrder` explicitly.  Write `gradlogp` out by hand for DEER, so the HVP is a single pass over it.  The sequential samplers only need the gradient, so log-density-only models work there.
+    `grad_logdensity` can itself be an AD backend (`DensityModel(logp, AutoEnzyme(), dim)`, see [Getting started](10-getting-started.md)), but don't do that with `ParallelMALASampler` on GPU for the DI-driven backends.  The HVP becomes `SecondOrder(hvp_backend, grad_backend)` on your log-density, which currently fails on GPU with both Enzyme and Mooncake (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  The same goes for passing a `SecondOrder` explicitly.  Write `gradlogp` out by hand for DEER, so the HVP is a single pass over it — or use `AutoReactant()` (below), the one backend where log-density-only DEER works on GPU.  The sequential samplers only need the gradient, so log-density-only models work there.
 
 !!! note "A backend in `grad_logdensity` reaches `logdensity_batch` too"
     The batched path needs a batched gradient, and derives one from `logdensity_batch` when `grad_logdensity` is a backend.  That puts `logdensity_batch` under the same restrictions as the rest of your AD-visible code.  Supply `grad_logdensity_batch` to avoid it.
+
+### Reactant: genuine second-order HVPs on GPU
+
+`ADTypes.AutoReactant()` (requires `using Reactant`) takes a different route entirely.  The derivative is traced with Enzyme-MLIR and compiled to an XLA executable by [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), bypassing Enzyme's LLVM pipeline — and with it the gc-transition abort and the `pmcmc_*` wrapper requirements above.  It is currently the only path that computes a genuine second-order HVP on GPU, so log-density-only models work with DEER:
+
+```julia
+using Reactant, ADTypes
+
+model = DensityModel(logp, AutoReactant(), D)   # no hand-written gradient
+sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
+```
+
+When both the gradient slot and the HVP source are `AutoReactant()`, the HVP compiles as explicit forward-over-reverse from the raw log-density, in a single fused XLA program.  With a hand-written `gradlogp`, it compiles a forward pushforward of your gradient instead.
+
+Three caveats:
+
+- The traced function must be **Reactant-traceable**: plain array operations.  DynamicPPL-built log-densities do not trace as-is.
+- **Reactant does not mix with the DI backends across the two passes of an HVP.**  Both `grad_logdensity` and the HVP source take `AutoReactant()`, or neither does; a hand-written gradient pairs with either.  Mixing raises an `ArgumentError` at preparation time, since Reactant cannot trace a DI-prepared gradient and DI cannot differentiate a compiled XLA executable.
+- Calls cross a marshalling boundary (package arrays ↔ Reactant's XLA device memory) on every invocation, and executables are shape-specialized at preparation time.  Correct everywhere, but it leaves fusion on the table relative to a future end-to-end Reactant pipeline.
+
+DifferentiationInterface cannot drive Reactant yet; when that support lands ([DI#918](https://github.com/JuliaDiff/DifferentiationInterface.jl/pull/918)), this path folds into the standard `hvp_mode` routing with no user-facing change.
 
 ### When the fallback is the right call
 

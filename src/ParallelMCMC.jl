@@ -1,7 +1,7 @@
 module ParallelMCMC
 
 using AbstractMCMC
-using ADTypes: AbstractADType
+using ADTypes: ADTypes, AbstractADType
 using CUDA
 using DifferentiationInterface: DifferentiationInterface
 using FlexiChains

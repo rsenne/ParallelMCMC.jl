@@ -24,6 +24,14 @@ const DI_STRAT = ParallelMCMC.DEER.DI
             DEER_STRAT.ReverseOnGrad
     end
 
+    @testset "AutoReactant short-circuits hvp_mode" begin
+        #= DI cannot drive Reactant, so `AutoReactant` never reaches `DI.hvp_mode`
+        and the strategy is picked by dispatch instead. The method lives in DEER
+        rather than in ReactantExt, so this holds with Reactant unloaded. =#
+        @test DEER_STRAT._hvp_strategy(AutoReactant()) isa DEER_STRAT.ReactantHVP
+        @test @inferred(DEER_STRAT._hvp_strategy(AutoReactant())) isa DEER_STRAT.ReactantHVP
+    end
+
     @testset "SecondOrder follows hvp_mode's composition" begin
         so_fwd_outer = DI_STRAT.SecondOrder(AutoForwardDiff(), AutoZygote())
         @test DEER_STRAT._hvp_strategy(so_fwd_outer) isa DEER_STRAT.ForwardOnGrad

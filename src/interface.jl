@@ -212,6 +212,29 @@ function _resolve_gradient_batch(
 end
 
 #=
+`AutoReactant` gradients bypass DI (which cannot drive Reactant yet) and go
+through hook functions that `ReactantExt` fills in with strictly more specific
+methods; the untyped fallbacks give a clear load-order error.
+=#
+function _resolve_gradient(
+    logdensity, backend::ADTypes.AutoReactant, x_template::AbstractVector
+)
+    return _reactant_resolve_gradient(logdensity, backend, x_template)
+end
+function _reactant_resolve_gradient(logdensity, backend, x_template)
+    return error(DEER._REACTANT_LOAD_HINT)
+end
+
+function _resolve_gradient_batch(
+    logdensity_batch, backend::ADTypes.AutoReactant, X_template::AbstractMatrix
+)
+    return _reactant_resolve_gradient_batch(logdensity_batch, backend, X_template)
+end
+function _reactant_resolve_gradient_batch(logdensity_batch, backend, X_template)
+    return error(DEER._REACTANT_LOAD_HINT)
+end
+
+#=
 Resolve an HVP slot given as a backend. `grad_backend` is the backend that
 produced `grad`, or nothing when the gradient slot held a callable. Dispatch is
 on types alone, so the branch folds and the returned closure type stays
@@ -220,9 +243,18 @@ statically known.
 A `SecondOrder` bypasses the gradient slot even when that slot is hand-written:
 naming both passes asks for two derivatives of `logdensity`. The slot is still
 the drift term the MALA step uses.
+
+`AutoReactant` short-circuits ahead of both: DI cannot drive Reactant, so it can
+neither build the `SecondOrder` nor route through `hvp_mode`. `ReactantExt` takes
+over the second-order case by dispatching on `grad` instead — a Reactant-resolved
+gradient carries the raw `logdensity` with it and re-traces forward-over-reverse
+from there.
 =#
 function _resolve_hvp(logdensity, grad, grad_backend, hvp_backend, x_template)
-    if hvp_backend isa DI.SecondOrder
+    _check_reactant_pair(grad_backend, hvp_backend)
+    if hvp_backend isa ADTypes.AutoReactant
+        return DEER._make_hvp_fn(DEER.ReactantHVP(), grad, hvp_backend, x_template)
+    elseif hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_fn_second_order(logdensity, hvp_backend, x_template)
     elseif grad_backend !== nothing
         return DEER._make_hvp_fn_second_order(
@@ -239,7 +271,12 @@ end
 function _resolve_hvp_batch(
     logdensity_batch, grad_batch, grad_batch_backend, hvp_backend, X_template
 )
-    if hvp_backend isa DI.SecondOrder
+    _check_reactant_pair(grad_batch_backend, hvp_backend)
+    if hvp_backend isa ADTypes.AutoReactant
+        return DEER._make_hvp_batch_fn(
+            DEER.ReactantHVP(), grad_batch, hvp_backend, X_template
+        )
+    elseif hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_batch_fn_second_order(
             _BatchLogdensitySum(logdensity_batch), hvp_backend, X_template
         )
@@ -254,6 +291,42 @@ function _resolve_hvp_batch(
             DEER._hvp_strategy(hvp_backend), grad_batch, hvp_backend, X_template
         )
     end
+end
+
+#=
+Reactant does not pair with a DI backend across the two passes of an HVP: the
+compiled gradient is an opaque XLA executable DI cannot differentiate, and a
+DI-prepared gradient is not Reactant-traceable. Both slots take `AutoReactant`
+or neither does; a hand-written gradient pairs with either.
+
+Dispatch rather than a runtime `isa` chain, so the check folds away with the rest
+of `_resolve_hvp`'s branching.
+=#
+_check_reactant_pair(grad_backend, hvp_backend) = nothing
+_check_reactant_pair(::ADTypes.AutoReactant, ::ADTypes.AutoReactant) = nothing
+_check_reactant_pair(::Nothing, ::ADTypes.AutoReactant) = nothing
+
+function _check_reactant_pair(grad_backend::ADTypes.AutoReactant, hvp_backend)
+    return throw(
+        ArgumentError(
+            "an AutoReactant gradient needs an AutoReactant Hessian-vector product: " *
+            "got hvp backend $(hvp_backend). Reactant compiles the gradient to an XLA " *
+            "executable, which DifferentiationInterface cannot differentiate. Set the " *
+            "model's `hvp` (or the sampler's `backend`) to AutoReactant() as well.",
+        ),
+    )
+end
+
+function _check_reactant_pair(grad_backend, hvp_backend::ADTypes.AutoReactant)
+    return throw(
+        ArgumentError(
+            "an AutoReactant Hessian-vector product needs an AutoReactant or " *
+            "hand-written gradient: got gradient backend $(grad_backend). Reactant " *
+            "traces the HVP from the log-density (or from your gradient) and cannot " *
+            "trace a DifferentiationInterface-prepared gradient. Set " *
+            "`grad_logdensity` to AutoReactant() or supply a callable.",
+        ),
+    )
 end
 
 """
