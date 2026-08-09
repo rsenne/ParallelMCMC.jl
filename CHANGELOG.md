@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   batched gradient derived for it when `grad_logdensity` is a backend, rather
   than leaving the batched DEER path switched off (#52). `hvp_batch` can be a
   backend in that case too, and differentiates the derived gradient.
+- New `ReactantExt`: `ADTypes.AutoReactant()` in any derivative slot, or as the
+  sampler `backend`, traces the derivative with Enzyme-MLIR and compiles it to
+  an XLA executable via Reactant.jl. This bypasses Enzyme's LLVM pipeline and
+  is currently the only path that computes a genuine second-order HVP on GPU,
+  so `ParallelMALASampler` now works on CUDA for log-density-only models
+  (#37, #52). Requires `using Reactant` and a Reactant-traceable log-density;
+  `AutoReactant` cannot be paired with a DifferentiationInterface backend
+  across the two passes of an HVP, which raises an `ArgumentError`.
 - An HVP backend over an AD-derived gradient is now taken as true second-order
   AD, `DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` handed
   to `DI.hvp`, instead of an outer AD pass over the prepared DI gradient (#37).
