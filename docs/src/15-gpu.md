@@ -233,14 +233,14 @@ DEER needs a Hessian–vector product $H v$ at every Newton step.  `DensityModel
 - **You only supply `gradlogp` / `grad_logdensity_batch`.**  The sampler builds the HVP by differentiating your gradient — either a forward-mode pushforward of `gradlogp` ([`ForwardOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), the default for most backends) or a reverse-mode gradient of `x -> dot(gradlogp(x), v)` ([`ReverseOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), used for `AutoMooncake` and `AutoZygote`).  This is the **AD-HVP fallback**, and it is what the logistic-regression example above uses.
 
 !!! warning "Log-density-only models on GPU"
-    `grad_logdensity` can itself be an AD backend (`DensityModel(logp, AutoEnzyme(), dim)`, see [Getting started](10-getting-started.md)), but don't do that with `ParallelMALASampler` on GPU for the DI-driven backends.  The HVP becomes `SecondOrder(hvp_backend, grad_backend)` on your log-density, which currently fails on GPU with both Enzyme and Mooncake (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  The same goes for passing a `SecondOrder` explicitly.  Write `gradlogp` out by hand for DEER, so the HVP is a single pass over it — or use `AutoReactant()` (below), the one backend where log-density-only DEER works on GPU.  The sequential samplers only need the gradient, so log-density-only models work there.
+    `grad_logdensity` can itself be an AD backend (`DensityModel(logp, AutoEnzyme(), dim)`, see [Getting started](10-getting-started.md)), but not with `ParallelMALASampler` on GPU for the DI-driven backends.  The HVP then becomes `SecondOrder(hvp_backend, grad_backend)` on your log-density, which currently fails on GPU with both Enzyme and Mooncake (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)); passing a `SecondOrder` explicitly hits the same wall.  Write `gradlogp` out by hand so the HVP is a single pass over it, or use `AutoReactant()` below.  The sequential samplers only need the gradient, so log-density-only models are fine there.
 
 !!! note "A backend in `grad_logdensity` reaches `logdensity_batch` too"
     The batched path needs a batched gradient, and derives one from `logdensity_batch` when `grad_logdensity` is a backend.  That puts `logdensity_batch` under the same restrictions as the rest of your AD-visible code.  Supply `grad_logdensity_batch` to avoid it.
 
-### Reactant: genuine second-order HVPs on GPU
+### Reactant HVPs, off the DI path
 
-`ADTypes.AutoReactant()` (requires `using Reactant`) takes a different route entirely.  The derivative is traced with Enzyme-MLIR and compiled to an XLA executable by [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), bypassing Enzyme's LLVM pipeline — and with it the gc-transition abort and the `pmcmc_*` wrapper requirements above.  It is currently the only path that computes a genuine second-order HVP on GPU, so log-density-only models work with DEER:
+`ADTypes.AutoReactant()` (requires `using Reactant`) goes another way.  The derivative is traced with Enzyme-MLIR and compiled to an XLA executable by [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), never touching Enzyme's LLVM pipeline, so neither the gc-transition abort nor the `pmcmc_*` wrappers above apply.  It gives a genuine second-order HVP for a log-density-only model:
 
 ```julia
 using Reactant, ADTypes
@@ -249,15 +249,21 @@ model = DensityModel(logp, AutoReactant(), D)   # no hand-written gradient
 sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 ```
 
-When both the gradient slot and the HVP source are `AutoReactant()`, the HVP compiles as explicit forward-over-reverse from the raw log-density, in a single fused XLA program.  With a hand-written `gradlogp`, it compiles a forward pushforward of your gradient instead.
+With both the gradient slot and the HVP source `AutoReactant()`, the HVP compiles as explicit forward-over-reverse from the raw log-density, as its own XLA program.  That is a separate executable from the plain gradient's: what gets fused is the HVP's two AD passes, not the gradient and the HVP.  With a hand-written `gradlogp` it compiles a forward pushforward of your gradient instead.
 
-Three caveats:
+!!! warning "Two silent failure modes"
+    **Captured data is frozen at compile time.**  `Reactant.@compile` bakes any plain `Array` or `Ref` reached through the closure into the executable as a constant.  A `logdensity` written as `x -> f(x, data)` whose `data` you later mutate (`data .= new_values`) keeps returning the pre-mutation derivative from every executable compiled before the mutation, with no error and no warning, which biases the samples.  Traced functions must be pure with respect to what they capture; pass data that can change in as an argument.
+
+    **"GPU" here describes your array type, not the device Reactant runs on.**  Which XLA client Reactant compiles for is a Reactant/`Reactant_jll`-wide setting (`Reactant.set_default_backend`) that nothing in this package controls, and it is `"cpu"` unless a GPU client was selected explicitly.  Preparing a model whose `x_template` is a `CuArray` against a CPU client still compiles and still gives correct answers, but every call round-trips `CuArray → host → XLA-CPU → host → CuArray`.  `_prepare_model` warns on that combination and can do nothing else about it; point Reactant at a GPU client yourself.
+
+Other caveats:
 
 - The traced function must be **Reactant-traceable**: plain array operations.  DynamicPPL-built log-densities do not trace as-is.
-- **Reactant does not mix with the DI backends across the two passes of an HVP.**  Both `grad_logdensity` and the HVP source take `AutoReactant()`, or neither does; a hand-written gradient pairs with either.  Mixing raises an `ArgumentError` at preparation time, since Reactant cannot trace a DI-prepared gradient and DI cannot differentiate a compiled XLA executable.
-- Calls cross a marshalling boundary (package arrays ↔ Reactant's XLA device memory) on every invocation, and executables are shape-specialized at preparation time.  Correct everywhere, but it leaves fusion on the table relative to a future end-to-end Reactant pipeline.
+- **Reactant does not mix with the DI backends across the two passes of an HVP.**  Both `grad_logdensity` and the HVP source take `AutoReactant()`, or neither does; a hand-written gradient pairs with either.  Mixing raises an `ArgumentError` at preparation time, since Reactant cannot trace a DI-prepared gradient and DI cannot differentiate a compiled XLA executable.  Same for a `LogDensityProblems`/Turing gradient, and for nesting `AutoReactant()` inside a `DifferentiationInterface.SecondOrder`.
+- **`AutoReactant(; mode=...)` raises** rather than being ignored.  Derivatives always trace as Enzyme reverse-mode with the HVP as forward-over-that, whatever `mode` says.
+- **Every call crosses a marshalling boundary** between package arrays and Reactant's XLA device memory: two host round-trips and a handful of allocations, not a fused in-place path.  Executables are shape-specialized at preparation time, and `@compile` does not memoize across preparations, so every `sample()` call recompiles every `AutoReactant` slot rather than only the first one in the process.
 
-DifferentiationInterface cannot drive Reactant yet; when that support lands ([DI#918](https://github.com/JuliaDiff/DifferentiationInterface.jl/pull/918)), this path folds into the standard `hvp_mode` routing with no user-facing change.
+DifferentiationInterface cannot interoperate with Reactant.  When that support lands ([DI#918](https://github.com/JuliaDiff/DifferentiationInterface.jl/pull/918)) this path folds into the ordinary `hvp_mode` routing with no user-facing change.
 
 ### When the fallback is the right call
 

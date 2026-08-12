@@ -49,11 +49,11 @@ Backends become prepared [DifferentiationInterface](https://github.com/JuliaDiff
 
 Naming both passes yourself is the one route that ignores the gradient slot, hand-written or not.  It is also the only AD route to an HVP for a Turing or LogDensityProblems model, whose gradient arrives already prepared and cannot be differentiated again.
 
-Which pairs work is up to the backends.  On CPU, ForwardDiff, ReverseDiff, Zygote and Enzyme all serve a log-density-only model.  `AutoMooncake` serves neither direction: it has no reverse-over-reverse, and its gradient rejects an outer pass's tangents.  Give Mooncake a hand-written `grad_logdensity` instead.  On GPU, no DI-driven second-order pair works yet (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)); `AutoReactant()` in both slots is the exception, and compiles the pair to a single XLA program.  See the [GPU page](15-gpu.md).
+Which pairs work is up to the backends.  On CPU, ForwardDiff, ReverseDiff, Zygote and Enzyme all serve a log-density-only model.  `AutoMooncake` serves neither direction: it has no reverse-over-reverse, and its gradient rejects an outer pass's tangents, so give Mooncake a hand-written `grad_logdensity`.  On GPU no DI-driven second-order pair works yet (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  `AutoReactant()` in both slots is the exception: it skips DI and traces forward-over-reverse straight from the log-density as one compiled XLA program.  See the [GPU page](15-gpu.md).
 
 The batched pair works the same way, on `sum(logdensity_batch(X))`.  That sum's gradient is the stacked per-column gradients only because the columns are independent, so `logdensity_batch` must not couple them.  Omitting `grad_logdensity_batch` derives one when `grad_logdensity` is a backend; with a hand-written gradient the batched path stays off and the unbatched update covers it.  Both batched derivative slots require `logdensity_batch`, which is also useful on its own for scoring a whole trajectory at once.
 
-`backend` on [`ParallelMALASampler`](@ref) supplies Hessian-vector products for a model that brings no `hvp` / `hvp_batch` of its own, and nothing else.  A model carrying its own can leave it out.
+`backend` on [`ParallelMALASampler`](@ref) supplies Hessian-vector products for a model that brings no `hvp` / `hvp_batch` of its own, and nothing else, so a model carrying its own can leave it out.
 
 ---
 

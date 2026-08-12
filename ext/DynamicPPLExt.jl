@@ -18,17 +18,19 @@ computation via DynamicPPL's `adtype` interface.
 Requires `DynamicPPL` and `LogDensityProblems` to be loaded (these are the weak-dependency
 triggers for this extension), plus any AD backend that is used.
 
-`ad_backend` is DynamicPPL's own `adtype`, not a `DensityModel` slot: it goes to
-the `LogDensityFunction` that fills the log-density and gradient slots, which is
-why it takes a backend only and never a callable. The rest are `DensityModel`
-slots forwarded unchanged.
+`ad_backend` is DynamicPPL's own `adtype` rather than a `DensityModel` slot: it
+goes to the `LogDensityFunction` that fills the log-density and gradient slots,
+which is why it takes a backend and never a callable. The remaining keywords are
+`DensityModel` slots, forwarded unchanged.
 
-`ParallelMALASampler` also needs an HVP. Give it a callable or a
+`ParallelMALASampler` also wants an HVP. Give it a callable or a
 `DifferentiationInterface.SecondOrder`, which differentiates the log-density and
-so bypasses DynamicPPL's gradient. A plain backend fails, since it would
-differentiate the gradient `ad_backend` produced and that preparation rejects an
-outer pass's tangents. DynamicPPL supplies no batched log-density either, so
-reaching the batched DEER path means writing `logdensity_batch` by hand.
+so bypasses DynamicPPL's gradient. A plain backend fails: it would differentiate
+the gradient `ad_backend` produced, whose preparation rejects an outer pass's
+tangents. `ADTypes.AutoReactant()` fails as well, bypassing DI or not, since
+Reactant cannot trace DynamicPPL's model evaluation. DynamicPPL supplies no
+batched log-density either, so reaching the batched DEER path means writing
+`logdensity_batch` by hand.
 
 # Example
 ```julia
