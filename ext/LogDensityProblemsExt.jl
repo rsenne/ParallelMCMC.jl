@@ -24,8 +24,10 @@ parameter named `:x` will be chosen, unless you also pass `param_names` to `samp
 and keep their meaning there, with one caveat. `ld` fills the gradient slot, and
 a gradient `ld` computes by AD carries a preparation tied to its input type, so
 it rejects the tangents a plain `hvp` backend would push through it. Use a
-callable, or a `DifferentiationInterface.SecondOrder` which differentiates the
-log-density instead. Same for `hvp_batch`.
+callable, or a `DifferentiationInterface.SecondOrder`, which differentiates the
+log-density instead. Same for `hvp_batch`. `ADTypes.AutoReactant()` is out here
+too, DI or no DI: Reactant cannot trace the DynamicPPL/LogDensityProblems
+machinery `ld`'s gradient dispatches into.
 
 `ld` supplies no batched log-density, so reaching the batched DEER path means
 writing `logdensity_batch` by hand.

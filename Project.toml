@@ -30,7 +30,7 @@ LogDensityProblemsExt = "LogDensityProblems"
 ReactantExt = ["Reactant", "Enzyme"]
 
 [compat]
-ADTypes = "1.22.0"
+ADTypes = "1.21.0"
 AbstractMCMC = "5.10.0"
 CUDA = "5.11.0"
 CUDA_Runtime_jll = "0.21"

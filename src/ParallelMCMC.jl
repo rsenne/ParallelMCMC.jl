@@ -28,6 +28,10 @@ pmcmc_matmul(A::AbstractVecOrMat, B::AbstractVecOrMat) = A * B
 pmcmc_dot(a::AbstractVector, b::AbstractVector) = dot(a, b)
 pmcmc_dotsum(A::AbstractVecOrMat, B::AbstractVecOrMat) = sum(A .* B)
 
+#= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
+and `interface.jl`'s gradient hooks report it. =#
+const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using Reactant` to load ParallelMCMC's ReactantExt."
+
 include("MALA/MALA.jl")
 include("DEER/DEERScan.jl")
 include("DEER/DEER.jl")
