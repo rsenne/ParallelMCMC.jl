@@ -217,11 +217,7 @@ function _resolve_gradient_batch(
     )
 end
 
-#=
-`AutoReactant` gradients bypass DI (which cannot drive Reactant yet) and go
-through hook functions that `ReactantExt` fills in with strictly more specific
-methods; the untyped fallbacks give a clear load-order error.
-=#
+# `AutoReactant` gradients bypass DI
 function _resolve_gradient(
     logdensity, backend::ADTypes.AutoReactant, x_template::AbstractVector
 )
@@ -275,6 +271,7 @@ end
 function _resolve_hvp_batch(
     logdensity_batch, grad_batch, grad_batch_backend, hvp_backend, X_template
 )
+    _check_reactant_pair(grad_batch_backend, hvp_backend)
     if hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_batch_fn_second_order(
             _BatchLogdensitySum(logdensity_batch), hvp_backend, X_template
@@ -295,22 +292,18 @@ end
 #= The HVP backend composed with the backend that produced the gradient under it.
 For a DI-driven pair that is literally `DI.SecondOrder(hvp_backend,
 grad_backend)`, taken through `DI.hvp`. Two `AutoReactant`s are not a pair DI
-could run at all, so they collapse to the one backend that traces
-forward-over-reverse from `logdensity` itself (`ReactantExt`'s
-`_make_hvp_fn_second_order`). A mixed pair is already out by the time this runs,
-via `_check_reactant_pair`. =#
+could run at all, so they collapse to the `hvp_backend` of the two: the one
+backend that traces forward-over-reverse from `logdensity` itself (`ReactantExt`'s
+`_make_hvp_fn_second_order`). Returning `hvp_backend` rather than a fresh
+`AutoReactant()` keeps a non-default `mode` on it reachable by
+`_check_reactant_mode`. A mixed pair is already out by the time this runs, via
+`_check_reactant_pair`. =#
 _second_order(hvp_backend, grad_backend) = DI.SecondOrder(hvp_backend, grad_backend)
-_second_order(::ADTypes.AutoReactant, ::ADTypes.AutoReactant) = ADTypes.AutoReactant()
+function _second_order(hvp_backend::ADTypes.AutoReactant, ::ADTypes.AutoReactant)
+    return hvp_backend
+end
 
-#=
-Reactant does not pair with a DI backend across the two passes of an HVP: the
-compiled gradient is an opaque XLA executable DI cannot differentiate, and a
-DI-prepared gradient is not Reactant-traceable. Both slots take `AutoReactant`
-or neither does; a hand-written gradient pairs with either.
-
-Dispatch rather than a runtime `isa` chain, so the check folds away with the rest
-of `_resolve_hvp`'s branching.
-=#
+# Check Reactant isn't passed with DI
 _check_reactant_pair(grad_backend, hvp_backend) = nothing
 _check_reactant_pair(::ADTypes.AutoReactant, ::ADTypes.AutoReactant) = nothing
 _check_reactant_pair(::Nothing, ::ADTypes.AutoReactant) = nothing
@@ -430,10 +423,7 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
     #= Settle the HVP backend and check its pairing with `grad_backend` before
     resolving the gradient. Otherwise a mismatched `AutoReactant` pair, or the
     LogDensityProblems-gradient case, surfaces only once `_resolve_gradient` has
-    paid for an XLA compile: 18+ seconds to report a config error. Neither check
-    needs the resolved gradient. `grad_backend` is known already, and
-    `_check_reactant_hvp_source` only looks at `model.grad_logdensity`'s type,
-    which is `grad` unchanged whenever `grad_backend` is `nothing`. =#
+    paid for an XLA compile: 18+ seconds to report a config error. =#
     needs_hvp = model.hvp === nothing || model.hvp isa AbstractADType
     hvp_backend = if needs_hvp
         hb = model.hvp === nothing ? backend : model.hvp
@@ -545,10 +535,10 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
     )
 end
 
-# Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
-# the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
-# However, structs defined in extensions are hard to get hold of so we define them here.
-# The callable behaviour itself is implemented in LogDensityProblemsExt.
+#= Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
+the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
+However, structs defined in extensions are hard to get hold of so we define them here.
+The callable behaviour itself is implemented in LogDensityProblemsExt =#
 struct LogDensityProblemPrimal{L}
     ld::L
 end

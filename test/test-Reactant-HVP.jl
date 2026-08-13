@@ -15,11 +15,10 @@ const DI_R = ParallelMCMC.DEER.DI
 #=
 Reactant-compiled derivative paths (`AutoReactant`), see ext/ReactantExt.jl.
 
-The quartic target keeps the second-order structure honest: logp = -0.25‖x‖⁴ has
-H = -(‖x‖² I + 2 x xᵀ), so an HVP that drops the second-order term — the failure
-mode of `Enzyme.hvp` under `@compile` — is caught, where a Gaussian's constant H
-would hide it. Every derivative-accuracy testset below uses it; do not swap in a
-Gaussian.
+The quartic target is needed to test second order structure: logp = -0.25‖x‖⁴ has
+H = -(‖x‖² I + 2 x xᵀ), so an HVP that drops the second-order term is caught,
+where a Gaussian's constant H would hide it. Every derivative-accuracy testset
+below uses it; do not swap in a Gaussian.
 =#
 logp_r(x) = -0.25 * sum(abs2, x)^2
 gradlogp_r(x) = -sum(abs2, x) .* x
@@ -39,8 +38,8 @@ const D_R = 4
 const CT_R = FlexiChains.FlexiChain{Symbol}
 
 #= The pairing rule lives in `_resolve_hvp` / `_prepare_model`, not in the
-extension, so its dispatch table is checked whether or not Reactant loads —
-none of these calls resolve a gradient or compile anything. =#
+extension, so its dispatch table is checked whether or not Reactant loads.
+None of these calls resolve a gradient or compile anything. =#
 @testset "Reactant does not pair with a DI backend" begin
     # Both slots Reactant, or a hand-written gradient (`nothing`), are accepted.
     @test ParallelMCMC._check_reactant_pair(AutoReactant(), AutoReactant()) === nothing

@@ -2,11 +2,7 @@ module ReactantExt
 
 #=
 Reactant-compiled derivative paths, selected by `ADTypes.AutoReactant()` in any
-derivative slot of `DensityModel`, or as the sampler `backend`. Derivatives are
-traced with Enzyme-MLIR and compiled to XLA executables by `Reactant.@compile`,
-which keeps them off Enzyme's LLVM pipeline and so off the GPU
-`cuMemcpyDtoHAsync_v2` gc-transition abort, and off DifferentiationInterface
-entirely. For a log-density-only model it yields a true second-order HVP.
+derivative slot of `DensityModel`, or as the sampler `backend`.
 
 Two silent failure modes, ahead of the ordinary limitations:
 
@@ -42,14 +38,12 @@ Requirements / limitations:
     `mode` is rejected outright (`_check_reactant_mode`) rather than ignored.
 =#
 
-# Both `Reactant` and `Enzyme` trigger this extension (see Project.toml): the
-# traced derivatives call `Enzyme.autodiff` / `Enzyme.gradient` themselves
-# rather than reaching Enzyme-MLIR through Reactant.
 using ParallelMCMC: ParallelMCMC
 using ParallelMCMC.DEER: DEER
 using ADTypes: ADTypes, AutoReactant, AutoEnzyme
 using Reactant: Reactant, @compile
 using Enzyme: Enzyme
+using CUDA: CUDA
 
 #=
 `AutoReactant()` defaults to `AutoReactant(; mode=AutoEnzyme())`, i.e.
@@ -70,10 +64,7 @@ end
 
 #=
 Warn once per compiled slot when the template is not a plain `Array` (so looks
-like it lives on a GPU) while Reactant's default XLA client targets "cpu": every
-call then pays a host round trip on top of the usual marshalling. Guarded, so a
-Reactant version without `XLA.platform_name` / `XLA.default_backend` degrades to
-no warning instead of erroring out of `_prepare_model`.
+like it lives on a GPU) while Reactant's default XLA client targets "cpu".
 =#
 function _reactant_client_platform()
     return try
@@ -83,8 +74,10 @@ function _reactant_client_platform()
     end
 end
 
-_warn_reactant_host_roundtrip(::Array) = nothing
-function _warn_reactant_host_roundtrip(x::AbstractArray)
+# Only `CuArray` implies a device round-trip; other non-`Array` templates (e.g.
+# `SubArray` views) already live on the host and would be false positives.
+_warn_reactant_host_roundtrip(::AbstractArray) = nothing
+function _warn_reactant_host_roundtrip(x::CUDA.CuArray)
     if _reactant_client_platform() == "cpu"
         @warn "AutoReactant: preparing on a $(typeof(x)), but Reactant's default XLA " *
             "client targets \"cpu\". Every call will round-trip to the host and back " *

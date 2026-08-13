@@ -201,19 +201,7 @@ abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
 
-#=
-ReactantHVP traces the HVP with Enzyme-MLIR and compiles it to an XLA
-executable, off Enzyme's LLVM pipeline and so off the GPU gc-transition abort.
-DI cannot drive Reactant, so `AutoReactant` short-circuits the `hvp_mode`
-routing above; drop these specializations once it can. What the traced function
-has to look like, and which device the compiled program actually runs on, are in
-`ext/ReactantExt.jl`'s module docstring.
-
-Only reached over a hand-written `gradlogp`. An `AutoReactant` gradient slot is
-an AD-derived gradient like any other and goes to `_make_hvp_fn_second_order` /
-`_make_hvp_batch_fn_second_order`, which dispatch on the backend rather than on
-the resolved gradient's type (see `_resolve_hvp`).
-=#
+# Need separate HVPStrategy for Reactant; DI does not support and so needs separate logic
 struct ReactantHVP <: HVPStrategy end
 
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
@@ -309,12 +297,7 @@ function _make_hvp_batch_fn(
     return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
 end
 
-#=
-`ReactantHVP` fallbacks, so a missing `using Reactant` gives the load hint
-rather than a `MethodError`. `ReactantExt` pins `backend` to
-`ADTypes.AutoReactant`, which is strictly more specific, so nothing is
-overwritten — precompilation forbids that.
-=#
+# Fallbacks in case a user forgets `using Reactant`
 function _make_hvp_fn(
     ::ReactantHVP, gradlogp, backend::AbstractADType, x_template::AbstractVector
 )
@@ -327,16 +310,6 @@ function _make_hvp_batch_fn(
     return error(_REACTANT_LOAD_HINT)
 end
 
-#=
-Fallback for the "both slots `AutoReactant`" second-order path, which
-`_second_order` in `interface.jl` routes here with `backend::AutoReactant`
-rather than a `DI.SecondOrder`. Signature is `AbstractADType` and not
-`AutoReactant` because `ReactantExt`'s method is `AutoReactant` exactly, and
-precompilation refuses an identical signature; less specific still loses to it.
-JET needs a method here too, since it cannot see a conditionally-loaded
-extension and would otherwise flag `_resolve_hvp`'s `AutoReactant` branch as
-having none.
-=#
 function _make_hvp_fn_second_order(
     logdensity, backend::AbstractADType, x_template::AbstractVector
 )
