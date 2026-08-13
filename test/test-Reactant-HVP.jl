@@ -173,7 +173,7 @@ if reactant_ok
             model_hvp, zeros(D_R), 8, nothing
         )
 
-        # The default is, of course, fine.
+        # The default still works.
         @test DensityModel(logp_r, AutoReactant(), D_R) isa DensityModel
     end
 

@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   batched gradient derived from it when `grad_logdensity` is a backend, instead
   of leaving the batched DEER path switched off. `hvp_batch` can be a backend in
   that case too, and differentiates the derived gradient (#52).
-- An HVP backend over an AD-derived gradient is now real second-order AD,
+- An HVP backend over an AD-derived gradient is now true second-order AD,
   `DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` handed to
   `DI.hvp`, rather than an outer AD pass over the prepared DI gradient — which
   dropped out of its preparation as soon as tangents were pushed through it
@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `ReactantExt`. `ADTypes.AutoReactant()` in a derivative slot, or as the
   sampler `backend`, traces the derivative with Enzyme-MLIR and compiles it to
   an XLA executable via Reactant.jl, off Enzyme's LLVM pipeline and off
-  DifferentiationInterface entirely, which yields a genuine second-order HVP for
+  DifferentiationInterface entirely, which yields a true second-order HVP for
   a log-density-only model (#37, #52). Requires `using Reactant` and a
   Reactant-traceable log-density. `AutoReactant` does not pair with a
   DifferentiationInterface backend, a `LogDensityProblems` gradient, or a
