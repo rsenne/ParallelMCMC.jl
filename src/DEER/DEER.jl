@@ -212,11 +212,8 @@ _hvp_strategy(::ADTypes.AutoReactant) = ReactantHVP()
 
 #=
 Hook for backend-specific normalization, applied on every AD-HVP path before the
-backend reaches DI. It fills in what the wrappers DEER differentiates need and
-nothing else: those wrapper types are ours, so EnzymeExt sets
-`function_annotation=Enzyme.Const` on them, without which Enzyme throws
-`EnzymeMutabilityException` on the read-only `_HvpReverseClosure` /
-`_BatchHvpReverseClosure` that capture `gradlogp`.
+backend reaches DI. It fills in only what DEER's own wrapper types need; see
+`ext/EnzymeExt.jl` for the one specialization that exists.
 
 It does not choose a differentiation mode. A mode the user set is a decision, an
 unset one is DI's to resolve from the operator it runs, and substituting one here

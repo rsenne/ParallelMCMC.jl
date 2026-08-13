@@ -102,11 +102,7 @@ function DensityModel(
             "grad_logdensity must be a callable or an ADTypes.AbstractADType backend"
         ),
     )
-    #= The batched DEER update evaluates `logdensity_batch` itself, so without one
-    a batched derivative slot is unusable either way: a backend has nothing to
-    differentiate and a callable is never reached. Rejected rather than ignored.
-    A `logdensity_batch` on its own is fine; `_prepare_model` decides from the
-    gradient slot whether the batched path can run. =#
+    # `_prepare_model` decides from the gradient slot whether the batched path runs.
     _batch_needs_logp(name) = throw(
         ArgumentError(
             "$name requires logdensity_batch, which the batched DEER update evaluates"
@@ -154,12 +150,10 @@ struct PreppedDensityModel{F,G,H,FB,GB,HB,PN,SM<:DensityModel}
     source::SM
 end
 
-#=
-Whether a prepped model carried in a state was built from the model a `step`
+#= Whether a prepped model carried in a state was built from the model a `step`
 was handed. Identity, not equality: an equal-but-distinct `DensityModel` just
-costs one re-preparation, whereas treating a different model as a match would
-silently sample the wrong target.
-=#
+costs one re-preparation, whereas a false match would silently sample the wrong
+target. =#
 _prepped_for(prepped::PreppedDensityModel, model::DensityModel) = prepped.source === model
 
 #=
@@ -245,13 +239,6 @@ statically known.
 A `SecondOrder` bypasses the gradient slot even when that slot is hand-written:
 naming both passes asks for two derivatives of `logdensity`. The slot is still
 the drift term the MALA step uses.
-
-`AutoReactant` takes the same three branches as anything else. `_second_order`
-below collapses an `AutoReactant` pair to a single `AutoReactant()` rather than a
-`DI.SecondOrder`, and `_hvp_strategy(::AutoReactant)` sends the
-hand-written-gradient case to `ReactantHVP`; `ReactantExt` supplies both matching
-methods. The pairing is already checked by `_prepare_model` before either path
-here pays for a gradient resolution or an HVP compile.
 =#
 function _resolve_hvp(logdensity, grad, grad_backend, hvp_backend, x_template)
     if hvp_backend isa DI.SecondOrder
@@ -289,15 +276,13 @@ function _resolve_hvp_batch(
     end
 end
 
-#= The HVP backend composed with the backend that produced the gradient under it.
-For a DI-driven pair that is literally `DI.SecondOrder(hvp_backend,
-grad_backend)`, taken through `DI.hvp`. Two `AutoReactant`s are not a pair DI
-could run at all, so they collapse to the `hvp_backend` of the two: the one
-backend that traces forward-over-reverse from `logdensity` itself (`ReactantExt`'s
-`_make_hvp_fn_second_order`). Returning `hvp_backend` rather than a fresh
-`AutoReactant()` keeps a non-default `mode` on it reachable by
-`_check_reactant_mode`. A mixed pair is already out by the time this runs, via
-`_check_reactant_pair`. =#
+#= The HVP backend composed with the backend that produced the gradient under it,
+via `DI.SecondOrder(hvp_backend, grad_backend)` and `DI.hvp`. Two `AutoReactant`s
+are not a pair DI could run, so they collapse to `hvp_backend`: the backend
+`ReactantExt` traces forward-over-reverse from `logdensity` in
+`_make_hvp_fn_second_order`. Returning it, not a fresh `AutoReactant()`, keeps a
+non-default `mode` reachable by `_check_reactant_mode`. A mixed pair is already
+out by the time this runs, via `_check_reactant_pair`. =#
 _second_order(hvp_backend, grad_backend) = DI.SecondOrder(hvp_backend, grad_backend)
 function _second_order(hvp_backend::ADTypes.AutoReactant, ::ADTypes.AutoReactant)
     return hvp_backend
@@ -400,9 +385,8 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector)
     else
         model.grad_logdensity
     end
-    #= The DEER-only slots are dropped rather than passed along: a sequential
-    sampler never reads them, and an unresolved backend sitting in one would
-    break the invariant that no slot here holds an `AbstractADType`. =#
+    # Dropped, not passed along: a sequential sampler never reads them, and an
+    # unresolved backend there would break `PreppedDensityModel`'s invariant.
     return PreppedDensityModel(
         model.logdensity,
         grad,
@@ -453,11 +437,8 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
         model.hvp
     end
 
-    #= A batched log-density with no batched gradient gets one from the model's
-    own gradient backend, never the sampler's: a hand-written gradient has not
-    opted into AD, and deriving one anyway would let `backend=` decide which
-    update path runs. Not deriving one leaves the batched path off rather than
-    raising, since `_trajectory_logps` uses `logdensity_batch` either way. =#
+    # Leaves the batched path off rather than raising: `_trajectory_logps` uses
+    # `logdensity_batch` either way.
     grad_batch = model.grad_logdensity_batch
     if grad_batch === nothing && model.logdensity_batch !== nothing
         grad_batch = grad_backend
@@ -1093,9 +1074,9 @@ function _construct_flexichain(
     param_names::Any,
     model::DensityModel,
 ) where {TKey}
-    #= Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
-    `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
-    'upgrade' symbol parameter names to VarNames if the user requested a VNChain. =#
+    # Wrap user-supplied names in `Parameter`. This allows people to specify, e.g.,
+    # `param_names=(:x, :y, :z=>(2,))` without faffing with `Parameter` themselves. Also
+    # 'upgrade' symbol parameter names to VarNames if the user requested a VNChain.
     to_parameter(vn::VarName) = FlexiChains.Parameter(vn)
     to_parameter(s::Symbol) = FlexiChains.Parameter(TKey <: VarName ? VarName{s}() : s)
 

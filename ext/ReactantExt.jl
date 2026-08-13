@@ -4,38 +4,26 @@ module ReactantExt
 Reactant-compiled derivative paths, selected by `ADTypes.AutoReactant()` in any
 derivative slot of `DensityModel`, or as the sampler `backend`.
 
-Two silent failure modes, ahead of the ordinary limitations:
+Two silent failure modes:
+  - Captured data is frozen at compile time. `@compile` bakes any plain
+    `Array`/`Ref` reached through the closure in as a constant, so mutating it
+    later keeps returning the pre-mutation derivative with no error or
+    warning. Traced functions must be pure w.r.t. their captures; pass mutable
+    data in as an argument instead.
+  - HVPs are explicit forward-over-(gradient) compositions, NEVER `Enzyme.hvp`,
+    which silently returns zeros under `@compile`.
 
-Captured data is frozen at compile time. `@compile` bakes any plain `Array` /
-`Ref` reached through the traced closure into the executable as a constant. A
-`logdensity` written as `x -> f(x, data)` whose `data` is mutated afterwards
-keeps handing back the pre-mutation derivative from every executable compiled
-before the mutation, with no error and no warning. Traced functions must be pure
-with respect to what they capture; pass data that can change in as an argument.
-
-The compiled program runs wherever Reactant's XLA client points, which need not
-be a GPU. That client is a Reactant/`Reactant_jll`-wide setting
-(`Reactant.set_default_backend`) and has nothing to do with where the package's
-own `Vector`s / `CuArray`s live. Preparing on `CuArray` parameters while the
-client targets `"cpu"` still compiles and still gives correct answers, but every
-call round-trips `CuArray -> host -> XLA-CPU -> host -> CuArray`.
-`_warn_reactant_host_roundtrip` below warns once per compiled slot on that
-combination; it cannot fix it.
-
-Requirements / limitations:
-  - The traced function (`logdensity` / `gradlogp` / batched forms) must be
-    Reactant-traceable: plain array ops. DynamicPPL-built log-densities do
-    NOT trace as-is.
-  - Executables are shape-specialized to the preparation templates, and
-    arguments are marshalled to/from Reactant's own (XLA) device memory on
-    every call. A boundary copy, not a fused in-place path — a target for
-    later optimization. `@compile` also does not memoize across preparations:
-    every `sample()` call recompiles every `AutoReactant` slot the model uses.
-  - HVPs are explicit forward-over-(gradient) compositions; NEVER
-    `Enzyme.hvp`, which silently returns zeros under `@compile`.
-  - `AutoReactant.mode` (the wrapped `AutoEnzyme`) is not honoured: gradients
-    always trace as Enzyme reverse, HVPs as forward-over-that. A non-default
-    `mode` is rejected outright (`_check_reactant_mode`) rather than ignored.
+Other limitations:
+  - The traced function must be Reactant-traceable (plain array ops).
+    DynamicPPL-built log-densities do NOT trace as-is.
+  - Reactant's XLA client (`Reactant.set_default_backend`) is process-wide and
+    independent of where package arrays live. Preparing on a `CuArray` while it
+    targets `"cpu"` still compiles and is still correct, but every call
+    round-trips through the host; `_warn_reactant_host_roundtrip` warns once
+    and can't fix it.
+  - Executables are shape-specialized to the preparation templates and are not
+    memoized across preparations, so every `sample()` call recompiles every
+    `AutoReactant` slot the model uses.
 =#
 
 using ParallelMCMC: ParallelMCMC
@@ -164,10 +152,8 @@ HVP factories. `_resolve_hvp` / `_resolve_hvp_batch` (src/interface.jl) route to
 one of two shapes, the same two every other backend gets.
 
   - Both `grad_logdensity` and the HVP source `AutoReactant`: the AD-derived
-    gradient case, with `_second_order` collapsing the pair to one
-    `AutoReactant()` since DI cannot form a `SecondOrder` from it.
-    `_make_hvp_fn_second_order` here traces forward-over-reverse from
-    `logdensity` as a single XLA program.
+    gradient case (see `_second_order` in `interface.jl`). Traced here as
+    forward-over-reverse from `logdensity`, a single XLA program.
   - A hand-written `gradlogp` with an `AutoReactant` HVP source: routed by
     `_hvp_strategy(::AutoReactant) = ReactantHVP()` in `DEER.jl` to
     `_make_hvp_fn` below, a forward JVP over that callable.
