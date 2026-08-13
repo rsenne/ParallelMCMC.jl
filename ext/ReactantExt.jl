@@ -6,7 +6,7 @@ derivative slot of `DensityModel`, or as the sampler `backend`. Derivatives are
 traced with Enzyme-MLIR and compiled to XLA executables by `Reactant.@compile`,
 which keeps them off Enzyme's LLVM pipeline and so off the GPU
 `cuMemcpyDtoHAsync_v2` gc-transition abort, and off DifferentiationInterface
-entirely. For a log-density-only model it yields a genuine second-order HVP.
+entirely. For a log-density-only model it yields a true second-order HVP.
 
 Two silent failure modes, ahead of the ordinary limitations:
 
@@ -144,26 +144,16 @@ end
 _rev_gradient(f, x) = Enzyme.gradient(Enzyme.Reverse, Enzyme.Const(f), x)[1]
 
 #=
-Gradient slots. They hold only the compiled callable; the HVP factories below
-get `logdensity` from `_resolve_hvp`, which already has it.
+Gradient slots. The HVP factories below get `logdensity` from `_resolve_hvp`,
+which already has it.
 =#
-struct _ReactantGradient{C}
-    compiled::C
-end
-(g::_ReactantGradient)(x) = g.compiled(x)
-
 function ParallelMCMC._reactant_resolve_gradient(
     logdensity, backend::AutoReactant, x_template::AbstractVector
 )
     _check_reactant_mode(backend)
     core = Base.Fix1(_rev_gradient, logdensity)
-    return _ReactantGradient(_compiled(core, x_template))
+    return _compiled(core, x_template)
 end
-
-struct _ReactantGradientBatch{C}
-    compiled::C
-end
-(g::_ReactantGradientBatch)(X) = g.compiled(X)
 
 function ParallelMCMC._reactant_resolve_gradient_batch(
     logdensity_batch, backend::AutoReactant, X_template::AbstractMatrix
@@ -173,7 +163,7 @@ function ParallelMCMC._reactant_resolve_gradient_batch(
     # gradient uses (src/interface.jl), so both batched paths differentiate the
     # same thing.
     core = Base.Fix1(_rev_gradient, ParallelMCMC._BatchLogdensitySum(logdensity_batch))
-    return _ReactantGradientBatch(_compiled(core, X_template))
+    return _compiled(core, X_template)
 end
 
 #=

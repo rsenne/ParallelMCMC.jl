@@ -254,12 +254,10 @@ the drift term the MALA step uses.
 below collapses an `AutoReactant` pair to a single `AutoReactant()` rather than a
 `DI.SecondOrder`, and `_hvp_strategy(::AutoReactant)` sends the
 hand-written-gradient case to `ReactantHVP`; `ReactantExt` supplies both matching
-methods. `_check_reactant_pair` runs first, so a mismatched pairing is reported
-before either path pays for a gradient resolution or an HVP compile.
+methods. The pairing is already checked by `_prepare_model` before either path
+here pays for a gradient resolution or an HVP compile.
 =#
 function _resolve_hvp(logdensity, grad, grad_backend, hvp_backend, x_template)
-    _check_reactant_pair(grad_backend, hvp_backend)
-    _check_reactant_hvp_source(grad, hvp_backend)
     if hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_fn_second_order(logdensity, hvp_backend, x_template)
     elseif grad_backend !== nothing
@@ -277,7 +275,6 @@ end
 function _resolve_hvp_batch(
     logdensity_batch, grad_batch, grad_batch_backend, hvp_backend, X_template
 )
-    _check_reactant_pair(grad_batch_backend, hvp_backend)
     if hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_batch_fn_second_order(
             _BatchLogdensitySum(logdensity_batch), hvp_backend, X_template

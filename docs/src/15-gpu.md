@@ -240,7 +240,7 @@ DEER needs a Hessian–vector product $H v$ at every Newton step.  `DensityModel
 
 ### Reactant HVPs, off the DI path
 
-`ADTypes.AutoReactant()` (requires `using Reactant`) goes another way.  The derivative is traced with Enzyme-MLIR and compiled to an XLA executable by [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), never touching Enzyme's LLVM pipeline, so neither the gc-transition abort nor the `pmcmc_*` wrappers above apply.  It gives a genuine second-order HVP for a log-density-only model:
+`ADTypes.AutoReactant()` (requires `using Reactant`) goes another way.  The derivative is traced with Enzyme-MLIR and compiled to an XLA executable by [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), never touching Enzyme's LLVM pipeline, so neither the gc-transition abort nor the `pmcmc_*` wrappers above apply.  It gives a true second-order HVP for a log-density-only model:
 
 ```julia
 using Reactant, ADTypes
