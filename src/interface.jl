@@ -450,15 +450,16 @@ end
 
 function _make_noise_buffer(x::AbstractVector, ::Type{FP}, D::Int) where {FP}
     ξ = similar(x, FP, D)
-    host = ξ isa CUDA.CuArray ? Vector{FP}(undef, D) : nothing
+    host = needs_host_staging(ξ) ? Vector{FP}(undef, D) : nothing
     return ξ, host
 end
 
 function _randn_like!(
     rng::Random.AbstractRNG, ξ::AbstractVector{FP}, host::Union{Nothing,AbstractVector{FP}}
 ) where {FP}
-    if ξ isa CUDA.CuArray
-        host === nothing && error("CuArray normal noise requires a reusable host buffer")
+    if needs_host_staging(ξ)
+        host === nothing &&
+            error("normal noise for $(typeof(ξ)) requires a reusable host buffer")
         randn!(rng, host)
         copyto!(ξ, host)
     else
@@ -683,7 +684,7 @@ function _make_mala_tape_block(
     Xi = similar(x0, FP, D, T)
     U_host = Vector{FP}(undef, T)
 
-    if Xi isa CUDA.CuArray
+    if needs_host_staging(Xi)
         Xi_host = Matrix{FP}(undef, D, T)
         for t in 1:T
             randn!(rng, view(Xi_host, :, t))

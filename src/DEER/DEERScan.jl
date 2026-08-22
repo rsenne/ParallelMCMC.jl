@@ -12,8 +12,8 @@ export AffineScanWorkspace,
 Reusable workspace for the diagonal affine scan.
 
 Buffers are allocated with the same array type / device placement as the template
-matrix used to construct the workspace, so this is GPU-compatible for `CuArray`
-inputs and CPU-compatible for standard arrays.
+matrix used to construct the workspace, so this works on GPU arrays and CPU
+arrays alike.
 """
 struct AffineScanWorkspace{M}
     alpha::M
@@ -88,7 +88,7 @@ using the composition rule
     (a2, b2) ∘ (a1, b1) = (a2 .* a1, a2 .* b1 .+ b2)
 
 The implementation is generic over `AbstractMatrix` and is intended to work on
-CPU arrays and GPU arrays (`CuArray`) as long as broadcasted assignment and
+CPU arrays and GPU arrays alike, as long as broadcasted assignment and
 slicing/views are supported by the array type.
 
 Notes:

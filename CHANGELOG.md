@@ -80,6 +80,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CUDA is now a weak dependency behind a `CUDAExt` extension, so installing and
+  loading ParallelMCMC no longer drags in the CUDA stack on machines that cannot
+  use it (#59). GPU runs are unchanged apart from needing `using CUDA` alongside
+  `using ParallelMCMC`, which they already did to build the `CuArray`s.
+  The samplers were array-type-agnostic everywhere but the random fills — MALA's
+  normal noise and DEER's Rademacher probes, which cannot be written into device
+  memory one element at a time. Those now ask
+  `ParallelMCMC.needs_host_staging(x)` whether to stage through a host buffer;
+  the extension is the one method answering `true` for `CuArray`, and another
+  device array type is one method away.
 - The AD-HVP fallback strategy (forward-on-grad vs reverse-on-grad) now comes
   from DifferentiationInterface's `hvp_mode` trait rather than a hardcoded
   per-backend list, so `AutoEnzyme(mode=Enzyme.Reverse)` routes to the

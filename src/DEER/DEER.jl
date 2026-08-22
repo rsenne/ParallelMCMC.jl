@@ -4,7 +4,8 @@ using LinearAlgebra
 using DifferentiationInterface
 using ADTypes: ADTypes, AbstractADType
 using Random
-using CUDA: CUDA
+
+import ..ParallelMCMC: needs_host_staging
 
 include("DEERScan.jl")
 using .DEERScan
@@ -42,7 +43,7 @@ Reusable buffers for allocation-light DEER updates and solves.
 
 All buffers are created with the same array type / device placement as `S_template`
 (or `s0_template` for vector buffers), so the workspace is GPU-compatible when
-constructed from `CuArray` templates.
+constructed from device-array templates.
 """
 struct DEERWorkspace{M,V,SW,HZ,H}
     A::M
@@ -65,12 +66,12 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     B = similar(S_template)
     Xbar = similar(S_template)
     Z = similar(S_template)
-    Zhost = Z isa CUDA.CuArray ? Matrix{eltype(S_template)}(undef, size(Z)...) : nothing
+    Zhost = needs_host_staging(Z) ? Matrix{eltype(S_template)}(undef, size(Z)...) : nothing
     S_work = similar(S_template)
     S_tmp = similar(S_template)
     diff_buf = similar(S_template)
     zbuf = similar(s0_template)
-    zhost = if zbuf isa CUDA.CuArray
+    zhost = if needs_host_staging(zbuf)
         Vector{eltype(s0_template)}(undef, length(s0_template))
     else
         nothing
@@ -352,20 +353,17 @@ function _make_hvp_batch_fn_second_order(
 end
 
 @inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}
+    #= Unbuffered call on a device array: allocate the staging buffer for this
+    one fill. The hot paths hand over a workspace buffer instead. =#
+    needs_host_staging(z) && return _rademacher!(z, rng, Vector{T}(undef, length(z)))
     @inbounds for i in eachindex(z)
         z[i] = rand(rng, Bool) ? one(T) : -one(T)
     end
     return z
 end
 
-@inline function _rademacher!(z::CUDA.CuArray{T}, rng::AbstractRNG) where {T}
-    host = Vector{T}(undef, length(z))
-    _rademacher!(z, rng, host)
-    return z
-end
-
 @inline function _rademacher!(
-    z::CUDA.CuArray{T}, rng::AbstractRNG, host::AbstractArray{T}
+    z::AbstractArray{T}, rng::AbstractRNG, host::AbstractArray{T}
 ) where {T}
     length(host) == length(z) || throw(DimensionMismatch("host buffer must match z"))
     _rademacher!(host, rng)
