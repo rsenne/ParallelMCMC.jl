@@ -12,6 +12,25 @@ Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
 derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
 `backend`. See [GPU Execution](15-gpu.md) for its constraints.
 
+## CUDA and other device arrays
+
+CUDA is not a dependency of ParallelMCMC. `using CUDA` loads the `CUDAExt`
+extension, which is all it takes for the samplers to accept `CuArray`
+parameters — see [GPU Execution](15-gpu.md).
+
+The extension sets one method. Everything the samplers do to a device array
+goes through the generic `AbstractArray` interface, except the random fills,
+which cannot write into device memory one element at a time and stage through a
+host buffer instead. Another array type joins by answering the same question:
+
+```julia
+ParallelMCMC.needs_host_staging(::ROCArray) = true
+```
+
+```@docs
+ParallelMCMC.needs_host_staging
+```
+
 ## Extension constructors
 
 `DensityModel` also has extension constructors for common probabilistic-programming interfaces:
