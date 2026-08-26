@@ -2,6 +2,8 @@
 
 DEER's prefix-scan and per-step batch evaluations are array-type-agnostic, so the same `ParallelMALASampler` runs on either CPU or GPU.  This page covers when GPU pays off, the current limitations, and a worked example.
 
+ParallelMCMC does not depend on CUDA.jl.  Run `using CUDA` alongside `using ParallelMCMC` and the `CUDAExt` extension loads, after which the samplers accept `CuArray` parameters; without it the package is CPU-only and never pays CUDA's load cost.
+
 ---
 
 ## When to use GPU
@@ -99,7 +101,7 @@ so neither the positive nor negative tail overflows in `Float32`.
 ### Synthetic data
 
 ```julia
-using Random, CUDA
+using ParallelMCMC, Random, CUDA   # `using CUDA` is what loads ParallelMCMC's CUDAExt
 
 D = 50; N = 1000
 rng    = MersenneTwister(0)
