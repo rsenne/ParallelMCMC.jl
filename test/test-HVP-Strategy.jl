@@ -46,8 +46,7 @@ const DI_STRAT = ParallelMCMC.DEER.DI
 
     @testset "normalization supplies Const but never a mode" begin
         #= The wrappers DEER differentiates are its own types, so annotating them
-        `Const` is its business. The mode is not: one the user set is a decision,
-        and an unset one is DI's to resolve from the operator it runs. =#
+        `Const` is its business. The mode is not. =#
         bare = DEER_STRAT._normalized_backend(AutoEnzyme())
         @test bare isa AutoEnzyme{<:Any,Enzyme.Const}
         @test bare.mode === nothing
@@ -70,9 +69,9 @@ const DI_STRAT = ParallelMCMC.DEER.DI
     @testset "normalizing a SecondOrder keeps the composition DI resolved" begin
         #= Regression for #62. Normalization used to route the outer half through
         a forward-only hook, which pinned `Enzyme.Forward` onto it. For a pair
-        `hvp_mode` resolves to reverse -- `SecondOrder(AutoEnzyme(),
+        `hvp_mode` resolves to reverse — `SecondOrder(AutoEnzyme(),
         AutoForwardDiff())` is reverse-over-forward, its inner half being
-        forward-only -- that silently made it forward-over-forward. =#
+        forward-only — that made it forward-over-forward. =#
         for so in (
             DI_STRAT.SecondOrder(AutoEnzyme(), AutoForwardDiff()),
             DI_STRAT.SecondOrder(AutoEnzyme(), AutoZygote()),
