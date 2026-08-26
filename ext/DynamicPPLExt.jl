@@ -18,13 +18,10 @@ computation via DynamicPPL's `adtype` interface.
 Requires `DynamicPPL` and `LogDensityProblems` to be loaded (these are the weak-dependency
 triggers for this extension), plus any AD backend that is used.
 
-`ad_backend` is DynamicPPL's own `adtype` rather than a `DensityModel` slot: it
-goes to the `LogDensityFunction` that fills the log-density and gradient slots,
-which is why it takes a backend and never a callable. The remaining keywords are
-`DensityModel` slots, forwarded unchanged — see the `LogDensityProblemsExt`
-constructor's docstring for the `hvp`/`hvp_batch` caveats that come with an
-AD-derived gradient (no plain backend, no `AutoReactant()`, no batched
-log-density without writing one by hand).
+`ad_backend` configures DynamicPPL's `LogDensityFunction`. The remaining
+keywords are forwarded to `DensityModel`. HVPs require a callable or explicit
+`DifferentiationInterface.SecondOrder`; plain HVP backends are unsupported.
+Batched derivatives require a hand-written `logdensity_batch`.
 
 # Example
 ```julia
@@ -48,14 +45,12 @@ function ParallelMCMC.DensityModel(
     grad_logdensity_batch=nothing,
     hvp_batch=nothing,
 )
-    # Sample in linked/unconstrained space and let DynamicPPL provide the gradient.
     ld = DynamicPPL.LogDensityFunction(
         turing_model,
         DynamicPPL.getlogjoint_internal,
         DynamicPPL.LinkAll();
         adtype=ad_backend,
     )
-    # Requires LogDensityProblemsExt to be loaded
     return ParallelMCMC.DensityModel(
         ld;
         hvp=hvp,

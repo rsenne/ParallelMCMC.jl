@@ -25,9 +25,6 @@ const DI_STRAT = ParallelMCMC.DEER.DI
     end
 
     @testset "AutoReactant short-circuits hvp_mode" begin
-        #= DI cannot drive Reactant, so `AutoReactant` never reaches `DI.hvp_mode`
-        and the strategy is picked by dispatch instead. The method lives in DEER
-        rather than in ReactantExt, so this holds with Reactant unloaded. =#
         @test DEER_STRAT._hvp_strategy(AutoReactant()) isa DEER_STRAT.ReactantHVP
         @test @inferred(DEER_STRAT._hvp_strategy(AutoReactant())) isa DEER_STRAT.ReactantHVP
     end
@@ -45,8 +42,6 @@ const DI_STRAT = ParallelMCMC.DEER.DI
     end
 
     @testset "normalization supplies Const but never a mode" begin
-        #= The wrappers DEER differentiates are its own types, so annotating them
-        `Const` is its business. The mode is not. =#
         bare = DEER_STRAT._normalized_backend(AutoEnzyme())
         @test bare isa AutoEnzyme{<:Any,Enzyme.Const}
         @test bare.mode === nothing
@@ -57,21 +52,15 @@ const DI_STRAT = ParallelMCMC.DEER.DI
             @test normalized isa AutoEnzyme{<:Any,Enzyme.Const}
         end
 
-        # An annotation the user chose is left alone.
         annotated = AutoEnzyme(; function_annotation=Enzyme.Duplicated)
         @test DEER_STRAT._normalized_backend(annotated) === annotated
 
-        # Backends with no specialization pass straight through.
         @test DEER_STRAT._normalized_backend(AutoForwardDiff()) === AutoForwardDiff()
         @test DEER_STRAT._normalized_backend(AutoZygote()) === AutoZygote()
     end
 
     @testset "normalizing a SecondOrder keeps the composition DI resolved" begin
-        #= Regression for #62. Normalization used to route the outer half through
-        a forward-only hook, which pinned `Enzyme.Forward` onto it. For a pair
-        `hvp_mode` resolves to reverse — `SecondOrder(AutoEnzyme(),
-        AutoForwardDiff())` is reverse-over-forward, its inner half being
-        forward-only — that made it forward-over-forward. =#
+        # Regression #62: normalization must not change the composed HVP mode.
         for so in (
             DI_STRAT.SecondOrder(AutoEnzyme(), AutoForwardDiff()),
             DI_STRAT.SecondOrder(AutoEnzyme(), AutoZygote()),
@@ -82,14 +71,9 @@ const DI_STRAT = ParallelMCMC.DEER.DI
         )
             normalized = DEER_STRAT._normalized_second_order(so)
             @test DI_STRAT.hvp_mode(normalized) == DI_STRAT.hvp_mode(so)
-            # The inner half is the user's own first-order gradient, untouched.
             @test DI_STRAT.inner(normalized) === DI_STRAT.inner(so)
-            # And no mode is invented for the outer half either. Only `AutoEnzyme`
-            # carries a `mode`, so this is the case that could regress.
             if DI_STRAT.outer(so) isa AutoEnzyme
                 @test DI_STRAT.outer(normalized).mode === DI_STRAT.outer(so).mode
-                #= The outer half still reaches EnzymeExt's specialization rather
-                than passing through as a bare backend. =#
                 @test DI_STRAT.outer(normalized) isa AutoEnzyme{<:Any,Enzyme.Const}
             end
         end

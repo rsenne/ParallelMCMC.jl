@@ -6,20 +6,12 @@ using FlexiChains
 
 using ParallelMCMC
 using ADTypes
-# Stands in for "some backend that is not Reactant" in the pairing tests below.
 using ForwardDiff: ForwardDiff
 using LogDensityProblems: LogDensityProblems
 
 const DI_R = ParallelMCMC.DEER.DI
 
-#=
-Reactant-compiled derivative paths (`AutoReactant`), see ext/ReactantExt.jl.
-
-The quartic target is needed to test second order structure: logp = -0.25‖x‖⁴ has
-H = -(‖x‖² I + 2 x xᵀ), so an HVP that drops the second-order term is caught,
-where a Gaussian's constant H would hide it. Every derivative-accuracy testset
-below uses it; do not swap in a Gaussian.
-=#
+# A quartic target exposes missing second-order terms that a Gaussian would hide.
 logp_r(x) = -0.25 * sum(abs2, x)^2
 gradlogp_r(x) = -sum(abs2, x) .* x
 hvp_r(x, v) = -(sum(abs2, x) .* v .+ 2 .* dot(x, v) .* x)
@@ -27,9 +19,6 @@ logp_batch_r(X) = vec(-0.25 .* sum(abs2, X; dims=1) .^ 2)
 gradlogp_batch_r(X) = -X .* sum(abs2, X; dims=1)
 logp_r32(x) = -0.25f0 * sum(abs2, x)^2
 
-#= Standard Gaussian, constant Hessian (H = -I). Only for the end-to-end sampling
-tests, which ask whether the sampler converged to the right posterior; whether
-the HVP is second-order-correct is the quartic target's job. =#
 logp_gauss(x) = -0.5 * sum(abs2, x)
 gradlogp_gauss(x) = -x
 hvp_gauss(x, v) = -v
@@ -37,17 +26,12 @@ hvp_gauss(x, v) = -v
 const D_R = 4
 const CT_R = FlexiChains.FlexiChain{Symbol}
 
-#= The pairing rule lives in `_resolve_hvp` / `_prepare_model`, not in the
-extension, so its dispatch table is checked whether or not Reactant loads.
-None of these calls resolve a gradient or compile anything. =#
 @testset "Reactant does not pair with a DI backend" begin
-    # Both slots Reactant, or a hand-written gradient (`nothing`), are accepted.
     @test ParallelMCMC._check_reactant_pair(AutoReactant(), AutoReactant()) === nothing
     @test ParallelMCMC._check_reactant_pair(nothing, AutoReactant()) === nothing
     @test ParallelMCMC._check_reactant_pair(AutoForwardDiff(), AutoForwardDiff()) ===
         nothing
 
-    # One of each is refused in both directions.
     @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
         AutoReactant(), AutoForwardDiff()
     )
@@ -56,13 +40,7 @@ None of these calls resolve a gradient or compile anything. =#
     )
 end
 
-#= `SecondOrder(AutoReactant(), AutoReactant())`, or `AutoReactant()` paired with
-a `SecondOrder` at all, is a natural thing to try given the pairing table in
-10-getting-started.md, and would otherwise land in `DI.prepare_hvp` several
-frames deep with no Reactant support. A dispatch-table property, so this runs
-whether or not Reactant is loaded. =#
 @testset "AutoReactant cannot appear inside a SecondOrder" begin
-    # Sanity: an ordinary SecondOrder is unaffected.
     @test ParallelMCMC._check_reactant_pair(
         nothing, DI_R.SecondOrder(AutoForwardDiff(), AutoForwardDiff())
     ) === nothing
@@ -73,17 +51,11 @@ whether or not Reactant is loaded. =#
     @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
         AutoForwardDiff(), DI_R.SecondOrder(AutoReactant(), AutoForwardDiff())
     )
-    # (AutoReactant, SecondOrder) exercises the disambiguating method directly.
     @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
         AutoReactant(), DI_R.SecondOrder(AutoReactant(), AutoReactant())
     )
 end
 
-#= A `LogDensityProblemGradient` is a callable, so it clears the
-`grad_backend === nothing` test that otherwise means "hand-written gradient",
-but it is not Reactant-traceable. Checked on the type first, then through a real
-LogDensityProblems model. Neither needs Reactant loaded: the check fires before
-any gradient is resolved or anything compiled. =#
 @testset "a LogDensityProblems gradient cannot pair with an AutoReactant hvp" begin
     @test ParallelMCMC._check_reactant_hvp_source(
         ParallelMCMC.LogDensityProblemGradient(nothing), AutoForwardDiff()
@@ -103,10 +75,6 @@ any gradient is resolved or anything compiled. =#
     @test_throws ArgumentError ParallelMCMC._prepare_model(model, zeros(D_R), 8, nothing)
 end
 
-#= Outside the `reactant_ok` guard below. `_check_reactant_pair` now runs above
-gradient resolution in `_prepare_model`, so a mismatched pair is caught before
-anything is resolved or compiled and no Reactant install is needed. This used to
-pay a full XLA compile per `@test_throws`, ~18s, to demonstrate a config error. =#
 @testset "mixed pairs are refused at preparation" begin
     x = zeros(D_R)
 
@@ -126,25 +94,14 @@ catch err
     false
 end
 
-#= The `_REACTANT_LOAD_HINT` fallbacks (src/DEER/DEER.jl, and
-`_reactant_resolve_gradient` / `_reactant_resolve_gradient_batch` in
-src/interface.jl) can only be asserted in a session without Reactant: once
-`ReactantExt` is loaded its more-specific methods shadow all of them and the
-error can never fire. Hence the one testset here guarded on `!reactant_ok`. =#
+# The extension shadows load-hint fallbacks once Reactant is available.
 if !reactant_ok
     @testset "clear load-hint error without Reactant loaded" begin
-        #= Gradient slot: `_reactant_resolve_gradient`'s fallback. `backend` (the
-        4th arg) is `AutoReactant()` too, as `_check_reactant_pair` requires, so
-        `_prepare_model` gets as far as gradient resolution rather than failing
-        first on the model having no HVP source — a correct failure, but not the
-        one being pinned here. =#
         model_grad = DensityModel(logp_r, AutoReactant(), D_R)
         @test_throws "AutoReactant requires Reactant.jl" ParallelMCMC._prepare_model(
             model_grad, zeros(D_R), 8, AutoReactant()
         )
 
-        # HVP slot over a hand-written gradient: `DEER._make_hvp_fn`'s
-        # `ReactantHVP` fallback, reached via `_hvp_strategy(::AutoReactant)`.
         model_hvp = DensityModel(logp_r, gradlogp_r, D_R; hvp=AutoReactant())
         @test_throws "AutoReactant requires Reactant.jl" ParallelMCMC._prepare_model(
             model_hvp, zeros(D_R), 8, nothing
@@ -157,9 +114,6 @@ if reactant_ok
         @test Base.get_extension(ParallelMCMC, :ReactantExt) !== nothing
     end
 
-    #= The extension does not honour `AutoReactant.mode` (the wrapped
-    `AutoEnzyme`): gradients always trace reverse, HVPs forward-over-that. A
-    non-default mode is rejected rather than ignored. =#
     @testset "a non-default AutoReactant mode is rejected" begin
         bad = AutoReactant(; mode=AutoEnzyme(; mode=Enzyme.Forward))
         model_grad = DensityModel(logp_r, bad, D_R)
@@ -172,7 +126,6 @@ if reactant_ok
             model_hvp, zeros(D_R), 8, nothing
         )
 
-        # The default still works.
         @test DensityModel(logp_r, AutoReactant(), D_R) isa DensityModel
     end
 
@@ -214,11 +167,6 @@ if reactant_ok
             @test m_p.hvp_batch(X, V) ≈ Hv_cols
         end
 
-        #= A hand-written batched gradient with `hvp_batch=AutoReactant()`, the
-        batched analogue of the "forward over user gradient" case above. Routes
-        through
-        `DEER._make_hvp_batch_fn(::ReactantHVP, grad_batch, ::AutoReactant, ...)`,
-        which nothing else here reaches. =#
         @testset "forward over user batched gradient (hvp_batch=AutoReactant())" begin
             T = 8
             X = randn(rng, D_R, T)
@@ -238,9 +186,6 @@ if reactant_ok
             @test m_p.hvp_batch(X, V) ≈ Hv_cols
         end
 
-        #= Edge shapes. Both slots AutoReactant, as in the
-        "forward-over-reverse from logp alone" case above, but at the smallest
-        sizes DEER ever prepares. =#
         @testset "edge shapes" begin
             @testset "D=1" begin
                 x1 = randn(rng, 1)
@@ -270,8 +215,6 @@ if reactant_ok
             end
         end
 
-        #= Float32 on the CPU path. Previously only exercised inside the
-        CuArray-only block below, so it never ran without a functional CUDA. =#
         @testset "Float32 on CPU" begin
             x32 = Float32.(x)
             v32 = Float32.(v)
@@ -288,40 +231,24 @@ if reactant_ok
         end
     end
 
-    #= Pins the "captured data is frozen at preparation time" limitation from
-    ext/ReactantExt.jl's module docstring and docs/src/15-gpu.md: `@compile`
-    bakes a captured plain `Array` in as a compile-time constant, so mutating it
-    afterwards has NO effect on later calls, with no error and no warning. Here
-    so that a future Reactant which does detect this gets noticed. Model code
-    still should not close over mutable data.
-    =#
     @testset "documented caveat: captured data is frozen at preparation time" begin
         data = [1.0, 1.0, 1.0, 1.0]
-        f(x) = -0.5 * sum(abs2, x .- data)   # ∇f(x) = data - x
+        f(x) = -0.5 * sum(abs2, x .- data)
         model = DensityModel(f, AutoReactant(), D_R)
-        # Two-argument `_prepare_model` only resolves `grad_logdensity`, which
-        # is all this test needs (no HVP involved).
         m_p = ParallelMCMC._prepare_model(model, zeros(D_R))
 
         x0 = zeros(D_R)
         g_before = m_p.grad_logdensity(x0)
         @test g_before ≈ [1.0, 1.0, 1.0, 1.0]
 
-        data .= 5.0   # mutate the captured array *after* preparation
+        data .= 5.0
 
         g_after = m_p.grad_logdensity(x0)
-        #= Frozen at the pre-mutation value: NOT [5, 5, 5, 5], which is what a
-        correct re-evaluation against the mutated `data` would give. =#
         @test g_after ≈ [1.0, 1.0, 1.0, 1.0]
     end
 
-    #= `size(chain) == (N,1)` and `all(isfinite, ...)` pass even for a badly
-    wrong HVP: DEER's Newton iteration just fails to converge and `DEER.solve`
-    returns the non-converged trajectory, no NaNs involved. Assert the posterior
-    mean against a target with a known mean instead (the convention in
-    test-GPU-AD-HVP.jl), and cross-check against the same model driven by the
-    analytic HVP on the same noise tape.
-    =#
+    # Finite samples do not establish HVP correctness, so test the posterior and
+    # compare against an analytic HVP on the same noise tape.
     @testset "end-to-end sampling with AutoReactant" begin
         @testset "posterior mean recovery (standard Gaussian, mean 0)" begin
             model = DensityModel(logp_gauss, AutoReactant(), D_R)
@@ -363,14 +290,7 @@ if reactant_ok
     if !reactant_gpu_ok
         @info "Reactant HVP test: CUDA not functional — skipping CuArray boundary"
     else
-        #=
-        The compiled executable lives in Reactant's own (XLA) device memory, so
-        what this checks is the CuArray <-> Reactant marshalling boundary:
-        CuArray in, CuArray out, values matching the analytic HVP. It does NOT
-        establish that the HVP executes on the GPU, which depends on Reactant's
-        default XLA client (see docs/src/15-gpu.md) and is neither controlled
-        nor asserted here.
-        =#
+        # This tests CuArray marshalling, not the XLA execution device.
         @testset "CuArray boundary" begin
             rng = MersenneTwister(73)
             x_h = randn(rng, Float32, D_R)

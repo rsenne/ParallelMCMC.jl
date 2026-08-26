@@ -1,10 +1,7 @@
 using ParallelMCMC
 using Test
 
-#= `Reactant_jll` ships a prebuilt XLA and is a large download, so `Reactant` sits
-in test/Project.toml's `[extras]` and `test-Reactant-HVP.jl` runs only when this
-is set. Add Reactant to the test environment as well; the file's own
-`try ... using Reactant ... catch` skips its testsets if it still won't load. =#
+# Reactant tests are opt-in because Reactant_jll is a large download.
 const _RUN_REACTANT_TESTS =
     lowercase(get(ENV, "PARALLELMCMC_TEST_REACTANT", "false")) in ("1", "true", "yes")
 

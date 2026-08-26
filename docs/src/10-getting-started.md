@@ -31,13 +31,13 @@ model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
 
 ### AD backends in derivative slots
 
-Any of the derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, `hvp_batch`) can be given an `ADTypes.AbstractADType` instead of a callable, in which case that derivative is taken with AD.  A model can therefore be written with nothing but the log-density:
+Derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, and `hvp_batch`) accept callables or `ADTypes.AbstractADType` backends. This is enough to build a model from only its log-density:
 
 ```julia
 model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
 ```
 
-Backends become prepared [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl) callables when sampling starts, and that preparation is reused for the rest of the run.  Hand-written and AD-derived slots mix, so an analytical gradient with `hvp=AutoForwardDiff()` works.
+Hand-written and AD-derived slots can be mixed.
 
 ### What a backend in `hvp` differentiates
 
@@ -47,13 +47,13 @@ Backends become prepared [DifferentiationInterface](https://github.com/JuliaDiff
 | backend | backend | `SecondOrder(hvp, grad_logdensity)` on `logdensity` |
 | either | `SecondOrder(...)` | that pair on `logdensity`, gradient slot unused |
 
-Naming both passes yourself is the one route that ignores the gradient slot, hand-written or not.  It is also the only AD route to an HVP for a Turing or LogDensityProblems model, whose gradient arrives already prepared and cannot be differentiated again.
+An explicit `SecondOrder` bypasses the gradient slot. Use it for an AD-derived HVP on Turing or LogDensityProblems models.
 
-Which pairs work is up to the backends.  On CPU, ForwardDiff, ReverseDiff, Zygote and Enzyme all serve a log-density-only model.  `AutoMooncake` serves neither direction: it has no reverse-over-reverse, and its gradient rejects an outer pass's tangents, so give Mooncake a hand-written `grad_logdensity`.  On GPU no DI-driven second-order pair works yet (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  `AutoReactant()` in both slots is the exception: it skips DI and traces forward-over-reverse straight from the log-density as one compiled XLA program.  See the [GPU page](15-gpu.md).
+See [GPU Execution](15-gpu.md) for backend compatibility.
 
-The batched pair works the same way, on `sum(logdensity_batch(X))`.  That sum's gradient is the stacked per-column gradients only because the columns are independent, so `logdensity_batch` must not couple them.  Omitting `grad_logdensity_batch` derives one when `grad_logdensity` is a backend; with a hand-written gradient the batched path stays off and the unbatched update covers it.  Both batched derivative slots require `logdensity_batch`, which is also useful on its own for scoring a whole trajectory at once.
+The batched pair differentiates `sum(logdensity_batch(X))`, so each output must depend only on the corresponding column of `X`. When `grad_logdensity` is a backend, omitting `grad_logdensity_batch` derives it automatically. Both batched derivative slots require `logdensity_batch`.
 
-`backend` on [`ParallelMALASampler`](@ref) supplies Hessian-vector products for a model that brings no `hvp` / `hvp_batch` of its own, and nothing else, so a model carrying its own can leave it out.
+[`ParallelMALASampler`](@ref)'s `backend` supplies missing HVPs. Omit it when the model supplies them.
 
 ---
 

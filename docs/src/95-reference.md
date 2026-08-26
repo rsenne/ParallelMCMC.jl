@@ -10,10 +10,7 @@ This page documents all public types and functions exported by ParallelMCMC.jl.
 
 Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
 derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
-`backend`. It is not a `DifferentiationInterface` backend like the others.
-[GPU Execution](15-gpu.md) covers what it does, its pairing rules, and its
-caveats, in particular that traced log-densities must be pure with respect
-to any data they capture.
+`backend`. See [GPU Execution](15-gpu.md) for its constraints.
 
 ## Extension constructors
 

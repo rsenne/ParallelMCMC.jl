@@ -201,7 +201,6 @@ abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
 
-# Need separate HVPStrategy for Reactant; DI does not support and so needs separate logic
 struct ReactantHVP <: HVPStrategy end
 
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
@@ -210,20 +209,8 @@ _strategy_from(::DI.HVPMode) = ReverseOnGrad()
 _hvp_strategy(backend::AbstractADType) = _strategy_from(DI.hvp_mode(backend))
 _hvp_strategy(::ADTypes.AutoReactant) = ReactantHVP()
 
-#=
-Hook for backend-specific normalization, applied on every AD-HVP path before the
-backend reaches DI. It fills in only what DEER's own wrapper types need; see
-`ext/EnzymeExt.jl` for the one specialization that exists.
-
-It does not choose a differentiation mode. A mode the user set is a decision, an
-unset one is DI's to resolve from the operator it runs, and substituting one here
-used to rewrite the outer half of a `SecondOrder` out from under `hvp_mode` (see
-`_normalized_second_order`).
-
-Only ever handed a single pass. `_resolve_hvp` sends every `SecondOrder` to
-`_make_hvp_fn_second_order` before the strategy paths below are reached, and
-`_normalized_second_order` picks the outer half itself.
-=#
+# Extensions may add annotations required by DEER's wrappers, but must not
+# choose a differentiation mode.
 _normalized_backend(backend::AbstractADType) = backend
 
 function _prepare_hvp_via_grad_reverse(
@@ -294,7 +281,7 @@ function _make_hvp_batch_fn(
     return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
 end
 
-# Fallbacks in case a user forgets `using Reactant`
+# ReactantExt supplies more-specific methods when loaded.
 function _make_hvp_fn(
     ::ReactantHVP, gradlogp, backend::AbstractADType, x_template::AbstractVector
 )
@@ -319,23 +306,8 @@ function _make_hvp_batch_fn_second_order(
     return error(_REACTANT_LOAD_HINT)
 end
 
-#=
----------------------------------------------------------------------------
-Second-order HVP, for a model whose gradient is itself AD-derived. `DI.hvp`
-takes both passes over the log-density, so the gradient slot is never touched.
-The alternative — pushing tangents through the prepared DI gradient — drops out
-of that preparation the moment the outer pass hands it an unexpected tangent
-type.
-
-Both halves reach `DI.hvp` as the user composed them. Normalization touches the
-outer one, and only to fill in annotations, so `DI.hvp_mode` of the pair reads
-the same before and after; the inner half is a first-order gradient over the
-user's own `logdensity` and goes through untouched.
-
-The batched form differentiates `sum(logdensity_batch(X))`. Column independence
-makes that Hessian block-diagonal, so its HVP along `V` is the columnwise HVP.
----------------------------------------------------------------------------
-=#
+# DI.hvp differentiates the log-density twice; it does not differentiate the
+# prepared gradient. Only the outer backend receives DEER-specific annotations.
 function _normalized_second_order(backend::DI.SecondOrder)
     return DI.SecondOrder(_normalized_backend(DI.outer(backend)), DI.inner(backend))
 end

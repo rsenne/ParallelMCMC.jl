@@ -133,15 +133,7 @@ end
 end
 
 @testset "DynamicPPLExt: SecondOrder hvp on a Turing model" begin
-    #= The gradient slot of a Turing model is DynamicPPL's own AD-prepared
-    gradient, whose preparation rejects the tangents an outer pass would push
-    through it, so a plain backend in `hvp` cannot differentiate it. A
-    `SecondOrder` differentiates the log-density instead, bypassing that gradient,
-    which is what makes an AD HVP reachable for a Turing model at all.
-
-    normal_model(y) in unconstrained space is
-      logp(μ) = logpdf(Normal(0,1), μ) + logpdf(Normal(μ, 0.5), y),
-    so H = -1 - 1/0.5^2 = -5 and Hv = -5v. =#
+    # For this model, H = -1 - 1/0.5^2 = -5.
     so = ParallelMCMC.DI.SecondOrder(ADTypes.AutoForwardDiff(), ADTypes.AutoForwardDiff())
     model = DensityModel(
         normal_model(TRUE_OBS); ad_backend=ADTypes.AutoForwardDiff(), hvp=so
@@ -150,7 +142,6 @@ end
 
     prepped = ParallelMCMC._prepare_model(model, [0.0], 8, nothing)
     @test prepped.hvp([0.0], [1.0]) ≈ [-5.0]
-    # the model brought its own HVP, so no sampler backend is needed
     chain = sample(
         MersenneTwister(12),
         model,
@@ -161,10 +152,6 @@ end
     )
     @test all(isfinite, vec(chain[@varname(μ)]))
 
-    #= Preparing a plain backend succeeds, since DI only builds the pushforward
-    against the Float64 template. The first call is what fails, pushing tangents
-    into DynamicPPL's prepared gradient. Pinned so that if DynamicPPL ever lifts
-    this, the `SecondOrder`-only advice in the extension docstring is revisited. =#
     model_plain = DensityModel(
         normal_model(TRUE_OBS);
         ad_backend=ADTypes.AutoForwardDiff(),
@@ -175,10 +162,6 @@ end
 end
 
 @testset "DynamicPPLExt: batched slots reach the batched DEER path" begin
-    #= DynamicPPL supplies no batched log-density, so the batched slots are the
-    only way a Turing model reaches the batched update. Written out by hand for
-    normal_model, including the normalizing constants so that the log-densities
-    reported for a trajectory agree with `model.logdensity`. =#
     σ = 0.5
     logp_b(X) =
         vec(-0.5 .* X .^ 2 .- 0.5 .* ((TRUE_OBS .- X) ./ σ) .^ 2 .- log(2π) .- log(σ))
@@ -198,7 +181,6 @@ end
     @test model.grad_logdensity_batch === grad_b
     @test model.hvp_batch === hvp_b
 
-    # the hand-written batched log-density agrees with the model's own, column by column
     X = reshape([-0.5, 0.0, 0.7, 1.4], 1, 4)
     @test logp_b(X) ≈ [model.logdensity(X[:, t]) for t in 1:size(X, 2)]
 
