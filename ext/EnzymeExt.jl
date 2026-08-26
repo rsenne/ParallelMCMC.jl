@@ -23,14 +23,19 @@ using Enzyme.EnzymeCore.EnzymeRules:
 Normalization of the user's `AutoEnzyme` for DEER's AD-HVP paths: fill in
 `function_annotation=Enzyme.Const` when they left it open, so Enzyme doesn't
 throw `EnzymeMutabilityException` on the read-only `_HvpReverseClosure` /
-`_BatchHvpReverseClosure` wrappers that capture `gradlogp`.
+`_BatchHvpReverseClosure` wrappers, which capture `gradlogp`. Those wrapper types
+belong to this package, so declaring them constant is this package's business.
 
-`mode` passes through exactly as given, unset included. An earlier version pinned
-`mode=Enzyme.Forward` here, with `set_runtime_activity`, against the GPU
-gc-transition abort and the `EnzymeRuntimeActivityError` on composed
-`pmcmc_matmul` calls. The rules below keep Enzyme off both paths by themselves,
-so the pin bought nothing and cost correctness: it rewrote the direction of a
-`SecondOrder`'s outer half (see `DEER._normalized_backend`).
+`mode` is passed through exactly as given, unset included. Choosing a direction
+on the user's behalf is not our call: a mode they set is a decision, and an unset
+one is DI's to resolve from the operator it runs.
+
+An earlier version pinned `mode=Enzyme.Forward` here (with
+`set_runtime_activity`) against the gc-transition abort on GPU and
+`EnzymeRuntimeActivityError` on composed `pmcmc_matmul` calls. The rules below
+keep Enzyme off both paths on their own, so the pin bought nothing and cost
+correctness: it silently rewrote the direction of a `SecondOrder`'s outer half
+(see `DEER._normalized_backend`).
 =#
 function DEER._normalized_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}
     A === Nothing || return backend

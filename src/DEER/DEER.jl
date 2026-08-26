@@ -177,14 +177,16 @@ end
 (c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
 
 #=
-Pick the AD-HVP fallback strategy from the user's backend. Both are one AD pass
-over a hand-written `gradlogp`; an AD-derived gradient goes to
-`_make_hvp_fn_second_order` instead.
+Pick the AD-HVP fallback strategy from the user's backend. These two apply when
+the HVP is one AD pass over a gradient we already have, i.e., a hand-written
+`gradlogp`, which neither of them differentiates twice:
 
   ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
                       `pmcmc_matmul` frule.
   ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
                       through the matmul and dot/sum rrules.
+
+An AD-derived gradient takes neither and goes to `_make_hvp_fn_second_order`.
 
 These are singleton types rather than symbols so the choice dispatches
 statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
@@ -211,18 +213,26 @@ _hvp_strategy(backend::AbstractADType) = _strategy_from(DI.hvp_mode(backend))
 _hvp_strategy(::ADTypes.AutoReactant) = ReactantHVP()
 
 #=
-Hook for backend-specific normalization, applied on every AD-HVP path before the
-backend reaches DI. It fills in only what DEER's own wrapper types need; see
-`ext/EnzymeExt.jl` for the one specialization that exists.
+Hook for backend-specific normalization of the user's `backend`, applied on every
+AD-HVP path before the backend reaches DI.
 
-It does not choose a differentiation mode. A mode the user set is a decision, an
-unset one is DI's to resolve from the operator it runs, and substituting one here
-used to rewrite the outer half of a `SecondOrder` out from under `hvp_mode` (see
-`_normalized_second_order`).
+It supplies what the wrappers DEER differentiates need, and nothing else. Those
+wrapper types are ours, so annotating them is ours to do: EnzymeExt specializes
+this to fill `function_annotation=Enzyme.Const`, without which Enzyme throws
+`EnzymeMutabilityException` on the read-only `_HvpReverseClosure` /
+`_BatchHvpReverseClosure`, which capture `gradlogp`.
 
-Only ever handed a single pass. `_resolve_hvp` sends every `SecondOrder` to
-`_make_hvp_fn_second_order` before the strategy paths below are reached, and
-`_normalized_second_order` picks the outer half itself.
+It deliberately does not choose a differentiation mode. Which direction a pass
+runs is the user's call when they state one and DI's to resolve from the operator
+when they don't; this package is not an AD package and has no business overriding
+either. Picking one here also used to corrupt a `SecondOrder`, whose halves carry
+directions of their own (see `_normalized_second_order`).
+
+Callers hand this a single pass, never a `SecondOrder`: the strategy paths below
+run one AD pass over a hand-written `gradlogp`, and `_resolve_hvp` sends every
+`SecondOrder` to `_make_hvp_fn_second_order` before they are reached.
+`_normalized_second_order` is the one caller that starts from a pair, and it
+selects the outer half itself.
 =#
 _normalized_backend(backend::AbstractADType) = backend
 
@@ -322,18 +332,20 @@ end
 #=
 ---------------------------------------------------------------------------
 Second-order HVP, for a model whose gradient is itself AD-derived. `DI.hvp`
-takes both passes over the log-density, so the gradient slot is never touched.
-The alternative — pushing tangents through the prepared DI gradient — drops out
-of that preparation the moment the outer pass hands it an unexpected tangent
-type.
+takes both passes over the log-density, so these never touch the gradient slot.
+Preferred over pushing tangents through a prepared DI gradient, which drops out
+of its preparation once the outer pass hands it an unexpected tangent type.
 
-Both halves reach `DI.hvp` as the user composed them. Normalization touches the
-outer one, and only to fill in annotations, so `DI.hvp_mode` of the pair reads
-the same before and after; the inner half is a first-order gradient over the
-user's own `logdensity` and goes through untouched.
+Both halves are passed to `DI.hvp` as the user composed them, so the direction
+each one runs in is theirs and DI's, not ours. Normalization touches only the
+outer half, and only to fill in annotations for the wrappers being
+differentiated; because it never substitutes a mode, `DI.hvp_mode` of the pair is
+the same before and after. The inner half is a plain first-order gradient over
+the user's own `logdensity` and is passed straight through.
 
-The batched form differentiates `sum(logdensity_batch(X))`. Column independence
-makes that Hessian block-diagonal, so its HVP along `V` is the columnwise HVP.
+The batched form differentiates `sum(logdensity_batch(X))`, whose Hessian is
+block-diagonal by column independence, so its HVP along `V` is the columnwise
+HVP. Same argument the batched gradient rests on.
 ---------------------------------------------------------------------------
 =#
 function _normalized_second_order(backend::DI.SecondOrder)
