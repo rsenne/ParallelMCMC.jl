@@ -93,7 +93,7 @@ function _prepare_hvp(f, backend::AbstractADType, x_template::AbstractVector)
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
     return DI.prepare_pushforward(
-        f, _hvp_forward_backend(backend), x_template, (v_template,)
+        f, _normalized_backend(backend), x_template, (v_template,)
     )
 end
 
@@ -116,14 +116,14 @@ function _hvp_prepared(
 )
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    res = DI.pushforward(f, prep, _hvp_forward_backend(backend), x_exec, (v_exec,))
+    res = DI.pushforward(f, prep, _normalized_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
 function _hvp_nopre(f, backend::AbstractADType, x::AbstractVector, v::AbstractVector)
     x_exec = _materialize_ad_vector(x)
     v_exec = _tangent_like(x_exec, v)
-    res = DI.pushforward(f, _hvp_forward_backend(backend), x_exec, (v_exec,))
+    res = DI.pushforward(f, _normalized_backend(backend), x_exec, (v_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -133,7 +133,7 @@ function _prepare_batch_hvp_from_grad(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     return DI.prepare_pushforward(
-        grad_batch, _hvp_forward_backend(backend), X_template, (V_template,)
+        grad_batch, _normalized_backend(backend), X_template, (V_template,)
     )
 end
 
@@ -142,7 +142,7 @@ function _batch_hvp_from_grad_prepared(
 )
     X_exec = _materialize_ad_matrix(X)
     V_exec = _tangent_like(X_exec, V)
-    res = DI.pushforward(grad_batch, prep, _hvp_forward_backend(backend), X_exec, (V_exec,))
+    res = DI.pushforward(grad_batch, prep, _normalized_backend(backend), X_exec, (V_exec,))
     return res isa Tuple ? first(res) : res
 end
 
@@ -196,9 +196,8 @@ relying on constant propagation through `===`.
 The routing follows DI's `hvp_mode`: a forward outer pass
 (`DI.ForwardOverAnything`) takes `ForwardOnGrad`, anything else
 `ReverseOnGrad`. Only the outer direction matters since we differentiate
-the already-built `gradlogp`. Plain `AutoEnzyme()` lands on `ForwardOnGrad`,
-which we need: Enzyme reverse hits the gc-transition abort on GPU (see
-`ext/EnzymeExt.jl`).
+the already-built `gradlogp`. The mode is whatever the user's backend carries;
+nothing here substitutes one (see `_normalized_backend`).
 =#
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
@@ -207,38 +206,31 @@ struct ReverseOnGrad <: HVPStrategy end
 _strategy_from(::DI.ForwardOverAnything) = ForwardOnGrad()
 _strategy_from(::DI.HVPMode) = ReverseOnGrad()
 
-function _hvp_strategy(backend::Union{AbstractADType,DI.SecondOrder})
-    return _strategy_from(DI.hvp_mode(backend))
-end
+_hvp_strategy(backend::AbstractADType) = _strategy_from(DI.hvp_mode(backend))
 
 #=
-Hooks for backend-specific normalization of the user's `backend`.
+Hook for backend-specific normalization of the user's `backend`, applied on every
+AD-HVP path before the backend reaches DI.
 
-`_hvp_forward_backend` is for the forward-on-grad pushforward path
-(differentiates the user's `gradlogp` directly). EnzymeExt specializes it
-to pin `mode=Enzyme.Forward` and `function_annotation=Enzyme.Const` when
-the user passed plain `AutoEnzyme()`, without pinning Forward, DI lowers
-through reverse mode and hits the gc-transition abort on GPU (see
-`ext/EnzymeExt.jl`).
+It supplies what the wrappers DEER differentiates need, and nothing else. Those
+wrapper types are ours, so annotating them is ours to do: EnzymeExt specializes
+this to fill `function_annotation=Enzyme.Const`, without which Enzyme throws
+`EnzymeMutabilityException` on the read-only `_HvpReverseClosure` /
+`_BatchHvpReverseClosure`, which capture `gradlogp`.
 
-`_hvp_closure_backend` is for the reverse-on-grad gradient path on the
-read-only `_HvpReverseClosure` / `_BatchHvpReverseClosure` wrappers.
-EnzymeExt specializes it to set `function_annotation=Enzyme.Const` so
-Enzyme doesn't throw `EnzymeMutabilityException` on a closure that captures
-`gradlogp`.
+It deliberately does not choose a differentiation mode. Which direction a pass
+runs is the user's call when they state one and DI's to resolve from the operator
+when they don't; this package is not an AD package and has no business overriding
+either. Picking one here also used to corrupt a `SecondOrder`, whose halves carry
+directions of their own (see `_normalized_second_order`).
 
-A `SecondOrder` is unwrapped to its outer half first, since the pass we are
-about to run is the outer one i.e., the inner derivative is whatever
-`gradlogp` already is. That keeps the half `_hvp_strategy` routed on, so the
-strategy and the backend that carries it out can't end up disagreeing. The
-unwrapping recurses rather than calling `DI.outer` in the generic method, so
-that a wrapped backend still reaches its own normalization: dispatch happens
-on what comes out of `DI.outer`, not on the `SecondOrder` around it.
+Callers hand this a single pass, never a `SecondOrder`: the strategy paths below
+run one AD pass over a hand-written `gradlogp`, and `_resolve_hvp` sends every
+`SecondOrder` to `_make_hvp_fn_second_order` before they are reached.
+`_normalized_second_order` is the one caller that starts from a pair, and it
+selects the outer half itself.
 =#
-_hvp_forward_backend(backend::DI.SecondOrder) = _hvp_forward_backend(DI.outer(backend))
-_hvp_closure_backend(backend::DI.SecondOrder) = _hvp_closure_backend(DI.outer(backend))
-_hvp_forward_backend(backend::AbstractADType) = backend
-_hvp_closure_backend(backend::AbstractADType) = backend
+_normalized_backend(backend::AbstractADType) = backend
 
 function _prepare_hvp_via_grad_reverse(
     gradlogp, backend::AbstractADType, x_template::AbstractVector
@@ -246,7 +238,7 @@ function _prepare_hvp_via_grad_reverse(
     v_template = similar(x_template)
     fill!(v_template, zero(eltype(x_template)))
     f = _HvpReverseClosure(gradlogp)
-    eff_backend = _hvp_closure_backend(backend)
+    eff_backend = _normalized_backend(backend)
     prep = DI.prepare_gradient(f, eff_backend, x_template, DI.Constant(v_template))
     return (f, prep, eff_backend)
 end
@@ -262,7 +254,7 @@ function _prepare_batch_hvp_via_grad_reverse(
     V_template = similar(X_template)
     fill!(V_template, zero(eltype(X_template)))
     f = _BatchHvpReverseClosure(grad_batch)
-    eff_backend = _hvp_closure_backend(backend)
+    eff_backend = _normalized_backend(backend)
     prep = DI.prepare_gradient(f, eff_backend, X_template, DI.Constant(V_template))
     return (f, prep, eff_backend)
 end
@@ -315,8 +307,12 @@ takes both passes over the log-density, so these never touch the gradient slot.
 Preferred over pushing tangents through a prepared DI gradient, which drops out
 of its preparation once the outer pass hands it an unexpected tangent type.
 
-Only the outer half is normalized: `_hvp_forward_backend` selects it out of the
-pair. The inner is a plain first-order gradient and needs no pinning.
+Both halves are passed to `DI.hvp` as the user composed them, so the direction
+each one runs in is theirs and DI's, not ours. Normalization touches only the
+outer half, and only to fill in annotations for the wrappers being
+differentiated; because it never substitutes a mode, `DI.hvp_mode` of the pair is
+the same before and after. The inner half is a plain first-order gradient over
+the user's own `logdensity` and is passed straight through.
 
 The batched form differentiates `sum(logdensity_batch(X))`, whose Hessian is
 block-diagonal by column independence, so its HVP along `V` is the columnwise
@@ -324,7 +320,7 @@ HVP. Same argument the batched gradient rests on.
 ---------------------------------------------------------------------------
 =#
 function _normalized_second_order(backend::DI.SecondOrder)
-    return DI.SecondOrder(_hvp_forward_backend(backend), DI.inner(backend))
+    return DI.SecondOrder(_normalized_backend(DI.outer(backend)), DI.inner(backend))
 end
 
 function _make_hvp_fn_second_order(
