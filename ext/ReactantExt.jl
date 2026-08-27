@@ -8,7 +8,6 @@ using ParallelMCMC.DEER: DEER
 using ADTypes: ADTypes, AutoReactant, AutoEnzyme
 using Reactant: Reactant, @compile
 using Enzyme: Enzyme
-using CUDA: CUDA
 
 _check_reactant_mode(::AutoReactant{AutoEnzyme{Nothing,Nothing}}) = nothing
 function _check_reactant_mode(backend::AutoReactant)
@@ -20,16 +19,11 @@ function _check_reactant_mode(backend::AutoReactant)
 end
 
 function _reactant_client_platform()
-    return try
-        string(Reactant.XLA.platform_name(Reactant.XLA.default_backend()))
-    catch
-        nothing
-    end
+    return string(Reactant.XLA.platform_name(Reactant.XLA.default_backend()))
 end
 
-_warn_reactant_host_roundtrip(::AbstractArray) = nothing
-function _warn_reactant_host_roundtrip(x::CUDA.CuArray)
-    if _reactant_client_platform() == "cpu"
+function _warn_reactant_host_roundtrip(x::AbstractArray)
+    if ParallelMCMC.needs_host_staging(x) && _reactant_client_platform() == "cpu"
         @warn "AutoReactant: preparing on a $(typeof(x)), but Reactant's default XLA " *
             "client targets \"cpu\". Every call will round-trip to the host and back " *
             "instead of running where the array lives. Select a GPU client with " *
@@ -72,6 +66,13 @@ function _jvp(g, x, v)
     return only(Enzyme.autodiff(Enzyme.Forward, Enzyme.Const(g), Enzyme.Duplicated(x, v)))
 end
 
+#= `Base.Fix1` only accepts trailing arguments on 1.12+; this is the same partial
+application, spelled for the 1.10 compat floor. =#
+struct JVPWith{G}
+    g::G
+end
+(c::JVPWith)(x, v) = _jvp(c.g, x, v)
+
 _rev_gradient(f, x) = Enzyme.gradient(Enzyme.Reverse, Enzyme.Const(f), x)[1]
 
 function ParallelMCMC._reactant_resolve_gradient(
@@ -96,7 +97,7 @@ function DEER._make_hvp_fn_second_order(
 )
     _check_reactant_mode(backend)
     inner = Base.Fix1(_rev_gradient, logdensity)
-    core(x, v) = _jvp(inner, x, v)
+    core = JVPWith(inner)
     return _compiled(core, x_template, x_template)
 end
 
@@ -104,7 +105,7 @@ function DEER._make_hvp_fn(
     ::DEER.ReactantHVP, gradlogp, backend::AutoReactant, x_template::AbstractVector
 )
     _check_reactant_mode(backend)
-    core(x, v) = _jvp(gradlogp, x, v)
+    core = JVPWith(gradlogp)
     return _compiled(core, x_template, x_template)
 end
 
@@ -113,7 +114,7 @@ function DEER._make_hvp_batch_fn_second_order(
 )
     _check_reactant_mode(backend)
     inner = Base.Fix1(_rev_gradient, logdensity_batch_sum)
-    core(X, V) = _jvp(inner, X, V)
+    core = JVPWith(inner)
     return _compiled(core, X_template, X_template)
 end
 
@@ -121,7 +122,7 @@ function DEER._make_hvp_batch_fn(
     ::DEER.ReactantHVP, grad_batch, backend::AutoReactant, X_template::AbstractMatrix
 )
     _check_reactant_mode(backend)
-    core(X, V) = _jvp(grad_batch, X, V)
+    core = JVPWith(grad_batch)
     return _compiled(core, X_template, X_template)
 end
 

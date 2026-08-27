@@ -18,15 +18,25 @@ stable function identities for backend-specific AD rules in `ext/EnzymeExt.jl`
 without committing type piracy on `Base.*` / `Base.dot` / `Base.sum`. User
 model code that wants those rules to fire (notably on GPU) should call these
 instead. See `ext/EnzymeExt.jl` for the gc-transition abort they work around.
-
-Why both a matmul and reductions: the GPU AD-HVP reverse path runs Enzyme
-through `gradlogp` *and* through a scalar reduction wrapping it (see DEER's
-`_HvpReverseClosure`). The reduction is what emits the `cuMemcpyDtoHAsync_v2`
-that aborts Enzyme; owning both keeps each opaque to Enzyme's reverse rewriter.
 =#
 pmcmc_matmul(A::AbstractVecOrMat, B::AbstractVecOrMat) = A * B
 pmcmc_dot(a::AbstractVector, b::AbstractVector) = dot(a, b)
 pmcmc_dotsum(A::AbstractVecOrMat, B::AbstractVecOrMat) = sum(A .* B)
+
+"""
+    needs_host_staging(x::AbstractArray) -> Bool
+
+Whether `x` has to be filled on the host and copied over, rather than written
+element by element in place. `false` for anything with cheap scalar indexing,
+which is the default.
+
+`ReactantExt` also reads it as "this array lives on a device", to warn when the
+XLA client is on the host while the parameters are not.
+"""
+needs_host_staging(::AbstractArray) = false
+
+# TODO: Move this to a CUDA extension see #68
+needs_host_staging(::CUDA.CuArray) = true
 
 #= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
 and `interface.jl`'s gradient hooks report it. =#
