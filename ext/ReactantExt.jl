@@ -38,6 +38,9 @@ _host(x::AbstractArray) = Array(x)
 # Preserve promotions performed by the compiled function.
 function _from_host(template::AbstractArray, out)
     out_h = Array(out)
+    if out_h isa Array && template isa Array && eltype(out_h) === eltype(template)
+        return out_h
+    end
     res = similar(template, eltype(out_h), size(out_h))
     copyto!(res, out_h)
     return res
