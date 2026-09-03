@@ -1,7 +1,11 @@
 using ParallelMCMC
 using Test
 
-# Reactant tests are opt-in because Reactant_jll is a large download.
+#= Reactant tests are opt-in because Reactant_jll is a large download. Opting in
+also requires Reactant in the test environment: it is only an [extra] in
+test/Project.toml, which Pkg.test does not install. The Reactant-free checks of
+the AutoReactant validation logic run unconditionally
+(test-Reactant-Validation.jl). =#
 const _RUN_REACTANT_TESTS =
     lowercase(get(ENV, "PARALLELMCMC_TEST_REACTANT", "false")) in ("1", "true", "yes")
 

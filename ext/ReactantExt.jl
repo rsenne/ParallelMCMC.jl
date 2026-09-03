@@ -35,33 +35,60 @@ end
 _host(x::Array) = x
 _host(x::AbstractArray) = Array(x)
 
-# Preserve promotions performed by the compiled function.
+# Preserve promotions performed by the compiled function. The result is a fresh
+# array every call: callers keep gradients (tapes, workspaces), so it must not
+# alias a reused buffer.
 function _from_host(template::AbstractArray, out)
     out_h = Array(out)
-    if out_h isa Array && template isa Array && eltype(out_h) === eltype(template)
-        return out_h
-    end
+    template isa Array && eltype(out_h) === eltype(template) && return out_h
     res = similar(template, eltype(out_h), size(out_h))
     copyto!(res, out_h)
     return res
 end
 
+#=
+Input staging. The thunk `@compile` returns is fixed to the template's shape
+and type, so the device buffers made for compilation are reused as the input
+buffers of every call.
+=#
+struct _Stage{H<:Array,R}
+    host::H
+    dev::R
+end
+
+# Always a private copy: the host buffer is written to on device inputs, so it
+# must never alias the caller's template.
+function _Stage(t::AbstractArray)
+    h = Array(t)
+    return _Stage(h, Reactant.to_rarray(h))
+end
+
+function _upload!(s::_Stage, x::AbstractArray)
+    size(x) == size(s.host) || throw(
+        DimensionMismatch(
+            "AutoReactant: compiled for size $(size(s.host)), got $(size(x))"
+        ),
+    )
+    copyto!(s.dev, _stage_host!(s.host, x))
+    return s.dev
+end
+
+_stage_host!(::Array, x::Array) = x
+_stage_host!(h::Array, x::AbstractArray) = copyto!(h, x)
+
 function _compiled(core, t1::AbstractArray)
     _warn_reactant_host_roundtrip(t1)
-    r1 = Reactant.to_rarray(_host(t1))
-    compiled = @compile core(r1)
-    return x -> _from_host(x, compiled(Reactant.to_rarray(_host(x))))
+    s1 = _Stage(t1)
+    compiled = @compile donated_args = :none core(s1.dev)
+    return x -> _from_host(x, compiled(_upload!(s1, x)))
 end
 
 function _compiled(core, t1::AbstractArray, t2::AbstractArray)
     _warn_reactant_host_roundtrip(t1)
-    r1 = Reactant.to_rarray(_host(t1))
-    r2 = Reactant.to_rarray(_host(t2))
-    compiled = @compile core(r1, r2)
-    return function (x, v)
-        out = compiled(Reactant.to_rarray(_host(x)), Reactant.to_rarray(_host(v)))
-        return _from_host(x, out)
-    end
+    s1 = _Stage(t1)
+    s2 = _Stage(t2)
+    compiled = @compile donated_args = :none core(s1.dev, s2.dev)
+    return (x, v) -> _from_host(x, compiled(_upload!(s1, x), _upload!(s2, v)))
 end
 
 # For g = gradlogp, this JVP is the HVP. The callable and its captures are constant.

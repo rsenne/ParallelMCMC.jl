@@ -6,10 +6,6 @@ using FlexiChains
 
 using ParallelMCMC
 using ADTypes
-using ForwardDiff: ForwardDiff
-using LogDensityProblems: LogDensityProblems
-
-const DI_R = ParallelMCMC.DEER.DI
 
 # A quartic target exposes missing second-order terms that a Gaussian would hide.
 logp_r(x) = -0.25 * sum(abs2, x)^2
@@ -26,90 +22,12 @@ hvp_gauss(x, v) = -v
 const D_R = 4
 const CT_R = FlexiChains.FlexiChain{Symbol}
 
-@testset "Reactant does not pair with a DI backend" begin
-    @test ParallelMCMC._check_reactant_pair(AutoReactant(), AutoReactant()) === nothing
-    @test ParallelMCMC._check_reactant_pair(nothing, AutoReactant()) === nothing
-    @test ParallelMCMC._check_reactant_pair(AutoForwardDiff(), AutoForwardDiff()) ===
-        nothing
+# This file only runs when PARALLELMCMC_TEST_REACTANT opts in (see runtests.jl)
 
-    @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
-        AutoReactant(), AutoForwardDiff()
-    )
-    @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
-        AutoForwardDiff(), AutoReactant()
-    )
-end
+using Reactant: Reactant
+using Enzyme: Enzyme
 
-@testset "AutoReactant cannot appear inside a SecondOrder" begin
-    @test ParallelMCMC._check_reactant_pair(
-        nothing, DI_R.SecondOrder(AutoForwardDiff(), AutoForwardDiff())
-    ) === nothing
-
-    @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
-        nothing, DI_R.SecondOrder(AutoReactant(), AutoReactant())
-    )
-    @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
-        AutoForwardDiff(), DI_R.SecondOrder(AutoReactant(), AutoForwardDiff())
-    )
-    @test_throws ArgumentError ParallelMCMC._check_reactant_pair(
-        AutoReactant(), DI_R.SecondOrder(AutoReactant(), AutoReactant())
-    )
-end
-
-@testset "a LogDensityProblems gradient cannot pair with an AutoReactant hvp" begin
-    @test ParallelMCMC._check_reactant_hvp_source(
-        ParallelMCMC.LogDensityProblemGradient(nothing), AutoForwardDiff()
-    ) === nothing
-    @test_throws ArgumentError ParallelMCMC._check_reactant_hvp_source(
-        ParallelMCMC.LogDensityProblemGradient(nothing), AutoReactant()
-    )
-
-    struct _FakeLD end
-    LogDensityProblems.capabilities(::_FakeLD) = LogDensityProblems.LogDensityOrder{1}()
-    LogDensityProblems.dimension(::_FakeLD) = D_R
-    function LogDensityProblems.logdensity_and_gradient(::_FakeLD, x)
-        return logp_r(x), gradlogp_r(x)
-    end
-
-    model = DensityModel(_FakeLD(); hvp=AutoReactant())
-    @test_throws ArgumentError ParallelMCMC._prepare_model(model, zeros(D_R), 8, nothing)
-end
-
-@testset "mixed pairs are refused at preparation" begin
-    x = zeros(D_R)
-
-    reactant_grad = DensityModel(logp_r, AutoReactant(), D_R; hvp=AutoForwardDiff())
-    @test_throws ArgumentError ParallelMCMC._prepare_model(reactant_grad, x, 8, nothing)
-
-    reactant_hvp = DensityModel(logp_r, AutoForwardDiff(), D_R; hvp=AutoReactant())
-    @test_throws ArgumentError ParallelMCMC._prepare_model(reactant_hvp, x, 8, nothing)
-end
-
-reactant_ok = try
-    using Reactant: Reactant
-    using Enzyme: Enzyme
-    true
-catch err
-    @warn "Reactant not available — skipping Reactant HVP tests" err
-    false
-end
-
-# The extension shadows load-hint fallbacks once Reactant is available.
-if !reactant_ok
-    @testset "clear load-hint error without Reactant loaded" begin
-        model_grad = DensityModel(logp_r, AutoReactant(), D_R)
-        @test_throws "AutoReactant requires Reactant.jl" ParallelMCMC._prepare_model(
-            model_grad, zeros(D_R), 8, AutoReactant()
-        )
-
-        model_hvp = DensityModel(logp_r, gradlogp_r, D_R; hvp=AutoReactant())
-        @test_throws "AutoReactant requires Reactant.jl" ParallelMCMC._prepare_model(
-            model_hvp, zeros(D_R), 8, nothing
-        )
-    end
-end
-
-if reactant_ok
+@testset "Reactant HVP" begin
     @testset "extension is loaded" begin
         @test Base.get_extension(ParallelMCMC, :ReactantExt) !== nothing
     end
