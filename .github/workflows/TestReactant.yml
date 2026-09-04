@@ -1,0 +1,65 @@
+name: Test Reactant
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "ext/ReactantExt.jl"
+      - "test/test-Reactant-*.jl"
+      - "Project.toml"
+      - "test/Project.toml"
+      - ".github/workflows/TestReactant.yml"
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  reactant:
+    name: Reactant HVP - Julia 1 - ubuntu-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PARALLELMCMC_TEST_REACTANT: "true"
+      JULIA_NUM_PRECOMPILE_TASKS: "2"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1"
+          arch: x64
+
+      # Caches Reactant_jll alongside the compiled packages between runs.
+      - name: Use Julia cache
+        uses: julia-actions/cache@v3
+
+      - name: Instantiate test environment with Reactant
+        run: |
+          julia --project=test -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.add("Reactant")
+            Pkg.instantiate()
+            Pkg.status()
+          '
+
+      - name: Run Reactant tests
+        run: |
+          julia --project=test -e '
+            using Test
+            @testset verbose=true "Reactant" begin
+                include("test/test-Reactant-Validation.jl")
+                include("test/test-Reactant-HVP.jl")
+            end
+          '

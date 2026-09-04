@@ -249,7 +249,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 !!! warning "Reactant constraints"
     **Captured arrays are frozen at compile time.** Mutating them after preparation does not change the compiled derivative. Pass mutable data as an argument.
 
-    **Reactant chooses the execution device independently of the input array.** With Reactant's CPU client, `CuArray` inputs round-trip through the host. `_prepare_model` warns in this case. Select a GPU client with `Reactant.set_default_backend` when available.
+    **Reactant chooses the execution device independently of the input array.** With Reactant's CPU client, `CuArray` inputs round-trip through the host. The sampler warns about this when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
 
 - The log-density must be Reactant-traceable. DynamicPPL-built log-densities are not.
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
