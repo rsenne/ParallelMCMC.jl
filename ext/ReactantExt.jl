@@ -47,48 +47,22 @@ function _from_host(template::AbstractArray, out)
 end
 
 #=
-Input staging. The thunk `@compile` returns is fixed to the template's shape
-and type, so the device buffers made for compilation are reused as the input
-buffers of every call.
+Reactant's `copyto!(::ConcreteRArray, ::Array)` uploads to a new buffer and
+then runs a compiled device-to-device copy into the destination, which is
+strictly more work than the upload alone.
 =#
-struct _Stage{H<:Array,R}
-    host::H
-    dev::R
-end
-
-# Always a private copy: the host buffer is written to on device inputs, so it
-# must never alias the caller's template.
-function _Stage(t::AbstractArray)
-    h = Array(t)
-    return _Stage(h, Reactant.to_rarray(h))
-end
-
-function _upload!(s::_Stage, x::AbstractArray)
-    size(x) == size(s.host) || throw(
-        DimensionMismatch(
-            "AutoReactant: compiled for size $(size(s.host)), got $(size(x))"
-        ),
-    )
-    copyto!(s.dev, _stage_host!(s.host, x))
-    return s.dev
-end
-
-_stage_host!(::Array, x::Array) = x
-_stage_host!(h::Array, x::AbstractArray) = copyto!(h, x)
+_upload(x::AbstractArray) = Reactant.to_rarray(_host(x))
 
 function _compiled(core, t1::AbstractArray)
     _warn_reactant_host_roundtrip(t1)
-    s1 = _Stage(t1)
-    compiled = @compile donated_args = :none core(s1.dev)
-    return x -> _from_host(x, compiled(_upload!(s1, x)))
+    compiled = @compile core(_upload(t1))
+    return x -> _from_host(x, compiled(_upload(x)))
 end
 
 function _compiled(core, t1::AbstractArray, t2::AbstractArray)
     _warn_reactant_host_roundtrip(t1)
-    s1 = _Stage(t1)
-    s2 = _Stage(t2)
-    compiled = @compile donated_args = :none core(s1.dev, s2.dev)
-    return (x, v) -> _from_host(x, compiled(_upload!(s1, x), _upload!(s2, v)))
+    compiled = @compile core(_upload(t1), _upload(t2))
+    return (x, v) -> _from_host(x, compiled(_upload(x), _upload(v)))
 end
 
 # For g = gradlogp, this JVP is the HVP. The callable and its captures are constant.
