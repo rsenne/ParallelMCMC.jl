@@ -194,7 +194,6 @@ end
 function _resolve_hvp_batch(
     logdensity_batch, grad_batch, grad_batch_backend, hvp_backend, X_template
 )
-    _check_reactant_pair(grad_batch_backend, hvp_backend)
     if hvp_backend isa DI.SecondOrder
         return DEER._make_hvp_batch_fn_second_order(
             _BatchLogdensitySum(logdensity_batch), hvp_backend, X_template

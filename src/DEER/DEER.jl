@@ -281,27 +281,27 @@ function _make_hvp_batch_fn(
     return (X, V) -> _batch_hvp_via_grad_reverse_prepared(prep, X, V)
 end
 
-# ReactantExt supplies more-specific methods when loaded.
+# ReactantExt supplies these methods when loaded.
 function _make_hvp_fn(
-    ::ReactantHVP, gradlogp, backend::AbstractADType, x_template::AbstractVector
+    ::ReactantHVP, gradlogp, backend::ADTypes.AutoReactant, x_template::AbstractVector
 )
     return error(_REACTANT_LOAD_HINT)
 end
 
 function _make_hvp_batch_fn(
-    ::ReactantHVP, grad_batch, backend::AbstractADType, X_template::AbstractMatrix
+    ::ReactantHVP, grad_batch, backend::ADTypes.AutoReactant, X_template::AbstractMatrix
 )
     return error(_REACTANT_LOAD_HINT)
 end
 
 function _make_hvp_fn_second_order(
-    logdensity, backend::AbstractADType, x_template::AbstractVector
+    logdensity, backend::ADTypes.AutoReactant, x_template::AbstractVector
 )
     return error(_REACTANT_LOAD_HINT)
 end
 
 function _make_hvp_batch_fn_second_order(
-    logdensity_batch_sum, backend::AbstractADType, X_template::AbstractMatrix
+    logdensity_batch_sum, backend::ADTypes.AutoReactant, X_template::AbstractMatrix
 )
     return error(_REACTANT_LOAD_HINT)
 end
