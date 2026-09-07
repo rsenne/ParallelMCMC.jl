@@ -6,6 +6,12 @@ CurrentModule = ParallelMCMC
 
 This page documents all public types and functions exported by ParallelMCMC.jl.
 
+## Reactant
+
+Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
+derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
+`backend`. See [GPU Execution](15-gpu.md) for its constraints.
+
 ## Extension constructors
 
 `DensityModel` also has extension constructors for common probabilistic-programming interfaces:

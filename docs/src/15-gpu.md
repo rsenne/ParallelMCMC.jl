@@ -232,11 +232,28 @@ DEER needs a Hessian–vector product $H v$ at every Newton step.  `DensityModel
 - **You supply `hvp` / `hvp_batch`.**  These run as plain kernels.  The AD backend is never invoked for HVPs.
 - **You only supply `gradlogp` / `grad_logdensity_batch`.**  The sampler builds the HVP by differentiating your gradient — either a forward-mode pushforward of `gradlogp` ([`ForwardOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), the default for most backends) or a reverse-mode gradient of `x -> dot(gradlogp(x), v)` ([`ReverseOnGrad`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/src/DEER/DEER.jl), used for `AutoMooncake` and `AutoZygote`).  This is the **AD-HVP fallback**, and it is what the logistic-regression example above uses.
 
-!!! warning "Log-density-only models on GPU"
-    `grad_logdensity` can itself be an AD backend (`DensityModel(logp, AutoEnzyme(), dim)`, see [Getting started](10-getting-started.md)), but don't do that with `ParallelMALASampler` on GPU.  The HVP becomes `SecondOrder(hvp_backend, grad_backend)` on your log-density, which currently fails on GPU with both Enzyme and Mooncake (see [#37](https://github.com/rsenne/ParallelMCMC.jl/issues/37)).  The same goes for passing a `SecondOrder` explicitly.  Write `gradlogp` out by hand for DEER, so the HVP is a single pass over it.  The sequential samplers only need the gradient, so log-density-only models work there.
-
 !!! note "A backend in `grad_logdensity` reaches `logdensity_batch` too"
     The batched path needs a batched gradient, and derives one from `logdensity_batch` when `grad_logdensity` is a backend.  That puts `logdensity_batch` under the same restrictions as the rest of your AD-visible code.  Supply `grad_logdensity_batch` to avoid it.
+
+### Reactant HVPs
+
+`ADTypes.AutoReactant()` provides a compiled HVP path through [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl). Load Reactant before preparing the model:
+
+```julia
+using Reactant, ADTypes
+
+model = DensityModel(logp, AutoReactant(), D)
+sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
+```
+
+!!! warning "Reactant constraints"
+    **Captured arrays are frozen at compile time.** Mutating them after preparation does not change the compiled derivative. Pass mutable data as an argument.
+
+    **Reactant chooses the execution device independently of the input array.** With Reactant's CPU client, `CuArray` inputs round-trip through the host. The sampler warns about this when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
+
+- The log-density must be Reactant-traceable. DynamicPPL-built log-densities are not.
+- Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
+- Only the default `AutoReactant()` mode is supported.
 
 ### When the fallback is the right call
 
@@ -287,7 +304,6 @@ model = DensityModel(logp, gradlogp, D;
                      grad_logdensity_batch=gradlogp_batch,
                      hvp=hvp, hvp_batch=hvp_batch)
 
-# The model supplies its own HVPs, so no `backend` is needed.
 sampler = ParallelMALASampler(0.005f0; T=16, damping=0.5f0)
 ```
 
