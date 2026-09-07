@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - "src/**"
       - "ext/ReactantExt.jl"
       - "test/test-Reactant-*.jl"
       - "Project.toml"
