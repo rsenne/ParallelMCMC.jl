@@ -29,17 +29,14 @@ Whether `x` has to be filled on the host and copied over, rather than written
 element by element in place. `false` for anything with cheap scalar indexing,
 which is the default.
 
-The random fills — MALA's normal noise, DEER's Rademacher probes — are the only
-places this matters: writing them one element at a time into device memory is
-either an outright error or one kernel launch per element. Array types that
-cannot take those writes say so here, and the fills stage through a host buffer
-that the workspace keeps around.
-
 `ReactantExt` also reads it as "this array lives on a device", to warn when the
 XLA client is on the host while the parameters are not.
 
-Loading CUDA.jl opts `CuArray` in via `ext/CUDAExt.jl`; another device array
-type is one method away.
+`CUDAExt` defines it for `CuArray`. To support another device array type:
+
+```julia
+ParallelMCMC.needs_host_staging(::ROCArray) = true
+```
 """
 needs_host_staging(::AbstractArray) = false
 

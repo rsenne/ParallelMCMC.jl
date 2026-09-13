@@ -2,12 +2,6 @@ using Test
 using Random
 using ParallelMCMC
 
-#=
-`needs_host_staging` is the only thing left tying the samplers to a particular
-GPU package (#59). These tests pin both halves of that contract: the CPU
-default, and what a device array type gets by opting in.
-=#
-
 @testset "Host staging defaults to off" begin
     @test !ParallelMCMC.needs_host_staging(zeros(3))
     @test !ParallelMCMC.needs_host_staging(zeros(Float32, 3, 4))
@@ -20,10 +14,7 @@ end
     @test ws.zhost === nothing
 end
 
-#=
-Stand-in for a device array: no CuArray needed, so this runs on CI without a
-GPU. It refuses `setindex!`, which is what the staged fills exist to avoid.
-=#
+# Device-array stand-in: scalar `setindex!` errors, as on `CuArray`.
 struct StagedArray{T,N} <: AbstractArray{T,N}
     data::Array{T,N}
 end
@@ -41,16 +32,12 @@ ParallelMCMC.needs_host_staging(::StagedArray) = true
     x = StagedArray(zeros(Float32, 6))
     @test ParallelMCMC.needs_host_staging(x)
 
-    #= The workspace allocates host mirrors off the same trait, so a template
-    that stages gets them and a CPU template does not. =#
     ws = ParallelMCMC.DEER.DEERWorkspace(x, 3)
     @test ws.Zhost isa Matrix{Float32}
     @test size(ws.Zhost) == (6, 3)
     @test ws.zhost isa Vector{Float32}
     @test length(ws.zhost) == 6
 
-    #= Both the buffered and unbuffered fills have to route around setindex!;
-    the unbuffered one allocates its own staging buffer. =#
     rng = MersenneTwister(0)
     ParallelMCMC.DEER._rademacher!(x, rng, ws.zhost)
     @test all(v -> abs(v) == 1.0f0, x.data)
@@ -70,8 +57,6 @@ end
     ParallelMCMC._randn_like!(MersenneTwister(0), ξ, host)
     @test ξ.data == host
 
-    # Without one there is nowhere to generate the noise, so say so rather than
-    # failing later inside setindex!.
     @test_throws ErrorException ParallelMCMC._randn_like!(MersenneTwister(0), ξ, nothing)
 end
 
@@ -86,8 +71,6 @@ end
         @warn "CUDA not loadable — skipping CUDAExt test"
     else
         @test Base.get_extension(ParallelMCMC, :CUDAExt) !== nothing
-        # Setting the trait for `CuArray` is the whole of the extension, and it
-        # is right about the type whether or not a device is present.
         @test hasmethod(ParallelMCMC.needs_host_staging, Tuple{CUDA.CuArray})
         if CUDA.functional()
             @test ParallelMCMC.needs_host_staging(CUDA.zeros(Float32, 3))

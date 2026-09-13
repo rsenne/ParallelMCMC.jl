@@ -35,12 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- CUDA is now a weak dependency behind a `CUDAExt` extension, so loading
-  ParallelMCMC no longer pulls in the CUDA stack on machines that cannot use it
-  (#59). GPU runs additionally need `using CUDA`, which they already did to
-  build the `CuArray`s. The random fills — MALA's normal noise, DEER's
-  Rademacher probes — now ask `ParallelMCMC.needs_host_staging(x)` whether to
-  stage through a host buffer, so another device array type is one method away.
+- CUDA is now a weak dependency behind the `CUDAExt` extension; `using CUDA`
+  loads it (#59). The `CuArray` checks in the random fills are replaced by the
+  `needs_host_staging` trait.
 - The AD-HVP fallback now respects the backend's `hvp_mode`, so
   `AutoEnzyme(mode=Enzyme.Reverse)` uses reverse-on-grad (#38).
 - Deriving a batched gradient applies AD to `logdensity_batch`. Supply

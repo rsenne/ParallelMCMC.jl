@@ -343,8 +343,8 @@ function _make_hvp_batch_fn_second_order(
 end
 
 @inline function _rademacher!(z::AbstractArray{T}, rng::AbstractRNG) where {T}
-    #= Unbuffered call on a device array: allocate the staging buffer for this
-    one fill. The hot paths hand over a workspace buffer instead. =#
+    # No host buffer supplied: allocate one for this call. The hot paths pass a
+    # workspace buffer instead.
     needs_host_staging(z) && return _rademacher!(z, rng, Vector{T}(undef, length(z)))
     @inbounds for i in eachindex(z)
         z[i] = rand(rng, Bool) ? one(T) : -one(T)
