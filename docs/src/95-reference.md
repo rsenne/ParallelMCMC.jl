@@ -12,6 +12,14 @@ Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
 derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
 `backend`. See [GPU Execution](15-gpu.md) for its constraints.
 
+## CUDA and other device arrays
+
+`using CUDA` loads the `CUDAExt` extension; see [GPU Execution](15-gpu.md).
+
+```@docs
+ParallelMCMC.needs_host_staging
+```
+
 ## Extension constructors
 
 `DensityModel` also has extension constructors for common probabilistic-programming interfaces:

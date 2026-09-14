@@ -2,7 +2,6 @@ module ParallelMCMC
 
 using AbstractMCMC
 using ADTypes: ADTypes, AbstractADType
-using CUDA
 using DifferentiationInterface: DifferentiationInterface
 using FlexiChains
 using LinearAlgebra
@@ -32,11 +31,14 @@ which is the default.
 
 `ReactantExt` also reads it as "this array lives on a device", to warn when the
 XLA client is on the host while the parameters are not.
+
+`CUDAExt` defines it for `CuArray`. To support another device array type:
+
+```julia
+ParallelMCMC.needs_host_staging(::ROCArray) = true
+```
 """
 needs_host_staging(::AbstractArray) = false
-
-# TODO: Move this to a CUDA extension see #68
-needs_host_staging(::CUDA.CuArray) = true
 
 #= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
 and `interface.jl`'s gradient hooks report it. =#
