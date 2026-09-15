@@ -9,7 +9,7 @@ This page documents all public types and functions exported by ParallelMCMC.jl.
 ## Reactant
 
 Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
-derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
+backend for derivatives in `DensityModel` and as `ParallelMALASampler`'s
 `backend`. See [GPU Execution](15-gpu.md) for its constraints.
 
 ## CUDA and other device arrays
@@ -27,7 +27,7 @@ ParallelMCMC.needs_host_staging
 - `DensityModel(ld; param_names=nothing)` for `LogDensityProblems` models with gradients
 - `DensityModel(turing_model)` for `DynamicPPL` / Turing models when the relevant extension packages are loaded
 
-See [Getting Started](10-getting-started.md) for end-to-end examples of both.
+See [Getting Started](10-getting-started.md) for examples of both.
 
 ## Model
 
@@ -59,8 +59,8 @@ ParallelMALATransition
 
 ## Low-level namespaces
 
-These lower-level building blocks power the public samplers and are useful if you
-want to work with taped recursions or the diagonal affine scan directly.
+Use these functions and workspaces to solve taped recursions or run the
+diagonal affine scan directly.
 
 ```@docs
 DEER.TapedRecursion
