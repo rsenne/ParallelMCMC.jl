@@ -1,6 +1,6 @@
 # GPU Execution
 
-DEER's prefix-scan and per-step batch evaluations are array-type-agnostic, so the same `ParallelMALASampler` runs on either CPU or GPU.  This page covers when GPU pays off, the current limitations, and a worked example.
+`ParallelMALASampler` can use CPU or GPU arrays. This page explains how to write a GPU model and which backend restrictions to check.
 
 ParallelMCMC does not depend on CUDA.jl.  `using CUDA` loads the `CUDAExt` extension, which is required for `CuArray` parameters.
 
@@ -38,7 +38,7 @@ pmcmc_dot(a, b)     = dot(a, b)
 pmcmc_dotsum(A, B)  = sum(A .* B)
 ```
 
-These exist purely so the package can register Enzyme rules against them without committing type piracy on `Base.*`, `Base.dot`, `Base.sum`.  The rules compute primal and cotangents with plain operators *outside* Enzyme's IR rewriter, which keeps them off the reverse-mode path that aborts on GPU.
+These wrappers have Enzyme differentiation rules defined by ParallelMCMC. Use them in GPU code differentiated by Enzyme to avoid this compilation failure:
 
 ```
 unsupported tag gc-transition for
@@ -56,11 +56,11 @@ When you do **not** need them:
 - GPU code with `AutoMooncake(; config=nothing)`: Mooncake's own CUDA extension handles these operations natively.
 - GPU code with `AutoZygote()`: Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
 
-These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain `A * B` on `CuArray`s will work and the wrappers will be deprecated.
+The wrappers work around this Enzyme compilation failure.
 
-### 3. Some Enzyme GPU gradients hit a `gc-transition` abort. Staging them as single ops is a workaround
+### 3. Enzyme may need broadcasts split into separate expressions
 
-Certain `CuArray` gradient expressions abort during Enzyme compilation on GPU with the same `gc-transition` failure as limitation 2. In practice the fused form below aborts while the staged form compiles, so **writing the gradient as single-op stages is a reliable workaround**:
+Some `CuArray` gradients fail during Enzyme compilation with the same `gc-transition` error. If you encounter it, try splitting broadcasts into separate expressions, as in this example:
 
 ```julia
 # ABORTS during Enzyme compile on GPU
@@ -154,7 +154,7 @@ chain = sample(model, sampler, 1_600;
 
 Posterior mean recovery error `‖β_post − β_true‖ / ‖β_true‖` should land in the 0.1–0.2 range after a few hundred post-warmup samples.
 
-### Enzyme backend (requires `pmcmc_matmul)
+### Enzyme backend (requires `pmcmc_matmul`)
 
 Same model, with the GPU-Enzyme restrictions applied: every `*` becomes `pmcmc_matmul`, every `dot` becomes `pmcmc_dot`, and every gradient broadcast is expanded into single-op stages:
 
@@ -223,7 +223,7 @@ chain = sample(model, sampler, 1_600;
                chain_type=VNChain)
 ```
 
-The two snippets sample the same posterior; the difference is purely in what the AD backend can chew on.
+Both examples describe the same posterior. The Enzyme version separates operations to avoid the compilation failures above.
 
 ---
 

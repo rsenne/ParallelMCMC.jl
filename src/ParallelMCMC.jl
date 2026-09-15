@@ -11,13 +11,9 @@ using Statistics
 
 const DI = DifferentiationInterface
 
-#=
-Owned wrappers: identical semantics to their Base counterparts, but provide
-stable function identities for backend-specific AD rules in `ext/EnzymeExt.jl`
-without committing type piracy on `Base.*` / `Base.dot` / `Base.sum`. User
-model code that wants those rules to fire (notably on GPU) should call these
-instead. See `ext/EnzymeExt.jl` for the gc-transition abort they work around.
-=#
+# These wrappers let EnzymeExt define GPU differentiation rules without
+# changing rules for Julia's standard operators. GPU models using Enzyme
+# should call them to avoid the compilation failure described in the GPU guide.
 pmcmc_matmul(A::AbstractVecOrMat, B::AbstractVecOrMat) = A * B
 pmcmc_dot(a::AbstractVector, b::AbstractVector) = dot(a, b)
 pmcmc_dotsum(A::AbstractVecOrMat, B::AbstractVecOrMat) = sum(A .* B)
