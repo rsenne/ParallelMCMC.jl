@@ -10,7 +10,7 @@ Defines model/sampler/state/transition types and implements
 
 Wrap a log-density and its derivatives for ParallelMCMC samplers.
 
-Each derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
+Each derivative argument (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
 `hvp_batch`) takes a callable or an `ADTypes.AbstractADType`, so a model can be
 built from the log-density alone:
 
@@ -19,7 +19,7 @@ built from the log-density alone:
 Backends are prepared when sampling starts. An HVP backend differentiates a
 callable gradient once. With an AD-derived gradient it forms
 `DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` on the
-log-density. An explicit `SecondOrder` also bypasses the gradient slot.
+log-density. An explicit `SecondOrder` also differentiates the log-density directly.
 
 - `logdensity(x::AbstractVector) -> Real`
 - `grad_logdensity` — callable `x -> AbstractVector`, or an AD backend.
@@ -38,7 +38,7 @@ log-density. An explicit `SecondOrder` also bypasses the gradient slot.
   See the [`Parameter names`](@ref parameter-names) section of the docs for more
   information.
 
-Both batched derivative slots require `logdensity_batch`. `AutoReactant()` has
+Both batched derivative arguments require `logdensity_batch`. `AutoReactant()` has
 additional pairing and tracing constraints; see the GPU guide.
 """
 struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
