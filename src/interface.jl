@@ -597,6 +597,10 @@ the model carries its own HVPs.
 
 With `backend=ADTypes.AutoReactant()`, `grad_logdensity` must be `AutoReactant()`
 or a callable.
+
+The `sample` keywords `discard_initial`, `thinning` and `num_warmup` are applied
+on the batched trajectory path. `callback` and `initial_state` route through the
+generic step-wise loop instead.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -667,12 +671,15 @@ struct ParallelMALATransition{V<:AbstractVector,L<:Real}
     logp::L
 end
 
+#= Kept samples of a chain, one block of columns per DEER solve. `ends[b]` is the
+number of kept samples up to and including block `b`; with thinning the blocks
+are not all the same width. =#
 struct ParallelMALABlockSamples{B<:AbstractVector,L<:AbstractVector} <:
        AbstractVector{ParallelMALATransition}
     blocks::B
     logps::L
+    ends::Vector{Int}
     n::Int
-    T::Int
 end
 
 Base.size(samples::ParallelMALABlockSamples) = (samples.n,)
@@ -681,11 +688,9 @@ Base.IndexStyle(::Type{<:ParallelMALABlockSamples}) = IndexLinear()
 
 function Base.getindex(samples::ParallelMALABlockSamples, i::Int)
     1 <= i <= samples.n || throw(BoundsError(samples, i))
-    block_idx = fld(i - 1, samples.T) + 1
-    t = mod(i - 1, samples.T) + 1
-    return ParallelMALATransition(
-        samples.blocks[block_idx][:, t], samples.logps[block_idx][t]
-    )
+    b = searchsortedfirst(samples.ends, i)
+    t = i - (b == 1 ? 0 : samples.ends[b - 1])
+    return ParallelMALATransition(samples.blocks[b][:, t], samples.logps[b][t])
 end
 
 function _make_mala_tape_block(
@@ -873,11 +878,99 @@ function _parallel_mala_update_progress!(
     return next_update
 end
 
-function _copy_trajectory_rows!(
-    vals::AbstractMatrix{<:Real}, first_row::Int, S::AbstractMatrix, ncols::Int
+"""
+Which steps of a `ParallelMALASampler` run are kept. Global step `g` is kept iff
+`g > discard_initial` and `(g - discard_initial - 1) % thinning == 0`, exactly the
+steps the generic `AbstractMCMC.mcmcsample` loop saves, so the batched path and the
+step-wise fallback return the same chain for the same RNG.
+"""
+struct ParallelMALASchedule
+    discard_initial::Int
+    thinning::Int
+    Ntotal::Int
+end
+
+function ParallelMALASchedule(
+    N::Int; discard_initial::Int=0, thinning::Int=1, num_warmup::Int=0
 )
-    rows = first_row:(first_row + ncols - 1)
-    S_host = Array(view(S, :, 1:ncols))
+    N > 0 || error("the number of samples must be ≥ 1")
+    discard_initial >= 0 ||
+        throw(ArgumentError("number of discarded samples must be non-negative"))
+    thinning >= 1 || throw(ArgumentError("thinning must be ≥ 1"))
+    num_warmup >= 0 ||
+        throw(ArgumentError("number of warm-up samples must be non-negative"))
+    Ntotal = thinning * (N - 1) + discard_initial + 1
+    Ntotal >= num_warmup || throw(
+        ArgumentError("number of warm-up samples exceeds the total number of samples")
+    )
+    return ParallelMALASchedule(discard_initial, thinning, Ntotal)
+end
+
+#= Columns of a block covering global steps `offset+1:offset+ncols` that the schedule
+keeps, and the chain row the first of them lands in. =#
+function _kept_columns(sched::ParallelMALASchedule, offset::Int, ncols::Int)
+    k0 = max(0, cld(offset - sched.discard_initial, sched.thinning))
+    first_col = sched.discard_initial + 1 + k0 * sched.thinning - offset
+    return first_col:(sched.thinning):ncols, k0 + 1
+end
+
+#= Solves DEER blocks until `sched.Ntotal` steps are consumed and hands each block's
+kept columns to `sink!(S, logps, cols, first_row)`. Every block is solved at full
+length `T`, as the step-wise fallback does, so both paths draw the same RNG stream.
+Returns the last block; its `S` aliases the workspace. =#
+function _parallel_mala_run!(
+    sink!,
+    rng::Random.AbstractRNG,
+    model::DensityModel,
+    sampler::ParallelMALASampler,
+    sched::ParallelMALASchedule;
+    initial_params=nothing,
+    progress=AbstractMCMC.PROGRESS[],
+    progressname="Sampling",
+)
+    progress = _parallel_mala_progress(progress, progressname)
+    x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
+    # Postprocessing dispatches on the user's model type (e.g. from the
+    # DynamicPPL extension), so `model` itself stays unprepped.
+    prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
+    ws = nothing
+    nsteps = 0
+    Ntotal = sched.Ntotal
+    next_update = Ntotal / AbstractMCMC.get_n_updates(progress)
+    threshold = next_update
+    last = nothing
+
+    AbstractMCMC.@maybewithricherlogger begin
+        AbstractMCMC.init_progress!(progress)
+        try
+            while nsteps < Ntotal
+                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
+                logps = _trajectory_logps(prepped, S)
+                nconsume = min(sampler.T, Ntotal - nsteps)
+                cols, first_row = _kept_columns(sched, nsteps, nconsume)
+                sink!(S, logps, cols, first_row)
+
+                x0 = copy(view(S, :, nconsume))
+                nsteps += nconsume
+                last = (
+                    S=S, logps=logps, workspace=ws, tape=tape, t=nconsume, model=prepped
+                )
+                next_update = _parallel_mala_update_progress!(
+                    progress, nsteps, Ntotal, next_update, threshold
+                )
+            end
+        finally
+            AbstractMCMC.finish_progress!(progress)
+        end
+    end
+    return last
+end
+
+function _copy_trajectory_rows!(
+    vals::AbstractMatrix{<:Real}, first_row::Int, S::AbstractMatrix, cols::AbstractRange
+)
+    rows = first_row:(first_row + length(cols) - 1)
+    S_host = Array(S[:, cols])
     vals[rows, :] .= transpose(S_host)
     return vals
 end
@@ -887,7 +980,8 @@ function _sample_parallel_mala_chain(
     model::DensityModel,
     sampler::ParallelMALASampler,
     N::Int,
-    ::Type{FlexiChains.FlexiChain{TKey}};
+    ::Type{FlexiChains.FlexiChain{TKey}},
+    sched::ParallelMALASchedule;
     initial_params=nothing,
     param_names=nothing,
     progress=AbstractMCMC.PROGRESS[],
@@ -899,38 +993,12 @@ function _sample_parallel_mala_chain(
     vals = Matrix{FP}(undef, N, D)
     logp = Vector{FP}(undef, N)
 
-    progress = _parallel_mala_progress(progress, progressname)
-    x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    # Postprocessing dispatches on the user's model type (e.g. from the
-    # DynamicPPL extension), so `model` itself stays unprepped.
-    prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
-    ws = nothing
-    nsteps = 0
-    next_update = N / AbstractMCMC.get_n_updates(progress)
-    threshold = next_update
-
-    AbstractMCMC.@maybewithricherlogger begin
-        AbstractMCMC.init_progress!(progress)
-        try
-            while nsteps < N
-                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
-                logps = _trajectory_logps(prepped, S)
-                nkeep = min(sampler.T, N - nsteps)
-                first_row = nsteps + 1
-                rows = first_row:(first_row + nkeep - 1)
-
-                _copy_trajectory_rows!(vals, first_row, S, nkeep)
-                logp[rows] .= view(logps, 1:nkeep)
-
-                x0 = copy(view(S, :, nkeep))
-                nsteps += nkeep
-                next_update = _parallel_mala_update_progress!(
-                    progress, nsteps, N, next_update, threshold
-                )
-            end
-        finally
-            AbstractMCMC.finish_progress!(progress)
-        end
+    _parallel_mala_run!(
+        rng, model, sampler, sched; initial_params, progress, progressname
+    ) do S, logps, cols, first_row
+        _copy_trajectory_rows!(vals, first_row, S, cols)
+        logp[first_row:(first_row + length(cols) - 1)] .= view(logps, cols)
+        return nothing
     end
 
     internals = (logp=logp,)
@@ -997,53 +1065,44 @@ function _sample_parallel_mala_blocks(
     rng::Random.AbstractRNG,
     model::DensityModel,
     sampler::ParallelMALASampler,
-    N::Int;
+    N::Int,
+    sched::ParallelMALASchedule;
     initial_params=nothing,
     progress=AbstractMCMC.PROGRESS[],
     progressname="Sampling",
 )
+    nblocks = cld(sched.Ntotal, sampler.T)
     blocks = Vector{AbstractMatrix}(undef, 0)
     logp_blocks = Vector{AbstractVector}(undef, 0)
-    sizehint!(blocks, cld(N, sampler.T))
-    sizehint!(logp_blocks, cld(N, sampler.T))
+    ends = Int[]
+    sizehint!(blocks, nblocks)
+    sizehint!(logp_blocks, nblocks)
+    sizehint!(ends, nblocks)
 
-    progress = _parallel_mala_progress(progress, progressname)
-    x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
-    ws = nothing
-    nsteps = 0
-    next_update = N / AbstractMCMC.get_n_updates(progress)
-    threshold = next_update
-    final_state = nothing
-
-    AbstractMCMC.@maybewithricherlogger begin
-        AbstractMCMC.init_progress!(progress)
-        try
-            while nsteps < N
-                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
-                logps = _trajectory_logps(prepped, S)
-                nkeep = min(sampler.T, N - nsteps)
-                S_keep = copy(view(S, :, 1:nkeep))
-                logps_keep = collect(view(logps, 1:nkeep))
-                x0 = copy(view(S_keep, :, nkeep))
-
-                push!(blocks, S_keep)
-                push!(logp_blocks, logps_keep)
-                final_state = ParallelMALAState(
-                    x0, logps_keep[nkeep], S_keep, logps_keep, ws, tape, nkeep, prepped
-                )
-
-                nsteps += nkeep
-                next_update = _parallel_mala_update_progress!(
-                    progress, nsteps, N, next_update, threshold
-                )
-            end
-        finally
-            AbstractMCMC.finish_progress!(progress)
-        end
+    last = _parallel_mala_run!(
+        rng, model, sampler, sched; initial_params, progress, progressname
+    ) do S, logps, cols, first_row
+        isempty(cols) && return nothing
+        push!(blocks, S[:, cols])
+        push!(logp_blocks, logps[cols])
+        push!(ends, first_row + length(cols) - 1)
+        return nothing
     end
 
-    return ParallelMALABlockSamples(blocks, logp_blocks, N, sampler.T), final_state
+    #= The state carries the whole last trajectory, consumed through column `t`, so
+    `step` can replay the rest of it. =#
+    S = copy(last.S)
+    final_state = ParallelMALAState(
+        S[:, last.t],
+        last.logps[last.t],
+        S,
+        last.logps,
+        last.workspace,
+        last.tape,
+        last.t,
+        last.model,
+    )
+    return ParallelMALABlockSamples(blocks, logp_blocks, ends, N), final_state
 end
 
 function _default_parallel_mala_mcmcsample(
@@ -1086,11 +1145,9 @@ function AbstractMCMC.mcmcsample(
     param_names=nothing,
     kwargs...,
 )
-    if callback !== nothing ||
-        num_warmup != 0 ||
-        discard_initial != 0 ||
-        thinning != 1 ||
-        initial_state !== nothing
+    #= `callback` wants a transition per step and `initial_state` a trajectory to
+    replay, so both go through the generic step loop. =#
+    if callback !== nothing || initial_state !== nothing
         return _default_parallel_mala_mcmcsample(
             rng,
             model,
@@ -1110,8 +1167,8 @@ function AbstractMCMC.mcmcsample(
         )
     end
 
-    N > 0 || error("the number of samples must be ≥ 1")
     N_int = Int(N)
+    sched = ParallelMALASchedule(N_int; discard_initial, thinning, num_warmup)
 
     if chain_type <: FlexiChains.FlexiChain
         return _sample_parallel_mala_chain(
@@ -1119,7 +1176,8 @@ function AbstractMCMC.mcmcsample(
             model,
             sampler,
             N_int,
-            chain_type;
+            chain_type,
+            sched;
             initial_params=initial_params,
             param_names=param_names,
             progress=progress,
@@ -1131,7 +1189,8 @@ function AbstractMCMC.mcmcsample(
         rng,
         model,
         sampler,
-        N_int;
+        N_int,
+        sched;
         initial_params=initial_params,
         progress=progress,
         progressname=progressname,

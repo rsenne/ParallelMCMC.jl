@@ -229,10 +229,10 @@ end
     @test size(chain[name, stack = true], 3) == 2
 end
 
-@testset "ParallelMALASampler bundle_samples fallback path (thinning)" begin
-    #= A non-default kwarg forces ParallelMALA's `mcmcsample`
-    override down the generic step/bundle_samples path instead of the
-    batched `_sample_parallel_mala_chain` shortcut =#
+@testset "ParallelMALASampler bundle_samples fallback path (callback)" begin
+    #= A per-step `callback` forces ParallelMALA's `mcmcsample` override down the
+    generic step/bundle_samples path instead of the batched
+    `_sample_parallel_mala_chain` shortcut =#
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
@@ -242,7 +242,7 @@ end
         sampler,
         100;
         chain_type=SymChain,
-        thinning=2,
+        callback=(args...; kwargs...) -> nothing,
         progress=false,
     )
 
@@ -250,6 +250,93 @@ end
     @test FlexiChains.niters(chain) == 100
     @test FlexiChains.Extra(:logp) in FlexiChains.extras(chain)
     @test all(isfinite, chain[:logp])
+end
+
+@testset "ParallelMALASampler fast path matches the step-wise loop under discard/thinning" begin
+    model = DensityModel(logp_deer, gradlogp_deer, 2)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
+    N = 37
+    x0 = [0.3, -0.2]
+    cases = (
+        (thinning=2,),
+        (discard_initial=5,),
+        (num_warmup=3,),
+        (num_warmup=7, discard_initial=3),
+        (discard_initial=17, thinning=3),
+    )
+    for kw in cases
+        fast = sample(
+            MersenneTwister(7),
+            model,
+            sampler,
+            N;
+            chain_type=SymChain,
+            initial_params=x0,
+            progress=false,
+            kw...,
+        )
+        slow = ParallelMCMC._default_parallel_mala_mcmcsample(
+            MersenneTwister(7),
+            model,
+            sampler,
+            N;
+            chain_type=SymChain,
+            initial_params=x0,
+            progress=false,
+            kw...,
+        )
+        name = only(FlexiChains.parameters(fast))
+        @test FlexiChains.niters(fast) == N
+        @test fast[name, stack = true] == slow[name, stack = true]
+        @test fast[:logp] == slow[:logp]
+
+        raw = sample(
+            MersenneTwister(7), model, sampler, N; initial_params=x0, progress=false, kw...
+        )
+        slow_raw = ParallelMCMC._default_parallel_mala_mcmcsample(
+            MersenneTwister(7), model, sampler, N; initial_params=x0, progress=false, kw...
+        )
+        @test raw isa ParallelMCMC.ParallelMALABlockSamples
+        @test length(raw) == N
+        @test [t.x for t in raw] == [t.x for t in slow_raw]
+        @test [t.logp for t in raw] == [t.logp for t in slow_raw]
+        @test_throws BoundsError raw[N + 1]
+    end
+end
+
+@testset "ParallelMALASchedule validation and column bookkeeping" begin
+    Sched = ParallelMCMC.ParallelMALASchedule
+    @test Sched(10; discard_initial=5, thinning=2).Ntotal == 24
+    @test_throws ErrorException Sched(0)
+    @test_throws ArgumentError Sched(10; discard_initial=-1)
+    @test_throws ArgumentError Sched(10; thinning=0)
+    @test_throws ArgumentError Sched(10; num_warmup=-1)
+    @test_throws ArgumentError Sched(10; num_warmup=11)
+
+    # keeps global steps 6, 8, ..., 44 across 16-wide blocks
+    sched = Sched(20; discard_initial=5, thinning=2)
+    @test sched.Ntotal == 44
+    @test ParallelMCMC._kept_columns(sched, 0, 16) == (6:2:16, 1)
+    @test ParallelMCMC._kept_columns(sched, 16, 16) == (2:2:16, 7)
+    @test ParallelMCMC._kept_columns(sched, 32, 12) == (2:2:12, 15)
+    # a block entirely inside the discarded prefix keeps nothing
+    @test isempty(first(ParallelMCMC._kept_columns(Sched(1; discard_initial=20), 0, 16)))
+end
+
+@testset "ParallelMALASampler final state replays the unconsumed trajectory" begin
+    model = DensityModel(logp_deer, gradlogp_deer, 2)
+    sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
+    rng = MersenneTwister(5)
+    N = 20  # the last block is consumed through column 4 of 16
+    samples, state = ParallelMCMC._sample_parallel_mala_blocks(
+        rng, model, sampler, N, ParallelMCMC.ParallelMALASchedule(N); progress=false
+    )
+    @test state.t == 4
+    @test size(state.trajectory, 2) == 16
+    @test state.x == samples[N].x
+    trans, state2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
+    @test trans.x == state.trajectory[:, 5]
+    @test state2.t == 5
 end
 
 @testset "ParallelMALASampler sample() with custom param_names" begin
