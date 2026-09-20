@@ -252,8 +252,9 @@ end
     @test all(isfinite, Array(chain))
 end
 
-@testset "DynamicPPLExt: ParallelMALA bundle_samples fallback path (thinning)" begin
-    #= A non-default kwarg (here `thinning`) forces ParallelMALA's `mcmcsample` override =#
+@testset "DynamicPPLExt: ParallelMALA bundle_samples fallback path (callback)" begin
+    #= A per-step `callback` forces ParallelMALA's `mcmcsample` override down the
+    generic step/bundle_samples path =#
     model = DensityModel(mvnormal_2d_model(); ad_backend=ADTypes.AutoForwardDiff())
     sampler = ParallelMALASampler(
         0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
@@ -265,12 +266,35 @@ end
         800;
         initial_params=zeros(2),
         chain_type=VNChain,
-        thinning=2,
+        callback=(args...; kwargs...) -> nothing,
         progress=false,
     )
     @test chain isa VNChain
     @test only(FlexiChains.parameters(chain)) == @varname(x)
     @test all(isfinite, Array(chain))
+end
+
+@testset "DynamicPPLExt: ParallelMALA fast path with thinning matches the step-wise loop" begin
+    model = DensityModel(mvnormal_2d_model(); ad_backend=ADTypes.AutoForwardDiff())
+    sampler = ParallelMALASampler(
+        0.2; T=8, maxiter=80, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
+    )
+    kw = (
+        initial_params=zeros(2),
+        chain_type=VNChain,
+        thinning=2,
+        discard_initial=10,
+        progress=false,
+    )
+    chain = sample(MersenneTwister(3), model, sampler, 200; kw...)
+    slow = ParallelMCMC._default_parallel_mala_mcmcsample(
+        MersenneTwister(3), model, sampler, 200; kw...
+    )
+    @test chain isa VNChain
+    @test only(FlexiChains.parameters(chain)) == @varname(x)
+    @test FlexiChains.niters(chain) == 200
+    @test all(isfinite, Array(chain))
+    @test chain[@varname(x), stack = true] == slow[@varname(x), stack = true]
 end
 
 @testset "DynamicPPLExt: named columns in Chains output" begin
