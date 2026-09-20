@@ -598,9 +598,7 @@ the model carries its own HVPs.
 With `backend=ADTypes.AutoReactant()`, `grad_logdensity` must be `AutoReactant()`
 or a callable.
 
-The `sample` keywords `discard_initial`, `thinning` and `num_warmup` are applied
-on the batched trajectory path. `callback` and `initial_state` route through the
-generic step-wise loop instead.
+`callback` and `initial_state` route through the generic step-wise loop instead.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -880,8 +878,8 @@ end
 
 """
 Which steps of a `ParallelMALASampler` run are kept. Global step `g` is kept iff
-`g > discard_initial` and `(g - discard_initial - 1) % thinning == 0`, exactly the
-steps the generic `AbstractMCMC.mcmcsample` loop saves, so the batched path and the
+`g > discard_initial` and `(g - discard_initial - 1) % thinning == 0`, i.e., the
+steps the `AbstractMCMC.mcmcsample` loop saves, so the batched path and the
 step-wise fallback return the same chain for the same RNG.
 """
 struct ParallelMALASchedule
@@ -914,10 +912,9 @@ function _kept_columns(sched::ParallelMALASchedule, offset::Int, ncols::Int)
     return first_col:(sched.thinning):ncols, k0 + 1
 end
 
-#= Solves DEER blocks until `sched.Ntotal` steps are consumed and hands each block's
-kept columns to `sink!(S, logps, cols, first_row)`. Every block is solved at full
-length `T`, as the step-wise fallback does, so both paths draw the same RNG stream.
-Returns the last block; its `S` aliases the workspace. =#
+#= Runs DEER blocks until `sched.Ntotal` steps are consumed, passing kept columns
+to `sink!(S, logps, cols, first_row)`. Uses full-length blocks (`T`) to match the
+fallback's RNG stream. Returns the last block; `S` aliases the workspace. =#
 function _parallel_mala_run!(
     sink!,
     rng::Random.AbstractRNG,
@@ -1089,8 +1086,6 @@ function _sample_parallel_mala_blocks(
         return nothing
     end
 
-    #= The state carries the whole last trajectory, consumed through column `t`, so
-    `step` can replay the rest of it. =#
     S = copy(last.S)
     final_state = ParallelMALAState(
         S[:, last.t],
