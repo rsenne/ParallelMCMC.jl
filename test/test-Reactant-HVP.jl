@@ -14,6 +14,7 @@ hvp_r(x, v) = -(sum(abs2, x) .* v .+ 2 .* dot(x, v) .* x)
 logp_batch_r(X) = vec(-0.25 .* sum(abs2, X; dims=1) .^ 2)
 gradlogp_batch_r(X) = -X .* sum(abs2, X; dims=1)
 logp_r32(x) = -0.25f0 * sum(abs2, x)^2
+logp_batch_r32(X) = vec(-0.25f0 .* sum(abs2, X; dims=1) .^ 2)
 
 logp_gauss(x) = -0.5 * sum(abs2, x)
 gradlogp_gauss(x) = -x
@@ -26,6 +27,28 @@ const CT_R = FlexiChains.FlexiChain{Symbol}
 
 using Reactant: Reactant
 using Enzyme: Enzyme
+
+# Device-array stand-in for the host-staging path without CUDA. Like
+# `StagedArray` in test-CUDA-Extension.jl, but it also needs a broadcast style
+# because `_prepare_model` fills the batched template with `X_template .= x_template`.
+struct ReactantStagedArray{T,N} <: AbstractArray{T,N}
+    data::Array{T,N}
+end
+Base.size(a::ReactantStagedArray) = size(a.data)
+Base.getindex(a::ReactantStagedArray, i::Int...) = a.data[i...]
+function Base.setindex!(::ReactantStagedArray, v, i::Int...)
+    return error("scalar indexing is unsupported")
+end
+function Base.similar(a::ReactantStagedArray, ::Type{T}, dims::Dims) where {T}
+    return ReactantStagedArray(similar(a.data, T, dims))
+end
+Base.copyto!(a::ReactantStagedArray, src::AbstractArray) = (copyto!(a.data, src); a)
+function Base.BroadcastStyle(::Type{<:ReactantStagedArray})
+    return Broadcast.ArrayStyle{ReactantStagedArray}()
+end
+Base.copyto!(a::ReactantStagedArray, bc::Broadcast.Broadcasted) = (copyto!(a.data, bc); a)
+
+ParallelMCMC.needs_host_staging(::ReactantStagedArray) = true
 
 @testset "Reactant HVP" begin
     @testset "extension is loaded" begin
@@ -133,6 +156,18 @@ using Enzyme: Enzyme
             end
         end
 
+        # DEER passes column views to the vector callables.
+        @testset "SubArray inputs" begin
+            model = DensityModel(logp_r, AutoReactant(), D_R; hvp=AutoReactant())
+            m_p = ParallelMCMC._prepare_model(model, x, 8, nothing)
+            S = randn(rng, D_R, 2)
+            xv = view(S, :, 1)
+            vv = view(S, :, 2)
+            @test m_p.grad_logdensity(xv) isa Vector{Float64}
+            @test m_p.grad_logdensity(xv) ≈ gradlogp_r(S[:, 1])
+            @test m_p.hvp(xv, vv) ≈ hvp_r(S[:, 1], S[:, 2])
+        end
+
         @testset "Float32 on CPU" begin
             x32 = Float32.(x)
             v32 = Float32.(v)
@@ -198,6 +233,66 @@ using Enzyme: Enzyme
         end
     end
 
+    # `ReactantStagedArray` has no `_device_array_from_pointer` method, so results
+    # come back through the host stage, as they would for a CuArray on the CPU client.
+    @testset "staged template" begin
+        rng = MersenneTwister(74)
+        x0 = ReactantStagedArray(randn(rng, Float32, D_R))
+        model = DensityModel(logp_r32, AutoReactant(), D_R; hvp=AutoReactant())
+        m_p = ParallelMCMC._prepare_model(model, x0, 8, nothing)
+
+        x1 = ReactantStagedArray(randn(rng, Float32, D_R))
+        v1 = ReactantStagedArray(randn(rng, Float32, D_R))
+        x2 = ReactantStagedArray(randn(rng, Float32, D_R))
+        v2 = ReactantStagedArray(randn(rng, Float32, D_R))
+
+        g1 = m_p.grad_logdensity(x1)
+        Hv1 = m_p.hvp(x1, v1)
+        @test g1 isa ReactantStagedArray{Float32,1}
+        @test eltype(g1) === Float32
+        @test g1.data ≈ gradlogp_r(x1.data)
+        @test Hv1 isa ReactantStagedArray{Float32,1}
+        @test Hv1.data ≈ hvp_r(x1.data, v1.data)
+
+        g2 = m_p.grad_logdensity(x2)
+        Hv2 = m_p.hvp(x2, v2)
+        @test g2.data ≈ gradlogp_r(x2.data)
+        @test Hv2.data ≈ hvp_r(x2.data, v2.data)
+
+        # Results must not alias the reused stage.
+        @test g1 !== g2
+        @test g1.data !== g2.data
+        @test Hv1 !== Hv2
+        @test Hv1.data !== Hv2.data
+
+        @testset "batched slots" begin
+            T = 8
+            model_b = DensityModel(
+                logp_r32,
+                AutoReactant(),
+                D_R;
+                logdensity_batch=logp_batch_r32,
+                grad_logdensity_batch=AutoReactant(),
+                hvp=AutoReactant(),
+                hvp_batch=AutoReactant(),
+            )
+            m_pb = ParallelMCMC._prepare_model(model_b, x0, T, nothing)
+
+            X1 = ReactantStagedArray(randn(rng, Float32, D_R, T))
+            V1 = ReactantStagedArray(randn(rng, Float32, D_R, T))
+
+            Gb = m_pb.grad_logdensity_batch(X1)
+            @test Gb isa ReactantStagedArray{Float32,2}
+            @test eltype(Gb) === Float32
+            @test Gb.data ≈ gradlogp_batch_r(X1.data)
+
+            Hvb = m_pb.hvp_batch(X1, V1)
+            Hv_cols = reduce(hcat, [hvp_r(X1.data[:, t], V1.data[:, t]) for t in 1:T])
+            @test Hvb isa ReactantStagedArray{Float32,2}
+            @test Hvb.data ≈ Hv_cols
+        end
+    end
+
     reactant_gpu_ok = try
         using CUDA: CUDA
         CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
@@ -226,6 +321,22 @@ using Enzyme: Enzyme
             Hv = m_p.hvp(x_d, v_d)
             @test Hv isa CUDA.CuArray
             @test Array(Hv) ≈ hvp_r(x_h, v_h)
+
+            # Repeated calls must not alias the reused stages.
+            x_h2 = randn(rng, Float32, D_R)
+            v_h2 = randn(rng, Float32, D_R)
+            x_d2 = CUDA.CuArray(x_h2)
+            v_d2 = CUDA.CuArray(v_h2)
+
+            g2 = m_p.grad_logdensity(x_d2)
+            Hv2 = m_p.hvp(x_d2, v_d2)
+            @test g2 isa CUDA.CuArray
+            @test Array(g2) ≈ gradlogp_r(x_h2)
+            @test Hv2 isa CUDA.CuArray
+            @test Array(Hv2) ≈ hvp_r(x_h2, v_h2)
+
+            @test g !== g2
+            @test Hv !== Hv2
         end
     end
 end

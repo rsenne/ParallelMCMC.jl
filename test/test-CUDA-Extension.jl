@@ -85,6 +85,23 @@ end
     end
 end
 
+@testset "Staging hooks default to plain host arrays" begin
+    buf = ParallelMCMC._host_staging_buffer(zeros(3), Float32, (2, 2))
+    @test buf isa Matrix{Float32}
+    @test size(buf) == (2, 2)
+
+    @test ParallelMCMC._device_array_from_pointer(
+        zeros(3), Float64, C_NULL, (3,), "cpu"
+    ) === nothing
+
+    x = StagedArray(zeros(Float32, 6))
+    buf2 = ParallelMCMC._host_staging_buffer(x, Float64, (3, 2))
+    @test buf2 isa Matrix{Float64}
+    @test size(buf2) == (3, 2)
+    @test ParallelMCMC._device_array_from_pointer(x, Float32, C_NULL, (6,), "cpu") ===
+        nothing
+end
+
 @testset "CUDAExt loads with CUDA" begin
     cuda_loadable = try
         using CUDA
@@ -100,5 +117,44 @@ end
         if CUDA.functional()
             @test ParallelMCMC.needs_host_staging(CUDA.zeros(Float32, 3))
         end
+    end
+end
+
+@testset "CUDAExt device buffer hooks" begin
+    cuda_functional = try
+        using CUDA
+        CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
+    catch
+        false
+    end
+    if !cuda_functional
+        @info "CUDAExt device buffer hooks: CUDA not functional, skipping"
+    else
+        template = CUDA.zeros(Float32, 3)
+
+        host_buf = ParallelMCMC._host_staging_buffer(template, Float32, (2, 3))
+        @test host_buf isa Array{Float32}
+        @test size(host_buf) == (2, 3)
+        @test CUDA.is_pinned(pointer(host_buf))
+
+        # `CuPtr` does not convert to `Ptr`; go through `UInt` like the hook does.
+        src = CUDA.CuArray(Float32[1, 2, 3, 4])
+        raw_ptr = Ptr{Cvoid}(UInt(pointer(src)))
+        dev = ParallelMCMC._device_array_from_pointer(
+            template, Float32, raw_ptr, (4,), "cuda"
+        )
+        @test dev isa CUDA.CuArray{Float32}
+        @test Array(dev) == Array(src)
+
+        # The view aliases the source.
+        dev .= 0.0f0
+        @test all(iszero, Array(src))
+
+        @test ParallelMCMC._device_array_from_pointer(
+            template, Float32, raw_ptr, (4,), "rocm"
+        ) === nothing
+        @test ParallelMCMC._device_array_from_pointer(
+            template, Float32, raw_ptr, (4,), "cpu"
+        ) === nothing
     end
 end
