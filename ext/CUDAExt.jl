@@ -10,14 +10,17 @@ function ParallelMCMC._host_staging_buffer(::CuArray, ::Type{T}, dims::Dims) whe
     return CUDA.pin(Array{T}(undef, dims))
 end
 
-# Non-owning view of an XLA buffer. XLA and CUDA.jl share the device's primary
-# context, so the pointer is usable as a `CuPtr`. Callers copy out of the view
-# while XLA still holds the buffer.
-function ParallelMCMC._device_array_from_pointer(
-    ::CuArray, ::Type{T}, ptr::Ptr{Cvoid}, dims::Dims, platform::AbstractString
+# XLA and CUDA.jl share the device's primary context, so the pointer is usable
+# as a `CuPtr`. The copy runs on CUDA.jl's stream, which XLA does not track, so
+# synchronize before returning: the caller may release the source after this.
+function ParallelMCMC._copy_from_device_pointer!(
+    dest::CuArray{T}, ptr::Ptr{Cvoid}, platform::AbstractString
 ) where {T}
-    platform == "cuda" || return nothing
-    return unsafe_wrap(CuArray, reinterpret(CuPtr{T}, UInt(ptr)), dims; own=false)
+    platform == "cuda" || return false
+    src = unsafe_wrap(CuArray, reinterpret(CuPtr{T}, UInt(ptr)), size(dest); own=false)
+    copyto!(dest, src)
+    CUDA.synchronize()
+    return true
 end
 
 end

@@ -28,27 +28,7 @@ const CT_R = FlexiChains.FlexiChain{Symbol}
 using Reactant: Reactant
 using Enzyme: Enzyme
 
-# Device-array stand-in for the host-staging path without CUDA. Like
-# `StagedArray` in test-CUDA-Extension.jl, but it also needs a broadcast style
-# because `_prepare_model` fills the batched template with `X_template .= x_template`.
-struct ReactantStagedArray{T,N} <: AbstractArray{T,N}
-    data::Array{T,N}
-end
-Base.size(a::ReactantStagedArray) = size(a.data)
-Base.getindex(a::ReactantStagedArray, i::Int...) = a.data[i...]
-function Base.setindex!(::ReactantStagedArray, v, i::Int...)
-    return error("scalar indexing is unsupported")
-end
-function Base.similar(a::ReactantStagedArray, ::Type{T}, dims::Dims) where {T}
-    return ReactantStagedArray(similar(a.data, T, dims))
-end
-Base.copyto!(a::ReactantStagedArray, src::AbstractArray) = (copyto!(a.data, src); a)
-function Base.BroadcastStyle(::Type{<:ReactantStagedArray})
-    return Broadcast.ArrayStyle{ReactantStagedArray}()
-end
-Base.copyto!(a::ReactantStagedArray, bc::Broadcast.Broadcasted) = (copyto!(a.data, bc); a)
-
-ParallelMCMC.needs_host_staging(::ReactantStagedArray) = true
+isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array.jl"))
 
 @testset "Reactant HVP" begin
     @testset "extension is loaded" begin
@@ -233,25 +213,25 @@ ParallelMCMC.needs_host_staging(::ReactantStagedArray) = true
         end
     end
 
-    # `ReactantStagedArray` has no `_device_array_from_pointer` method, so results
-    # come back through the host stage, as they would for a CuArray on the CPU client.
+    # `StagedArray` has no `_copy_from_device_pointer!` method, so results
+    # come back through a plain host download, as they would for a CuArray on the CPU client.
     @testset "staged template" begin
         rng = MersenneTwister(74)
-        x0 = ReactantStagedArray(randn(rng, Float32, D_R))
+        x0 = StagedArray(randn(rng, Float32, D_R))
         model = DensityModel(logp_r32, AutoReactant(), D_R; hvp=AutoReactant())
         m_p = ParallelMCMC._prepare_model(model, x0, 8, nothing)
 
-        x1 = ReactantStagedArray(randn(rng, Float32, D_R))
-        v1 = ReactantStagedArray(randn(rng, Float32, D_R))
-        x2 = ReactantStagedArray(randn(rng, Float32, D_R))
-        v2 = ReactantStagedArray(randn(rng, Float32, D_R))
+        x1 = StagedArray(randn(rng, Float32, D_R))
+        v1 = StagedArray(randn(rng, Float32, D_R))
+        x2 = StagedArray(randn(rng, Float32, D_R))
+        v2 = StagedArray(randn(rng, Float32, D_R))
 
         g1 = m_p.grad_logdensity(x1)
         Hv1 = m_p.hvp(x1, v1)
-        @test g1 isa ReactantStagedArray{Float32,1}
+        @test g1 isa StagedArray{Float32,1}
         @test eltype(g1) === Float32
         @test g1.data ≈ gradlogp_r(x1.data)
-        @test Hv1 isa ReactantStagedArray{Float32,1}
+        @test Hv1 isa StagedArray{Float32,1}
         @test Hv1.data ≈ hvp_r(x1.data, v1.data)
 
         g2 = m_p.grad_logdensity(x2)
@@ -278,17 +258,17 @@ ParallelMCMC.needs_host_staging(::ReactantStagedArray) = true
             )
             m_pb = ParallelMCMC._prepare_model(model_b, x0, T, nothing)
 
-            X1 = ReactantStagedArray(randn(rng, Float32, D_R, T))
-            V1 = ReactantStagedArray(randn(rng, Float32, D_R, T))
+            X1 = StagedArray(randn(rng, Float32, D_R, T))
+            V1 = StagedArray(randn(rng, Float32, D_R, T))
 
             Gb = m_pb.grad_logdensity_batch(X1)
-            @test Gb isa ReactantStagedArray{Float32,2}
+            @test Gb isa StagedArray{Float32,2}
             @test eltype(Gb) === Float32
             @test Gb.data ≈ gradlogp_batch_r(X1.data)
 
             Hvb = m_pb.hvp_batch(X1, V1)
             Hv_cols = reduce(hcat, [hvp_r(X1.data[:, t], V1.data[:, t]) for t in 1:T])
-            @test Hvb isa ReactantStagedArray{Float32,2}
+            @test Hvb isa StagedArray{Float32,2}
             @test Hvb.data ≈ Hv_cols
         end
     end

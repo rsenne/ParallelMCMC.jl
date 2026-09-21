@@ -51,19 +51,15 @@ function _host_staging_buffer(::AbstractArray, ::Type{T}, dims::Dims) where {T}
 end
 
 """
-    _device_array_from_pointer(template::AbstractArray, ::Type{T}, ptr::Ptr{Cvoid}, dims::Dims, platform::AbstractString)
+    _copy_from_device_pointer!(dest::AbstractArray, ptr::Ptr{Cvoid}, platform::AbstractString) -> Bool
 
-Wrap device memory owned by another runtime as an array like `template`, or
-return `nothing` if that array type cannot address it. `platform` is the owner's
-XLA platform name (`"cuda"`, `"rocm"`, `"cpu"`). The result aliases `ptr` and
-does not own it; copy out of it while the owner still holds the memory.
-Defaults to `nothing`.
+Copy device memory owned by another runtime into `dest`, returning `true` on
+success and `false` if `dest`'s array type cannot address `ptr`. `platform` is
+the owner's XLA platform name ("cuda", "rocm", "cpu"). The copy is complete
+when this returns, so the caller may release the source afterwards. Defaults
+to `false`.
 """
-function _device_array_from_pointer(
-    ::AbstractArray, ::Type, ::Ptr{Cvoid}, ::Dims, ::AbstractString
-)
-    return nothing
-end
+_copy_from_device_pointer!(::AbstractArray, ::Ptr{Cvoid}, ::AbstractString) = false
 
 #= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
 and `interface.jl`'s gradient hooks report it. =#

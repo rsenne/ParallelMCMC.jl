@@ -55,21 +55,6 @@ function _in_stage(template::AbstractArray)
     return ParallelMCMC._host_staging_buffer(template, eltype(template), size(template))
 end
 
-# The output eltype can differ from the template's, so run the compiled
-# function once on the template to size the stage. The template is x0, a valid
-# point. The platform is fixed per compiled function.
-function _prepare_output(template::AbstractArray, out_thunk)
-    ParallelMCMC.needs_host_staging(template) || return nothing, ""
-    out = out_thunk()
-    platform = try
-        string(Reactant.XLA.platform_name(Reactant.XLA.client(out)))
-    catch
-        _reactant_client_platform()
-    end
-    out_stage = ParallelMCMC._host_staging_buffer(template, eltype(out), size(out))
-    return out_stage, platform
-end
-
 # Keep promotions performed by the compiled function. Callers hold on to
 # gradients, so the result is a fresh array every call.
 function _promote_like(template::AbstractArray, out_h::Array)
@@ -79,88 +64,48 @@ function _promote_like(template::AbstractArray, out_h::Array)
     return res
 end
 
-# Pointer access needs an unsharded PJRT buffer that is not already on the
-# host. `nothing` means fall back to host staging.
-function _device_view(template::AbstractArray, out, platform::AbstractString)
+# Raw pointer to an XLA buffer, or `nothing` if it cannot be taken: pointer
+# access needs an unsharded PJRT buffer that is not already on the host.
+function _device_pointer(out)
     out isa Reactant.ConcretePJRTArray || return nothing
     Reactant.Sharding.is_sharded(out.sharding) && return nothing
+    wait(out)
     buf = Reactant.get_buffer(out)
     Reactant.XLA.buffer_on_cpu(buf) && return nothing
-    ptr = Reactant.XLA.unsafe_buffer_pointer(buf)
-    return ParallelMCMC._device_array_from_pointer(
-        template, eltype(out), ptr, size(out), platform
-    )
+    return Reactant.XLA.unsafe_buffer_pointer(buf)
 end
 
-# No stage: `Array(out)` already allocates a fresh host array.
-function _download(template::AbstractArray, out, ::Nothing, ::AbstractString)
+function _download(template::AbstractArray, out, platform::AbstractString)
+    ptr = ParallelMCMC.needs_host_staging(template) ? _device_pointer(out) : nothing
+    if ptr !== nothing
+        res = similar(template, eltype(out), size(out))
+        GC.@preserve out begin
+            ParallelMCMC._copy_from_device_pointer!(res, ptr, platform) && return res
+        end
+    end
     return _promote_like(template, Array(out))
 end
 
-function _download(
-    template::AbstractArray, out, out_stage::AbstractArray, platform::AbstractString
-)
-    wait(out)
-    view = _device_view(template, out, platform)
-    if view !== nothing
-        res = similar(template, eltype(out), size(out))
-        GC.@preserve out copyto!(res, view)
-        return res
-    end
-    # CPU client, IFRT, sharded, or a device family without pointer wrapping.
-    copyto!(out_stage, out)
-    res = similar(template, eltype(out), size(out))
-    copyto!(res, out_stage)
-    return res
-end
-
 # One of these per compiled function, owning its staging buffers. `template` is
-# the first argument; HVP outputs follow `x`, not `v`.
-struct ReactantUnary{F,S1,T,OS}
+# the first argument; HVP outputs follow `x`, not `v`. `stages` has one entry
+# per argument, `nothing` or a host buffer. `platform` is fixed at compile time
+# from the default XLA client.
+struct ReactantCall{F,S,T}
     compiled::F
-    in1_stage::S1
+    stages::S
     template::T
-    out_stage::OS
     platform::String
 end
 
-function (c::ReactantUnary)(x::AbstractArray)
-    xr = _upload(x, c.in1_stage)
-    return _download(c.template, c.compiled(xr), c.out_stage, c.platform)
+function (c::ReactantCall)(args::AbstractArray...)
+    return _download(c.template, c.compiled(map(_upload, args, c.stages)...), c.platform)
 end
 
-struct ReactantBinary{F,S1,S2,T,OS}
-    compiled::F
-    in1_stage::S1
-    in2_stage::S2
-    template::T
-    out_stage::OS
-    platform::String
-end
-
-function (c::ReactantBinary)(x::AbstractArray, v::AbstractArray)
-    xr = _upload(x, c.in1_stage)
-    vr = _upload(v, c.in2_stage)
-    return _download(c.template, c.compiled(xr, vr), c.out_stage, c.platform)
-end
-
-function _compiled(core, t1::AbstractArray)
-    _warn_reactant_host_roundtrip(t1)
-    in1_stage = _in_stage(t1)
-    compiled = @compile core(_upload(t1, in1_stage))
-    out_stage, platform = _prepare_output(t1, () -> compiled(_upload(t1, in1_stage)))
-    return ReactantUnary(compiled, in1_stage, t1, out_stage, platform)
-end
-
-function _compiled(core, t1::AbstractArray, t2::AbstractArray)
-    _warn_reactant_host_roundtrip(t1)
-    in1_stage = _in_stage(t1)
-    in2_stage = _in_stage(t2)
-    compiled = @compile core(_upload(t1, in1_stage), _upload(t2, in2_stage))
-    out_stage, platform = _prepare_output(
-        t1, () -> compiled(_upload(t1, in1_stage), _upload(t2, in2_stage))
-    )
-    return ReactantBinary(compiled, in1_stage, in2_stage, t1, out_stage, platform)
+function _compiled(core, templates::AbstractArray...)
+    _warn_reactant_host_roundtrip(templates[1])
+    stages = map(_in_stage, templates)
+    compiled = @compile core(map(_upload, templates, stages)...)
+    return ReactantCall(compiled, stages, templates[1], _reactant_client_platform())
 end
 
 # For g = gradlogp, this JVP is the HVP. The callable and its captures are constant.
