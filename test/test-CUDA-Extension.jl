@@ -14,19 +14,7 @@ end
     @test ws.zhost === nothing
 end
 
-# Device-array stand-in: scalar `setindex!` errors, as on `CuArray`.
-struct StagedArray{T,N} <: AbstractArray{T,N}
-    data::Array{T,N}
-end
-Base.size(a::StagedArray) = size(a.data)
-Base.getindex(a::StagedArray, i::Int...) = a.data[i...]
-Base.setindex!(::StagedArray, v, i::Int...) = error("scalar indexing is unsupported")
-function Base.similar(a::StagedArray, ::Type{T}, dims::Dims) where {T}
-    return StagedArray(similar(a.data, T, dims))
-end
-Base.copyto!(a::StagedArray, src::AbstractArray) = (copyto!(a.data, src); a)
-
-ParallelMCMC.needs_host_staging(::StagedArray) = true
+isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array.jl"))
 
 @testset "Opting a device array type in" begin
     x = StagedArray(zeros(Float32, 6))
@@ -85,6 +73,20 @@ end
     end
 end
 
+@testset "Staging hooks default to plain host arrays" begin
+    buf = ParallelMCMC._host_staging_buffer(zeros(3), Float32, (2, 2))
+    @test buf isa Matrix{Float32}
+    @test size(buf) == (2, 2)
+
+    @test ParallelMCMC._copy_from_device_pointer!(zeros(3), C_NULL, "cpu") == false
+
+    x = StagedArray(zeros(Float32, 6))
+    buf2 = ParallelMCMC._host_staging_buffer(x, Float64, (3, 2))
+    @test buf2 isa Matrix{Float64}
+    @test size(buf2) == (3, 2)
+    @test ParallelMCMC._copy_from_device_pointer!(x, C_NULL, "cpu") == false
+end
+
 @testset "CUDAExt loads with CUDA" begin
     cuda_loadable = try
         using CUDA
@@ -100,5 +102,41 @@ end
         if CUDA.functional()
             @test ParallelMCMC.needs_host_staging(CUDA.zeros(Float32, 3))
         end
+    end
+end
+
+@testset "CUDAExt device buffer hooks" begin
+    cuda_functional = try
+        using CUDA
+        CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
+    catch
+        false
+    end
+    # The extension check is what "CUDAExt loads with CUDA" above asserts; repeat
+    # it as a guard so a load failure reports once instead of failing every hook.
+    if !cuda_functional || Base.get_extension(ParallelMCMC, :CUDAExt) === nothing
+        @info "CUDAExt device buffer hooks: CUDAExt unavailable, skipping"
+    else
+        template = CUDA.zeros(Float32, 3)
+
+        host_buf = ParallelMCMC._host_staging_buffer(template, Float32, (2, 3))
+        @test host_buf isa Array{Float32}
+        @test size(host_buf) == (2, 3)
+        @test CUDA.is_pinned(pointer(host_buf))
+
+        # `CuPtr` does not convert to `Ptr`; go through `UInt` like the hook does.
+        src = CUDA.CuArray(Float32[1, 2, 3, 4])
+        raw_ptr = Ptr{Cvoid}(UInt(pointer(src)))
+        dest = CUDA.CuArray{Float32}(undef, 4)
+        @test ParallelMCMC._copy_from_device_pointer!(dest, raw_ptr, "cuda") == true
+        @test Array(dest) == Array(src)
+
+        # The copy landed: dest does not alias src.
+        dest .= 0.0f0
+        @test Array(src) == Float32[1, 2, 3, 4]
+
+        dest2 = CUDA.CuArray{Float32}(undef, 4)
+        @test ParallelMCMC._copy_from_device_pointer!(dest2, raw_ptr, "rocm") == false
+        @test ParallelMCMC._copy_from_device_pointer!(dest2, raw_ptr, "cpu") == false
     end
 end

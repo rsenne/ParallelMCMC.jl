@@ -25,44 +25,93 @@ end
 function _warn_reactant_host_roundtrip(x::AbstractArray)
     if ParallelMCMC.needs_host_staging(x) && _reactant_client_platform() == "cpu"
         @warn "AutoReactant: preparing on a $(typeof(x)), but Reactant's default XLA " *
-            "client targets \"cpu\". Every call will round-trip to the host and back " *
-            "instead of running where the array lives. Select a GPU client with " *
-            "`Reactant.set_default_backend(\"gpu\")` if one is available." maxlog = 1
+            "client targets \"cpu\". Every call will copy to the host and back. " *
+            "Select a GPU client with `Reactant.set_default_backend(\"gpu\")` if one " *
+            "is available." maxlog = 1
     end
     return nothing
 end
 
-_host(x::Array) = x
-_host(x::AbstractArray) = Array(x)
+#=
+Every call uploads through `to_rarray`. Caching the XLA buffer instead would be
+slower: Reactant's `copyto!` into an existing ConcreteRArray uploads to a new
+buffer and then runs a compiled device copy on top of it.
 
-# Preserve promotions performed by the compiled function. The result is a fresh
-# array every call: callers keep gradients (tapes, workspaces), so it must not
-# alias a reused buffer.
-function _from_host(template::AbstractArray, out)
-    out_h = Array(out)
+XLA takes the host stage with `kImmutableOnlyDuringCall` semantics, so the stage
+is free to overwrite once `to_rarray` returns. `to_rarray` wants an `Array`, so
+views get collected first, as in `DEER._materialize_ad_array`.
+=#
+_upload(x::Array, ::Nothing) = Reactant.to_rarray(x)
+_upload(x::AbstractArray, ::Nothing) = Reactant.to_rarray(Array(x))
+#= XLA only ever sees the stage, so a short `x` would leave its tail holding the
+previous call's values and the compiled function would run on them. Uploading
+`x` directly would have failed XLA's shape check instead. =#
+function _upload(x::AbstractArray, stage::AbstractArray)
+    size(x) == size(stage) || throw(
+        DimensionMismatch(
+            "AutoReactant compiled for input size $(size(stage)), got $(size(x))"
+        ),
+    )
+    copyto!(stage, x)
+    return Reactant.to_rarray(stage)
+end
+
+# Host arrays upload directly and need no stage.
+function _in_stage(template::AbstractArray)
+    ParallelMCMC.needs_host_staging(template) || return nothing
+    return ParallelMCMC._host_staging_buffer(template, eltype(template), size(template))
+end
+
+# Keep any promotion the compiled function performed. Callers hold on to
+# gradients, so every call returns a fresh array.
+function _promote_like(template::AbstractArray, out_h::Array)
     template isa Array && eltype(out_h) === eltype(template) && return out_h
     res = similar(template, eltype(out_h), size(out_h))
     copyto!(res, out_h)
     return res
 end
 
-#=
-Reactant's `copyto!(::ConcreteRArray, ::Array)` uploads to a new buffer and
-then runs a compiled device-to-device copy into the destination, which is
-strictly more work than the upload alone.
-=#
-_upload(x::AbstractArray) = Reactant.to_rarray(_host(x))
-
-function _compiled(core, t1::AbstractArray)
-    _warn_reactant_host_roundtrip(t1)
-    compiled = @compile core(_upload(t1))
-    return x -> _from_host(x, compiled(_upload(x)))
+# Device pointer to an XLA buffer, or `nothing` if it cannot be taken: pointer
+# access needs an unsharded PJRT buffer that is not already on the host.
+function _device_pointer(out)
+    out isa Reactant.ConcretePJRTArray || return nothing
+    Reactant.Sharding.is_sharded(out.sharding) && return nothing
+    wait(out)
+    buf = Reactant.get_buffer(out)
+    Reactant.XLA.buffer_on_cpu(buf) && return nothing
+    return Reactant.XLA.unsafe_buffer_pointer(buf)
 end
 
-function _compiled(core, t1::AbstractArray, t2::AbstractArray)
-    _warn_reactant_host_roundtrip(t1)
-    compiled = @compile core(_upload(t1), _upload(t2))
-    return (x, v) -> _from_host(x, compiled(_upload(x), _upload(v)))
+function _download(template::AbstractArray, out, platform::AbstractString)
+    ptr = ParallelMCMC.needs_host_staging(template) ? _device_pointer(out) : nothing
+    if ptr !== nothing
+        res = similar(template, eltype(out), size(out))
+        GC.@preserve out begin
+            ParallelMCMC._copy_from_device_pointer!(res, ptr, platform) && return res
+        end
+    end
+    return _promote_like(template, Array(out))
+end
+
+# One per compiled function, owning a staging buffer per argument. `template`
+# is the first argument, whose array type the result is rebuilt as.
+# `platform` is read once, at compile time, from the default XLA client.
+struct ReactantCall{F,S,T}
+    compiled::F
+    stages::S
+    template::T
+    platform::String
+end
+
+function (c::ReactantCall)(args::AbstractArray...)
+    return _download(c.template, c.compiled(map(_upload, args, c.stages)...), c.platform)
+end
+
+function _compiled(core, templates::AbstractArray...)
+    _warn_reactant_host_roundtrip(templates[1])
+    stages = map(_in_stage, templates)
+    compiled = @compile core(map(_upload, templates, stages)...)
+    return ReactantCall(compiled, stages, templates[1], _reactant_client_platform())
 end
 
 # For g = gradlogp, this JVP is the HVP. The callable and its captures are constant.

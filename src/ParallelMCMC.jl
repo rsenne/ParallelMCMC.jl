@@ -40,6 +40,26 @@ ParallelMCMC.needs_host_staging(::ROCArray) = true
 """
 needs_host_staging(::AbstractArray) = false
 
+"""
+    _host_staging_buffer(template::AbstractArray, ::Type{T}, dims::Dims) -> Array{T}
+
+Host buffer for staging copies between the host and arrays like `template`.
+Device extensions can return pinned memory. Defaults to a plain `Array`.
+"""
+function _host_staging_buffer(::AbstractArray, ::Type{T}, dims::Dims) where {T}
+    return Array{T}(undef, dims)
+end
+
+"""
+    _copy_from_device_pointer!(dest::AbstractArray, ptr::Ptr{Cvoid}, platform::AbstractString) -> Bool
+
+Copy device memory owned by another runtime into `dest`. `platform` is the
+owner's XLA platform name ("cuda", "rocm", "cpu"). Returns `false` if `dest`'s
+array type cannot address `ptr`, which is the default; on `true` the copy has
+finished, so the caller may release the source.
+"""
+_copy_from_device_pointer!(::AbstractArray, ::Ptr{Cvoid}, ::AbstractString) = false
+
 #= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
 and `interface.jl`'s gradient hooks report it. =#
 const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using Reactant` to load ParallelMCMC's ReactantExt."
