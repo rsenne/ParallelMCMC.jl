@@ -47,8 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend in `grad_logdensity` to derive one.
 - Batched derivative slots require `logdensity_batch`. An `hvp_batch` without
   a batched gradient now raises an error.
-- `AutoReactant` reuses pinned host buffers for device-array inputs and copies
-  results on the device when the XLA client is on the GPU (#73).
+- `AutoReactant` stages device-array inputs through reused pinned host buffers,
+  and copies results device-to-device when the XLA client is on the GPU (#73).
 
 ### Removed
 

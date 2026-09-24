@@ -1,7 +1,7 @@
-#= Device-array stand-in for the host-staging paths, so they can be tested
-without a GPU. Scalar `setindex!` errors, as on `CuArray`. Shared by
-test-CUDA-Extension.jl and test-Reactant-HVP.jl; the name does not match
-`test-*.jl`, so runtests.jl does not include it as a testset. =#
+#= Device-array stand-in, so the host-staging paths can be exercised without a
+GPU: scalar `setindex!` errors, as on `CuArray`. Included by
+test-CUDA-Extension.jl and test-Reactant-HVP.jl; the name is off the
+`test-*.jl` pattern so runtests.jl does not pick it up as a testset. =#
 
 struct StagedArray{T,N} <: AbstractArray{T,N}
     data::Array{T,N}
@@ -15,8 +15,8 @@ function Base.similar(a::StagedArray, ::Type{T}, dims::Dims) where {T}
 end
 Base.copyto!(a::StagedArray, src::AbstractArray) = (copyto!(a.data, src); a)
 
-# `_prepare_model` fills the batched template with `X_template .= x_template`.
-# The zero-dim method disambiguates against Base's, so scalar fills also work.
+# `_prepare_model` builds the batched template with `X_template .= x_template`.
+# The zero-dim method only resolves an ambiguity with Base's.
 Base.BroadcastStyle(::Type{<:StagedArray}) = Broadcast.ArrayStyle{StagedArray}()
 Base.copyto!(a::StagedArray, bc::Broadcast.Broadcasted) = (copyto!(a.data, bc); a)
 function Base.copyto!(

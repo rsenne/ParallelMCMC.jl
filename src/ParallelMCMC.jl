@@ -43,8 +43,8 @@ needs_host_staging(::AbstractArray) = false
 """
     _host_staging_buffer(template::AbstractArray, ::Type{T}, dims::Dims) -> Array{T}
 
-Host buffer for staging transfers to and from arrays like `template`. Device
-extensions can return pinned memory. Defaults to a plain `Array`.
+Host buffer for staging copies between the host and arrays like `template`.
+Device extensions can return pinned memory. Defaults to a plain `Array`.
 """
 function _host_staging_buffer(::AbstractArray, ::Type{T}, dims::Dims) where {T}
     return Array{T}(undef, dims)
@@ -53,11 +53,10 @@ end
 """
     _copy_from_device_pointer!(dest::AbstractArray, ptr::Ptr{Cvoid}, platform::AbstractString) -> Bool
 
-Copy device memory owned by another runtime into `dest`, returning `true` on
-success and `false` if `dest`'s array type cannot address `ptr`. `platform` is
-the owner's XLA platform name ("cuda", "rocm", "cpu"). The copy is complete
-when this returns, so the caller may release the source afterwards. Defaults
-to `false`.
+Copy device memory owned by another runtime into `dest`. `platform` is the
+owner's XLA platform name ("cuda", "rocm", "cpu"). Returns `false` if `dest`'s
+array type cannot address `ptr`, which is the default; on `true` the copy has
+finished, so the caller may release the source.
 """
 _copy_from_device_pointer!(::AbstractArray, ::Ptr{Cvoid}, ::AbstractString) = false
 

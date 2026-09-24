@@ -5,14 +5,18 @@ using CUDA: CUDA, CuArray, CuPtr
 
 ParallelMCMC.needs_host_staging(::CuArray) = true
 
-# Pinned host memory: the driver can DMA directly instead of staging the copy.
+#= Pinned, so the device-to-host copy into this buffer can DMA directly.
+`CUDA.pin` returns `nothing` for an already-registered address, so don't
+forward its result. =#
 function ParallelMCMC._host_staging_buffer(::CuArray, ::Type{T}, dims::Dims) where {T}
-    return CUDA.pin(Array{T}(undef, dims))
+    buf = Array{T}(undef, dims)
+    CUDA.pin(buf)
+    return buf
 end
 
-# XLA and CUDA.jl share the device's primary context, so the pointer is usable
-# as a `CuPtr`. The copy runs on CUDA.jl's stream, which XLA does not track, so
-# synchronize before returning: the caller may release the source after this.
+#= XLA and CUDA.jl share the device's primary context, so the pointer is usable
+as a `CuPtr`. The copy runs on CUDA.jl's stream, which XLA does not track;
+synchronize before returning, since the caller may release the source. =#
 function ParallelMCMC._copy_from_device_pointer!(
     dest::CuArray{T}, ptr::Ptr{Cvoid}, platform::AbstractString
 ) where {T}

@@ -8,6 +8,7 @@ on:
       - "src/**"
       - "ext/ReactantExt.jl"
       - "test/test-Reactant-*.jl"
+      - "test/staged_array.jl"
       - "Project.toml"
       - "test/Project.toml"
       - ".github/workflows/TestReactant.yml"

@@ -112,8 +112,10 @@ end
     catch
         false
     end
-    if !cuda_functional
-        @info "CUDAExt device buffer hooks: CUDA not functional, skipping"
+    # The extension check is what "CUDAExt loads with CUDA" above asserts; repeat
+    # it as a guard so a load failure reports once instead of failing every hook.
+    if !cuda_functional || Base.get_extension(ParallelMCMC, :CUDAExt) === nothing
+        @info "CUDAExt device buffer hooks: CUDAExt unavailable, skipping"
     else
         template = CUDA.zeros(Float32, 3)
 

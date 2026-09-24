@@ -213,8 +213,8 @@ isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array
         end
     end
 
-    # `StagedArray` has no `_copy_from_device_pointer!` method, so results
-    # come back through a plain host download, as they would for a CuArray on the CPU client.
+    # `StagedArray` has no `_copy_from_device_pointer!` method, so results come
+    # back through a plain host download, as a `CuArray` would on the CPU client.
     @testset "staged template" begin
         rng = MersenneTwister(74)
         x0 = StagedArray(randn(rng, Float32, D_R))
@@ -244,6 +244,16 @@ isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array
         @test g1.data !== g2.data
         @test Hv1 !== Hv2
         @test Hv1.data !== Hv2.data
+
+        # Everything above would also pass if no stage had been allocated.
+        @test only(m_p.grad_logdensity.stages) isa Vector{Float32}
+        @test size(only(m_p.grad_logdensity.stages)) == (D_R,)
+        @test all(s -> s isa Vector{Float32}, m_p.hvp.stages)
+
+        # XLA only ever sees the stage, so a short input has to be rejected here.
+        @test_throws DimensionMismatch m_p.grad_logdensity(
+            StagedArray(randn(rng, Float32, D_R - 1))
+        )
 
         @testset "batched slots" begin
             T = 8

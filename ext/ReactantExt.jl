@@ -33,18 +33,25 @@ function _warn_reactant_host_roundtrip(x::AbstractArray)
 end
 
 #=
-Inputs go through `to_rarray` every call. Reactant's `copyto!` into an existing
-ConcreteRArray uploads to a new buffer and then runs a compiled device copy on
-top, so keeping XLA input buffers around would cost more, not less. The host
-staging array is safe to reuse immediately: `ArrayFromHostBuffer` reads it
-inside a `GC.@preserve` that ends when the call returns.
+Every call uploads through `to_rarray`. Caching the XLA buffer instead would be
+slower: Reactant's `copyto!` into an existing ConcreteRArray uploads to a new
+buffer and then runs a compiled device copy on top of it.
 
-`to_rarray` wants an `Array`; views get collected first, as in
-`DEER._materialize_ad_array`.
+XLA takes the host stage with `kImmutableOnlyDuringCall` semantics, so the stage
+is free to overwrite once `to_rarray` returns. `to_rarray` wants an `Array`, so
+views get collected first, as in `DEER._materialize_ad_array`.
 =#
 _upload(x::Array, ::Nothing) = Reactant.to_rarray(x)
 _upload(x::AbstractArray, ::Nothing) = Reactant.to_rarray(Array(x))
+#= XLA only ever sees the stage, so a short `x` would leave its tail holding the
+previous call's values and the compiled function would run on them. Uploading
+`x` directly would have failed XLA's shape check instead. =#
 function _upload(x::AbstractArray, stage::AbstractArray)
+    size(x) == size(stage) || throw(
+        DimensionMismatch(
+            "AutoReactant compiled for input size $(size(stage)), got $(size(x))"
+        ),
+    )
     copyto!(stage, x)
     return Reactant.to_rarray(stage)
 end
@@ -55,8 +62,8 @@ function _in_stage(template::AbstractArray)
     return ParallelMCMC._host_staging_buffer(template, eltype(template), size(template))
 end
 
-# Keep promotions performed by the compiled function. Callers hold on to
-# gradients, so the result is a fresh array every call.
+# Keep any promotion the compiled function performed. Callers hold on to
+# gradients, so every call returns a fresh array.
 function _promote_like(template::AbstractArray, out_h::Array)
     template isa Array && eltype(out_h) === eltype(template) && return out_h
     res = similar(template, eltype(out_h), size(out_h))
@@ -64,7 +71,7 @@ function _promote_like(template::AbstractArray, out_h::Array)
     return res
 end
 
-# Raw pointer to an XLA buffer, or `nothing` if it cannot be taken: pointer
+# Device pointer to an XLA buffer, or `nothing` if it cannot be taken: pointer
 # access needs an unsharded PJRT buffer that is not already on the host.
 function _device_pointer(out)
     out isa Reactant.ConcretePJRTArray || return nothing
@@ -86,10 +93,9 @@ function _download(template::AbstractArray, out, platform::AbstractString)
     return _promote_like(template, Array(out))
 end
 
-# One of these per compiled function, owning its staging buffers. `template` is
-# the first argument; HVP outputs follow `x`, not `v`. `stages` has one entry
-# per argument, `nothing` or a host buffer. `platform` is fixed at compile time
-# from the default XLA client.
+# One per compiled function, owning a staging buffer per argument. `template`
+# is the first argument, whose array type the result is rebuilt as.
+# `platform` is read once, at compile time, from the default XLA client.
 struct ReactantCall{F,S,T}
     compiled::F
     stages::S
