@@ -39,11 +39,11 @@ function TapedRecursion(
 end
 
 """
-Reusable buffers for allocation-light DEER updates and solves.
+Reusable buffers for DEER updates and solves.
 
-All buffers are created with the same array type / device placement as `S_template`
-(or `s0_template` for vector buffers), so the workspace is GPU-compatible when
-constructed from device-array templates.
+Matrix buffers use the array type and device of `S_template`; vector buffers
+use those of `s0_template`. Device arrays that require host staging also get
+CPU buffers for generating random probes.
 """
 struct DEERWorkspace{M,V,SW,HZ,H}
     A::M
@@ -147,24 +147,11 @@ function _batch_hvp_from_grad_prepared(
     return res isa Tuple ? first(res) : res
 end
 
-#=
----------------------------------------------------------------------------
-Reverse-on-grad HVP. Computes Hv as the gradient of
-`x -> pmcmc_dot(gradlogp(x), v)`, with `v` carried as a DI Constant context
-so a single `prepare_gradient` covers all subsequent Newton steps. The
-batched variant uses `B -> pmcmc_dotsum(grad_batch(B), V)` and exploits the
-column-independence of the user's batched gradient — its gradient w.r.t. B
-is the columnwise HVP.
-
-The reductions go through `pmcmc_dot`/`pmcmc_dotsum` (rather than `dot`/`sum`)
-so that on GPU the EnzymeExt reverse rules intercept them — otherwise Enzyme
-reverse-mode hits the `cuMemcpyDtoHAsync_v2` gc-transition abort (see the
-Enzyme rules in `ext/EnzymeExt.jl`).
-
-We bundle the closure with the prep so `prepare_gradient` and `gradient`
-see the same function instance (DI keys preparations on function identity).
----------------------------------------------------------------------------
-=#
+# Compute H*v by differentiating dot(gradlogp(x), v). DI.Constant lets us
+# change v without preparing the gradient again. Batched gradients must treat
+# columns independently for this calculation to give columnwise HVPs.
+# Use pmcmc reductions so Enzyme's GPU rules avoid the gc-transition abort.
+# Keep the closure with its preparation: DI requires the same function instance.
 import ..ParallelMCMC: pmcmc_dot, pmcmc_dotsum, _REACTANT_LOAD_HINT
 
 struct _HvpReverseClosure{F}
@@ -177,27 +164,10 @@ struct _BatchHvpReverseClosure{F}
 end
 (c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
 
-#=
-Pick the AD-HVP fallback strategy from the user's backend. Both are one AD pass
-over a hand-written `gradlogp`; an AD-derived gradient goes to
-`_make_hvp_fn_second_order` instead.
-
-  ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
-                      `pmcmc_matmul` frule.
-  ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
-                      through the matmul and dot/sum rrules.
-
-These are singleton types rather than symbols so the choice dispatches
-statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
-concrete method (and one concrete return type) at compile time, without
-relying on constant propagation through `===`.
-
-The routing follows DI's `hvp_mode`: a forward outer pass
-(`DI.ForwardOverAnything`) takes `ForwardOnGrad`, anything else
-`ReverseOnGrad`. Only the outer direction matters since we differentiate
-the already-built `gradlogp`. The mode is whatever the user's backend carries;
-nothing here substitutes one (see `_normalized_backend`).
-=#
+# Differentiate a supplied gradient in the direction chosen by DI.hvp_mode:
+# forward mode computes J*v; reverse mode differentiates dot(gradlogp(x), v).
+# Strategy types let dispatch select a concrete closure type. AD-derived
+# gradients use _make_hvp_fn_second_order instead.
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
@@ -248,12 +218,7 @@ function _batch_hvp_via_grad_reverse_prepared(
     return DI.gradient(f, prep, eff_backend, X, DI.Constant(V))
 end
 
-#=
-Strategy-dispatched factories. Each method returns a closure with one
-concrete type, so the call site `_make_hvp_fn(_hvp_strategy(backend), ...)`
-is type-stable: dispatch on the singleton `HVPStrategy` picks the method
-at compile time, and the returned closure type is statically known.
-=#
+# Each strategy returns its own concrete closure type.
 function _make_hvp_fn(
     ::ForwardOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
 )
@@ -412,8 +377,8 @@ end
 """
 In-place DEER update.
 
-Writes the updated trajectory into `S_out` using `S_in` as the current iterate and
-workspace buffers for all internal temporaries that can be controlled here.
+Write one update of `S_in` into `S_out`, reusing buffers in `ws`.
+Both trajectories must have size `(length(s0_in), length(rec.tape))`.
 """
 function deer_update!(
     ws::DEERWorkspace,
@@ -535,16 +500,15 @@ function deer_update(
 end
 
 """
-Run DEER iterations until convergence.
+Run DEER until the change between iterates meets the tolerances or `maxiter`
+is reached. Set `return_info=true` to return `(trajectory, info)` and check
+`info.converged`; reaching `maxiter` does not throw an error.
 
-When no workspace is supplied, one is created automatically. Supplying a
-pre-allocated `DEERWorkspace` is the intended path for repeated GPU solves.
+Pass a `DEERWorkspace` to reuse buffers across solves. Otherwise, one is created.
 
-If `workspace` is supplied, `copy_result` defaults to `true` so the returned
-trajectory is owned by the caller and will not be overwritten by a later solve
-using the same workspace. Set `copy_result=false` for allocation-sensitive
-internal loops; in that mode the returned trajectory may alias workspace-owned
-buffers such as `workspace.S_tmp`.
+With a supplied workspace, the result is copied by default so later solves
+cannot overwrite it. Set `copy_result=false` to skip that copy, but use or copy
+the result before reusing the workspace.
 """
 function solve(
     rec::TapedRecursion,
