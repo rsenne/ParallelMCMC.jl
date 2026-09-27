@@ -1,5 +1,23 @@
 """
-    AdaptiveMALASampler(epsilon_init; n_warmup, target_accept, gamma, t0, kappa, cholM)
+    AdaptiveMALASampler(epsilon_init; n_warmup=1000,
+                        target_accept=0.574, gamma=0.05,
+                        t0=10.0, kappa=0.75, cholM=nothing)
+
+Create a sequential MALA sampler with dual-averaging step-size adaptation.
+
+Adaptation begins at the positive step size `epsilon_init`, targets the
+acceptance probability `target_accept`, and stops after `n_warmup` warmup
+transitions. The averaged step size is then held fixed. Set
+`discard_warmup=true` in `sample` to omit warmup-marked states from the returned
+chain.
+
+`gamma`, `t0`, and `kappa` control the dual-averaging schedule. Their defaults
+are usually a better starting point than manual adjustment. `cholM` has the
+same preconditioning meaning as in [`MALASampler`](@ref).
+
+The chain stores `:step_size`, `:accepted`, and `:is_warmup` as extra fields.
+This sampler is a convenient way to choose an `epsilon` for
+[`ParallelMALASampler`](@ref).
 """
 struct AdaptiveMALASampler{FP<:AbstractFloat,CM} <: AbstractMCMC.AbstractSampler
     epsilon_init::FP
