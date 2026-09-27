@@ -103,8 +103,27 @@ struct ReactantCall{F,S,T}
     platform::String
 end
 
+#=
+XLA buffers are freed by GC finalizers. Reusing stages creates very little host
+garbage, so GC may not run before device memory fills up. Finalize buffers as
+soon as they are no longer needed; PJRT waits for any pending work before freeing
+them. Finalization runs only once, even if a compiled function returns an input
+wrapped in a new array. Donated inputs no longer own their buffers, so skip them.
+=#
+function _free!(x)
+    x isa Reactant.ConcretePJRTArray || return nothing
+    (x.donated || Reactant.Sharding.is_sharded(x.sharding)) && return nothing
+    finalize(Reactant.get_buffer(x))
+    return nothing
+end
+
 function (c::ReactantCall)(args::AbstractArray...)
-    return _download(c.template, c.compiled(map(_upload, args, c.stages)...), c.platform)
+    inputs = map(_upload, args, c.stages)
+    out = c.compiled(inputs...)
+    res = _download(c.template, out, c.platform)
+    foreach(_free!, inputs)
+    _free!(out)
+    return res
 end
 
 function _compiled(core, templates::AbstractArray...)

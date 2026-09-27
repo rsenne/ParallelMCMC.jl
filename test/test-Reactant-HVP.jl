@@ -283,6 +283,18 @@ isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array
         end
     end
 
+    @testset "eager buffer free survives an aliased result" begin
+        ext = Base.get_extension(ParallelMCMC, :ReactantExt)
+        rng = MersenneTwister(75)
+        for template in (randn(rng, Float32, D_R), StagedArray(randn(rng, Float32, D_R)))
+            call = ext._compiled(identity, template)
+            xs = [typeof(template)(randn(rng, Float32, D_R)) for _ in 1:50]
+            ys = map(call, xs)
+            GC.gc(true)
+            @test all(((x, y),) -> collect(y) == collect(x), zip(xs, ys))
+        end
+    end
+
     reactant_gpu_ok = try
         using CUDA: CUDA
         CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
