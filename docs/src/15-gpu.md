@@ -8,6 +8,8 @@ the selected AD backend must all support the device.
 CUDA is an optional dependency. `using CUDA` activates ParallelMCMC's extension
 for `CuArray` storage without making CUDA part of a CPU-only installation.
 
+ParallelMCMC does not depend on CUDA.jl.  `using CUDA` loads the `CUDAExt` extension, which is required for `CuArray` parameters.
+
 ---
 
 ## Decide whether a GPU is worthwhile

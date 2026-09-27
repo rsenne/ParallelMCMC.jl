@@ -60,6 +60,31 @@ end
     @test_throws ErrorException ParallelMCMC._randn_like!(MersenneTwister(0), ξ, nothing)
 end
 
+@testset "Parallel MALA tape block stages through the host" begin
+    D, T, seed = 3, 4, 1234
+
+    tape, Xi, U = ParallelMCMC._make_mala_tape_block(
+        MersenneTwister(seed), StagedArray(zeros(Float32, D)), Float32, D, T
+    )
+    @test Xi isa StagedArray{Float32,2}
+    @test size(Xi) == (D, T)
+    @test U isa StagedArray{Float32,1}
+    @test length(U) == T
+    @test length(tape) == T
+
+    ref_tape, ref_Xi, ref_U = ParallelMCMC._make_mala_tape_block(
+        MersenneTwister(seed), zeros(Float32, D), Float32, D, T
+    )
+    @test ref_Xi isa Matrix{Float32}
+    @test Xi.data == ref_Xi
+    @test U.data == ref_U
+    for t in 1:T
+        @test collect(tape[t].ξ) == ref_Xi[:, t]
+        @test tape[t].u == ref_tape[t].u
+        @test 0 <= tape[t].u <= 1
+    end
+end
+
 @testset "CUDAExt loads with CUDA" begin
     cuda_loadable = try
         using CUDA

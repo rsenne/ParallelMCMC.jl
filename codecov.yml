@@ -14,5 +14,9 @@ coverage:
 # which does not emit Julia's --code-coverage line counters, so they report as
 # uncovered even though test-Owned-Matmul.jl exercises them and asserts correct
 # numerics.
+
+# ext/CUDAExt.jl is a two-line trait shim whose only statement,
+# `needs_host_staging(::CuArray) = true`, cannot run without a physical GPU, so we drop
 ignore:
   - "ext/EnzymeExt.jl"
+  - "ext/CUDAExt.jl"
