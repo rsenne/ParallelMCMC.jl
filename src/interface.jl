@@ -6,40 +6,42 @@ Defines model/sampler/state/transition types and implements
 =#
 
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp, hvp_batch)
+    DensityModel(logdensity, grad_logdensity, dim;
+                 param_names=nothing, hvp=nothing,
+                 logdensity_batch=nothing,
+                 grad_logdensity_batch=nothing, hvp_batch=nothing)
 
-Wrap a log-density and its derivatives for ParallelMCMC samplers.
+Describe a target density and the derivatives used by ParallelMCMC's samplers.
 
-Each derivative argument (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
-`hvp_batch`) takes a callable or an `ADTypes.AbstractADType`, so a model can be
-built from the log-density alone:
+For a vector `x` of length `dim`, `logdensity(x)` must return a real scalar and
+`grad_logdensity(x)` must return a vector like `x`. The log-density may omit its
+normalizing constant. Instead of a gradient function, `grad_logdensity` may be
+an `ADTypes.AbstractADType` backend:
 
-    DensityModel(logp, AutoForwardDiff(), dim)
+```julia
+model = DensityModel(logdensity, AutoForwardDiff(), dim)
+```
 
-Backends are prepared when sampling starts. An HVP backend differentiates a
-callable gradient once. With an AD-derived gradient it forms
-`DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` on the
-log-density. An explicit `SecondOrder` also differentiates the log-density directly.
+Sequential MALA needs only the gradient. Parallel MALA also needs
+Hessian-vector products. Supply `hvp(x, v)`, put an AD backend in `hvp`, or pass
+a `backend` to [`ParallelMALASampler`](@ref). AD backends are prepared when
+sampling starts, after the element type and storage of the initial state are
+known.
 
-- `logdensity(x::AbstractVector) -> Real`
-- `grad_logdensity` — callable `x -> AbstractVector`, or an AD backend.
-- `hvp` — optional callable `(x, v) -> AbstractVector`, or a backend. If
-  `nothing`, DEER builds the HVP from the sampler's `backend`.
-- `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
-  log-density over independent columns.
-- `grad_logdensity_batch` — optional callable `X -> AbstractMatrix`, or a
-  backend. It is derived from `logdensity_batch` when `grad_logdensity` is a
-  backend.
-- `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend,
-  resolved like `hvp`.
-- `dim::Int` — dimensionality of the parameter space
-- `param_names` — optional collection of parameter names used in `FlexiChains` output. If
-  `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
-  See the [`Parameter names`](@ref parameter-names) section of the docs for more
-  information.
+The optional batched functions operate on independent columns:
 
-Both batched derivative arguments require `logdensity_batch`. `AutoReactant()` has
-additional pairing and tracing constraints; see the GPU guide.
+- `logdensity_batch(X)` returns one log-density per column of `X`.
+- `grad_logdensity_batch(X)` returns a matrix shaped like `X`.
+- `hvp_batch(X, V)` returns `H(X[:, j]) * V[:, j]` in column `j`.
+
+Both batched derivative slots require `logdensity_batch`. A derivative slot may
+hold a callable or an AD backend. When a batched gradient is derived with AD,
+each output of `logdensity_batch` must depend only on the matching input column.
+
+`param_names` controls the parameter keys in the returned `FlexiChain`. With
+the default `nothing`, the chain contains one vector-valued parameter named
+`:x`. See [Defining models](@ref) for naming, batching, Turing integration, and
+the rules for combining derivative backends.
 """
 struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
     logdensity::F
@@ -417,11 +419,14 @@ end
 """
     MALASampler(epsilon; cholM=nothing)
 
-Metropolis-Adjusted Langevin Algorithm sampler with step size `epsilon`.
+Create a sequential Metropolis-adjusted Langevin (MALA) sampler with positive
+step size `epsilon`.
 
-Optionally pass `cholM = cholesky(M)` to use a mass matrix `M` as a
-preconditioner.  The proposal becomes `y = x + ε M ∇logp(x) + √(2ε) L ξ`
-where `L` is the Cholesky factor of `M`.
+This sampler is useful as a baseline for [`ParallelMALASampler`](@ref) and for
+checking a model with an ordinary sequential transition. Pass
+`cholM=cholesky(M)` to precondition proposals with a positive-definite mass
+matrix `M`. With `M = L * L'`, the proposal is
+`y = x + epsilon * M * gradient(x) + sqrt(2epsilon) * L * noise`.
 """
 struct MALASampler{FP<:AbstractFloat,CM} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -584,19 +589,32 @@ struct MALATapeElement{FP<:AbstractFloat,V<:AbstractVector{FP}}
 end
 
 """
-    ParallelMALASampler(epsilon; T, maxiter, tol_abs, tol_rel, jacobian, damping, probes, cholM, backend)
+    ParallelMALASampler(epsilon; T=64, maxiter=200,
+                        tol_abs=1e-6, tol_rel=1e-5,
+                        jacobian=:stoch_diag, damping=0.5,
+                        probes=1, cholM=nothing, backend=nothing)
 
-DEER-parallelized MALA sampler.
+Create a MALA sampler that solves blocks of transitions with DEER.
 
-Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
-estimator) and `:diag` (exact diagonal via `D` JVPs).
+`epsilon` is the positive MALA step size. `T` is the number of transitions in
+each DEER block; it does not determine how many samples `sample` returns.
 
-`backend` supplies Hessian-vector products when the `DensityModel` brings no
-`hvp` / `hvp_batch` of its own. It does not supply gradients. Leave it out when
-the model carries its own HVPs.
+The nonlinear solve stops after `maxiter` updates or when its largest
+elementwise change is no greater than
+`tol_abs + tol_rel * maximum(abs, trajectory)`. `damping` controls how much of
+each new update is applied and must lie in `(0, 1]`.
 
-With `backend=ADTypes.AutoReactant()`, `grad_logdensity` must be `AutoReactant()`
-or a callable.
+`jacobian=:stoch_diag` estimates each transition Jacobian's diagonal with
+`probes` Hutchinson vectors. `jacobian=:diag` computes the exact diagonal with
+one Jacobian-vector product per parameter dimension.
+
+`backend` constructs missing Hessian-vector products; it does not supply the
+model's gradient. Leave it as `nothing` when the [`DensityModel`](@ref) provides
+the required `hvp` and `hvp_batch` functions. `cholM` has the same
+preconditioning meaning as in [`MALASampler`](@ref).
+
+See [Getting started](@ref) for tuning advice and [GPU execution](@ref) for
+backend-specific device constraints.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP
@@ -1243,7 +1261,25 @@ for TKey in (Symbol, VarName)
 end
 
 """
-    AdaptiveMALASampler(epsilon_init; n_warmup, target_accept, gamma, t0, kappa, cholM)
+    AdaptiveMALASampler(epsilon_init; n_warmup=1000,
+                        target_accept=0.574, gamma=0.05,
+                        t0=10.0, kappa=0.75, cholM=nothing)
+
+Create a sequential MALA sampler with dual-averaging step-size adaptation.
+
+Adaptation begins at the positive step size `epsilon_init`, targets the
+acceptance probability `target_accept`, and stops after `n_warmup` warmup
+transitions. The averaged step size is then held fixed. Set
+`discard_warmup=true` in `sample` to omit warmup-marked states from the returned
+chain.
+
+`gamma`, `t0`, and `kappa` control the dual-averaging schedule. Their defaults
+are usually a better starting point than manual adjustment. `cholM` has the
+same preconditioning meaning as in [`MALASampler`](@ref).
+
+The chain stores `:step_size`, `:accepted`, and `:is_warmup` as extra fields.
+This sampler is a convenient way to choose an `epsilon` for
+[`ParallelMALASampler`](@ref).
 """
 struct AdaptiveMALASampler{FP<:AbstractFloat,CM} <: AbstractMCMC.AbstractSampler
     epsilon_init::FP

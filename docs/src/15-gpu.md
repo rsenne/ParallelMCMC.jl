@@ -1,34 +1,46 @@
-# GPU Execution
+# GPU execution
 
-`ParallelMALASampler` can use CPU or GPU arrays. This page explains how to write a GPU model and which backend restrictions to check.
+[`ParallelMALASampler`](@ref) follows the storage of `initial_params`, so the
+same sampler can work with CPU vectors or supported device vectors. Moving the
+initial state is not enough, though: the target density, its derivatives, and
+the selected AD backend must all support the device.
 
-ParallelMCMC does not depend on CUDA.jl.  `using CUDA` loads the `CUDAExt` extension, which is required for `CuArray` parameters.
+CUDA is an optional dependency. `using CUDA` activates ParallelMCMC's extension
+for `CuArray` storage without making CUDA part of a CPU-only installation.
 
 ---
 
-## When to use GPU
+## Decide whether a GPU is worthwhile
 
-GPU pays off when the per-Newton-step work i.e., evaluating `logdensity_batch` and `grad_logdensity_batch` across the `T`-wide trajectory and the Hutchinson `probes` is large enough to saturate the device.
+A GPU helps only when each DEER iteration provides enough work to amortize
+kernel launches and data movement. The important workload is the evaluation of
+batched densities, gradients, and Hessian-vector products across a `T`-column
+trajectory.
 
 | Regime | Reach for |
 |---|---|
-| `D` ≲ a few hundred, lightweight `logp` | **CPU.** Per-step cost is dominated by overhead; GPU launch latency wins out. |
-| Large `D`, or `logp` is itself a batched linear-algebra / kernel workload | **GPU.** `T` × `probes` Jacobian work fills the device. |
-| Many independent chains via `MCMCThreads()` | **CPU**, scaled with threads.  GPU chains do not currently share a device pool. |
+| Small `D` and a cheap target | CPU; launch overhead is likely to dominate. |
+| Large `D` or a target built from substantial batched linear algebra | GPU; the model is more likely to keep the device occupied. |
+| Many small independent chains | CPU threads; GPU chains do not currently share a device pool. |
 
-A useful heuristic: if your CPU `grad_logdensity_batch` already saturates BLAS at the batch sizes DEER passes it (`T` columns, plus `probes` HVP probes), GPU is likely to help.  If not, profile before switching.
+A useful rule is to benchmark before and after moving the model. Include one
+run for compilation, then compare warmed-up sampling calls at the same `T`,
+step size, and tolerances.
 
 ---
 
-## Limitations
+## Current limitations
 
-### 1. DynamicPPL / Turing models are CPU-only
+### Turing models are CPU-only
 
-The one-argument `DensityModel(::DynamicPPL.Model)` constructor (and the `LogDensityProblems` path that backs it) executes the model with `Vector{Float64}` parameters on CPU.  There is no path today that runs a `@model` against `CuArray` parameters.
+The Turing constructor and its DynamicPPL/LogDensityProblems path currently
+execute with CPU vectors. They cannot run a `@model` directly against a
+`CuArray`.
 
-To run on GPU, hand-write `logdensity` / `grad_logdensity` (and the batched variants) directly over `CuArray`s and pass them to `DensityModel`.  This is shown in the example below.
+For GPU sampling, write the density and derivatives with GPU-compatible array
+operations and pass them to [`DensityModel`](@ref), as in the example below.
 
-### 2. Enzyme on GPU currently needs `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum`
+### Enzyme needs ParallelMCMC's linear-algebra wrappers
 
 `ParallelMCMC` exports three thin wrappers:
 
@@ -38,27 +50,30 @@ pmcmc_dot(a, b)     = dot(a, b)
 pmcmc_dotsum(A, B)  = sum(A .* B)
 ```
 
-These wrappers have Enzyme differentiation rules defined by ParallelMCMC. Use them in GPU code differentiated by Enzyme to avoid this compilation failure:
+ParallelMCMC defines Enzyme rules for these wrappers without changing the rules
+for Julia's base operators. Use them in GPU code differentiated by Enzyme to
+avoid failures such as:
 
-```
+```text
 unsupported tag gc-transition for
   call i32 @cuMemcpyDtoHAsync_v2(...) [ "jl_roots"(...), "gc-transition"() ]
 UNREACHABLE executed at .../Enzyme/GradientUtils.cpp:309      (signal 6)
 ```
 
-When you should use them:
+Use the wrappers when:
 
 - You are on GPU **and** using `AutoEnzyme()` as the AD backend.
 
-When you do **not** need them:
+Keep the ordinary operators when:
 
 - CPU code: plain `*`, `dot`, `sum` are faster and clearer.
 - GPU code with `AutoMooncake(; config=nothing)`: Mooncake's own CUDA extension handles these operations natively.
 - GPU code with `AutoZygote()`: Zygote uses ChainRules adjoints, which have cuBLAS-backed rules for `*` / `dot` / `sum` on `CuArray`.
 
-The wrappers work around this Enzyme compilation failure.
+The wrappers are an Enzyme-specific compatibility layer; they do not make an
+otherwise CPU-only function GPU compatible.
 
-### 3. Enzyme may need broadcasts split into separate expressions
+### Enzyme may need broadcasts split into separate expressions
 
 Some `CuArray` gradients fail during Enzyme compilation with the same `gc-transition` error. If you encounter it, try splitting broadcasts into separate expressions, as in this example:
 
@@ -249,9 +264,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 ```
 
 !!! warning "Reactant constraints"
-    **Captured arrays are frozen at compile time.** Mutating them after preparation does not change the compiled derivative. Pass mutable data as an argument.
-
-    **Reactant chooses the execution device independently of the input array.** With Reactant's CPU client, `CuArray` inputs round-trip through the host. The sampler warns about this when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
+    **Captured arrays are frozen at compile time.** Mutating them after preparation does not change the compiled derivative. Pass mutable data as an argument. **Reactant also chooses the execution device independently of the input array.** With Reactant's CPU client, `CuArray` inputs round-trip through the host. The sampler warns about this when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
 
 - The log-density must be Reactant-traceable. DynamicPPL-built log-densities are not.
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
@@ -268,7 +281,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 
 - **The HVP has a clean closed form.**  Quadratic priors, Gaussian likelihoods, GLMs (logistic, Poisson, probit) — the second derivative is a known function of intermediate quantities you already compute in `gradlogp`.  A few extra lines and you skip the AD pipeline entirely.
 - **Performance matters and the AD compile is heavy.**  Enzyme and Mooncake both pay a one-shot compilation cost on the user's gradient.  For long-running chains this amortizes, but for many short runs the analytical HVP wins.
-- **You're hitting AD-backend-specific GPU restrictions.**  The [Enzyme limitations](#2-enzyme-on-gpu-currently-needs-pmcmc_matmul-pmcmc_dot-pmcmc_dotsum) above (`pmcmc_*` wrappers, staged broadcasts) only matter when the AD backend is invoked.  Supplying analytical HVP sidesteps them — your `gradlogp` and `hvp` can use plain `*`, `dot`, `sum`, and the sampler's `backend` can be omitted entirely because no AD is ever invoked.
+- **You're hitting AD-backend-specific GPU restrictions.** The [Enzyme limitations](#enzyme-needs-parallelmcmcs-linear-algebra-wrappers) above (`pmcmc_*` wrappers, staged broadcasts) only matter when the AD backend is invoked. Supplying an analytical HVP sidesteps them: your `gradlogp` and `hvp` can use plain `*`, `dot`, and `sum`, and the sampler's `backend` can be omitted because no AD is invoked.
 - **You can reuse intermediates between gradient and HVP.**  When `hvp` shares $X\beta$, $\sigma(X\beta)$, or similar with the gradient computation, an analytical version can be both faster *and* shorter than what AD produces.
 
 ### Same example with analytical HVP
