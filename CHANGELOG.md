@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a batched gradient now raises an error.
 - `AutoReactant` stages device-array inputs through reused pinned host buffers,
   and copies results device-to-device when the XLA client is on the GPU (#73).
+  The device-to-device path is covered by a GPU-gated testset that selects a
+  CUDA XLA client; it skips where no GPU client exists (#73).
 
 ### Removed
 
