@@ -17,7 +17,8 @@ This is a regression sanity check.
   1. GPU samples/s ≥ 2× CPU samples/s
   2. GPU samples/s ≥ 1500
 
-If GPU is unavailable, the test set is skipped.
+If GPU is unavailable, the test set is skipped. Under --code-coverage the
+benchmark still runs but both checks are skipped.
 =#
 
 const _PERF_GPU_AVAILABLE = try
@@ -109,14 +110,18 @@ else
         Sized so each per-step Sgemm is large enough to amortize CUDA kernel-
         launch overhead. D<200 is launch-bound and CPU wins; this is the regime
         users care about for the "ParallelMCMC speeds things up" claim.
+
+        The CPU baseline depends heavily on the platform BLAS: on one RTX 5090
+        box, D=300 / N_data=4_000 gave 3.9× on Windows but 0.9× under Linux,
+        where sequential MALA ran 4× faster. At this size Linux gave 8.9×.
         =#
-        D = 300
-        N_data = 4_000
+        D = 1_000
+        N_data = 16_000
         rng = MersenneTwister(20251231)
         X_cpu = randn(rng, Float32, N_data, D)
         y_cpu = randn(rng, Float32, N_data)        # unused for Gaussian target
 
-        ε = 0.07f0
+        ε = 0.04f0
         T = 1024
         maxiter = 200
         N_samples = 2_000
@@ -170,8 +175,18 @@ else
         #=
         The thresholds are deliberately loose so flaky shared-cluster GPUs don't
         red the build, but tight enough to catch a genuine perf regression.
+
+        Coverage instrumentation slows the sampler's host-side loop ~10× but
+        barely touches the BLAS-bound CPU baseline (7.7× fell to 0.9×), so the
+        timings mean nothing under --code-coverage.
         =#
-        @test speedup ≥ 2.0
-        @test gpu_sps ≥ 1_500.0
+        if Base.JLOptions().code_coverage == 0
+            @test speedup ≥ 2.0
+            @test gpu_sps ≥ 1_500.0
+        else
+            @info "GPU performance thresholds skipped under --code-coverage"
+            @test_skip speedup ≥ 2.0
+            @test_skip gpu_sps ≥ 1_500.0
+        end
     end
 end
