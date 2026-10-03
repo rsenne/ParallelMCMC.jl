@@ -14,6 +14,7 @@ hvp_r(x, v) = -(sum(abs2, x) .* v .+ 2 .* dot(x, v) .* x)
 logp_batch_r(X) = vec(-0.25 .* sum(abs2, X; dims=1) .^ 2)
 gradlogp_batch_r(X) = -X .* sum(abs2, X; dims=1)
 logp_r32(x) = -0.25f0 * sum(abs2, x)^2
+logp_batch_r32(X) = vec(-0.25f0 .* sum(abs2, X; dims=1) .^ 2)
 
 logp_gauss(x) = -0.5 * sum(abs2, x)
 gradlogp_gauss(x) = -x
@@ -26,6 +27,31 @@ const CT_R = FlexiChains.FlexiChain{Symbol}
 
 using Reactant: Reactant
 using Enzyme: Enzyme
+
+isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array.jl"))
+
+const REACTANT_EXT = Base.get_extension(ParallelMCMC, :ReactantExt)
+
+# "unknown" keeps the load failure reportable as a test below
+const REACTANT_PLATFORM =
+    REACTANT_EXT === nothing ? "unknown" : REACTANT_EXT._reactant_client_platform()
+
+# `set_default_backend` names the client kind; `platform_name` names the device.
+_reactant_backend_name(platform) = platform in ("cuda", "rocm") ? "gpu" : platform
+
+#= `ReactantCall` frees the output buffer before it returns, so a test that needs
+to look at that buffer has to run the compiled function itself. Returns the
+uploaded inputs too, since they have to be freed alongside the output. =#
+function _run_compiled(call, args...)
+    inputs = map(REACTANT_EXT._upload, args, call.stages)
+    return inputs, call.compiled(inputs...)
+end
+
+function _release_compiled!(inputs, out)
+    foreach(REACTANT_EXT._free!, inputs)
+    REACTANT_EXT._free!(out)
+    return nothing
+end
 
 @testset "Reactant HVP" begin
     @testset "extension is loaded" begin
@@ -133,6 +159,18 @@ using Enzyme: Enzyme
             end
         end
 
+        # DEER passes column views to the vector callables.
+        @testset "SubArray inputs" begin
+            model = DensityModel(logp_r, AutoReactant(), D_R; hvp=AutoReactant())
+            m_p = ParallelMCMC._prepare_model(model, x, 8, nothing)
+            S = randn(rng, D_R, 2)
+            xv = view(S, :, 1)
+            vv = view(S, :, 2)
+            @test m_p.grad_logdensity(xv) isa Vector{Float64}
+            @test m_p.grad_logdensity(xv) ≈ gradlogp_r(S[:, 1])
+            @test m_p.hvp(xv, vv) ≈ hvp_r(S[:, 1], S[:, 2])
+        end
+
         @testset "Float32 on CPU" begin
             x32 = Float32.(x)
             v32 = Float32.(v)
@@ -198,6 +236,106 @@ using Enzyme: Enzyme
         end
     end
 
+    # `StagedArray` has no `_copy_from_device_pointer!` method, so results come
+    # back through a plain host download, as a `CuArray` would on the CPU client.
+    @testset "staged template" begin
+        rng = MersenneTwister(74)
+        x0 = StagedArray(randn(rng, Float32, D_R))
+        model = DensityModel(logp_r32, AutoReactant(), D_R; hvp=AutoReactant())
+        m_p = ParallelMCMC._prepare_model(model, x0, 8, nothing)
+
+        x1 = StagedArray(randn(rng, Float32, D_R))
+        v1 = StagedArray(randn(rng, Float32, D_R))
+        x2 = StagedArray(randn(rng, Float32, D_R))
+        v2 = StagedArray(randn(rng, Float32, D_R))
+
+        g1 = m_p.grad_logdensity(x1)
+        Hv1 = m_p.hvp(x1, v1)
+        @test g1 isa StagedArray{Float32,1}
+        @test eltype(g1) === Float32
+        @test g1.data ≈ gradlogp_r(x1.data)
+        @test Hv1 isa StagedArray{Float32,1}
+        @test Hv1.data ≈ hvp_r(x1.data, v1.data)
+
+        g2 = m_p.grad_logdensity(x2)
+        Hv2 = m_p.hvp(x2, v2)
+        @test g2.data ≈ gradlogp_r(x2.data)
+        @test Hv2.data ≈ hvp_r(x2.data, v2.data)
+
+        # Results must not alias the reused stage.
+        @test g1 !== g2
+        @test g1.data !== g2.data
+        @test Hv1 !== Hv2
+        @test Hv1.data !== Hv2.data
+
+        # Everything above would also pass if no stage had been allocated.
+        @test only(m_p.grad_logdensity.stages) isa Vector{Float32}
+        @test size(only(m_p.grad_logdensity.stages)) == (D_R,)
+        @test all(s -> s isa Vector{Float32}, m_p.hvp.stages)
+
+        # XLA only ever sees the stage, so a short input has to be rejected here.
+        @test_throws DimensionMismatch m_p.grad_logdensity(
+            StagedArray(randn(rng, Float32, D_R - 1))
+        )
+
+        @testset "batched slots" begin
+            T = 8
+            model_b = DensityModel(
+                logp_r32,
+                AutoReactant(),
+                D_R;
+                logdensity_batch=logp_batch_r32,
+                grad_logdensity_batch=AutoReactant(),
+                hvp=AutoReactant(),
+                hvp_batch=AutoReactant(),
+            )
+            m_pb = ParallelMCMC._prepare_model(model_b, x0, T, nothing)
+
+            X1 = StagedArray(randn(rng, Float32, D_R, T))
+            V1 = StagedArray(randn(rng, Float32, D_R, T))
+
+            Gb = m_pb.grad_logdensity_batch(X1)
+            @test Gb isa StagedArray{Float32,2}
+            @test eltype(Gb) === Float32
+            @test Gb.data ≈ gradlogp_batch_r(X1.data)
+
+            Hvb = m_pb.hvp_batch(X1, V1)
+            Hv_cols = reduce(hcat, [hvp_r(X1.data[:, t], V1.data[:, t]) for t in 1:T])
+            @test Hvb isa StagedArray{Float32,2}
+            @test Hvb.data ≈ Hv_cols
+        end
+    end
+
+    @testset "eager buffer free survives an aliased result" begin
+        ext = REACTANT_EXT
+        rng = MersenneTwister(75)
+        for template in (randn(rng, Float32, D_R), StagedArray(randn(rng, Float32, D_R)))
+            call = ext._compiled(identity, template)
+            xs = [typeof(template)(randn(rng, Float32, D_R)) for _ in 1:50]
+            ys = map(call, xs)
+            GC.gc(true)
+            @test all(((x, y),) -> collect(y) == collect(x), zip(xs, ys))
+        end
+    end
+
+    @testset "a host-resident output declines the pointer path" begin
+        x0 = StagedArray(randn(MersenneTwister(76), Float32, D_R))
+        model = DensityModel(logp_r32, AutoReactant(), D_R)
+        call = ParallelMCMC._prepare_model(model, x0).grad_logdensity
+        inputs, out = _run_compiled(call, x0)
+        GC.@preserve out begin
+            if call.platform == "cpu"
+                @test REACTANT_EXT._device_pointer(out) === nothing
+                res = REACTANT_EXT._download(call.template, out, call.platform)
+                @test res isa StagedArray{Float32,1}
+                @test res.data ≈ gradlogp_r(x0.data)
+            else
+                @info "device pointer guard: not on the CPU client" platform = call.platform
+            end
+        end
+        _release_compiled!(inputs, out)
+    end
+
     reactant_gpu_ok = try
         using CUDA: CUDA
         CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
@@ -226,6 +364,152 @@ using Enzyme: Enzyme
             Hv = m_p.hvp(x_d, v_d)
             @test Hv isa CUDA.CuArray
             @test Array(Hv) ≈ hvp_r(x_h, v_h)
+
+            # Repeated calls must not alias the reused stages.
+            x_h2 = randn(rng, Float32, D_R)
+            v_h2 = randn(rng, Float32, D_R)
+            x_d2 = CUDA.CuArray(x_h2)
+            v_d2 = CUDA.CuArray(v_h2)
+
+            g2 = m_p.grad_logdensity(x_d2)
+            Hv2 = m_p.hvp(x_d2, v_d2)
+            @test g2 isa CUDA.CuArray
+            @test Array(g2) ≈ gradlogp_r(x_h2)
+            @test Hv2 isa CUDA.CuArray
+            @test Array(Hv2) ≈ hvp_r(x_h2, v_h2)
+
+            @test g !== g2
+            @test Hv !== Hv2
+        end
+
+        gpu_platform = try
+            Reactant.set_default_backend("gpu")
+            REACTANT_EXT._reactant_client_platform()
+        catch err
+            @info "Reactant HVP test: selecting a GPU XLA client failed" exception = (
+                err, catch_backtrace()
+            )
+            "unavailable"
+        end
+
+        try
+            if gpu_platform != "cuda"
+                @info "Reactant HVP test: skipping the device-to-device download" platform =
+                    gpu_platform
+            else
+                @testset "device-to-device download (CUDA XLA client)" begin
+                    rng = MersenneTwister(76)
+
+                    @testset "vector output" begin
+                        x_h = randn(rng, Float32, D_R)
+                        v_h = randn(rng, Float32, D_R)
+                        x_d = CUDA.CuArray(x_h)
+                        v_d = CUDA.CuArray(v_h)
+
+                        model = DensityModel(
+                            logp_r32, AutoReactant(), D_R; hvp=AutoReactant()
+                        )
+                        m_p = ParallelMCMC._prepare_model(model, x_d, 8, nothing)
+                        call = m_p.grad_logdensity
+                        @test call.platform == "cuda"
+
+                        inputs, out = _run_compiled(call, x_d)
+                        GC.@preserve out begin
+                            # The branch needs an unsharded PJRT buffer.
+                            @test out isa Reactant.ConcretePJRTArray
+                            ptr = REACTANT_EXT._device_pointer(out)
+                            @test ptr isa Ptr{Cvoid}
+                            @test ptr != C_NULL
+
+                            dest = similar(x_d, eltype(out), size(out))
+                            @test ParallelMCMC._copy_from_device_pointer!(
+                                dest, ptr, call.platform
+                            )
+                            @test Array(dest) ≈ gradlogp_r(x_h)
+
+                            # The same branch, reached through `_download`.
+                            g = REACTANT_EXT._download(call.template, out, call.platform)
+                            @test g isa CUDA.CuArray{Float32,1}
+                            @test Array(g) ≈ gradlogp_r(x_h)
+                        end
+                        _release_compiled!(inputs, out)
+
+                        # And end to end, through the call object.
+                        g2 = m_p.grad_logdensity(x_d)
+                        @test g2 isa CUDA.CuArray{Float32,1}
+                        @test Array(g2) ≈ gradlogp_r(x_h)
+
+                        Hv = m_p.hvp(x_d, v_d)
+                        @test Hv isa CUDA.CuArray{Float32,1}
+                        @test Array(Hv) ≈ hvp_r(x_h, v_h)
+                    end
+
+                    @testset "matrix output" begin
+                        T = 8
+                        X_h = randn(rng, Float32, D_R, T)
+                        V_h = randn(rng, Float32, D_R, T)
+                        X_d = CUDA.CuArray(X_h)
+                        V_d = CUDA.CuArray(V_h)
+
+                        model = DensityModel(
+                            logp_r32,
+                            AutoReactant(),
+                            D_R;
+                            logdensity_batch=logp_batch_r32,
+                            grad_logdensity_batch=AutoReactant(),
+                            hvp=AutoReactant(),
+                            hvp_batch=AutoReactant(),
+                        )
+                        m_p = ParallelMCMC._prepare_model(
+                            model, CUDA.CuArray(X_h[:, 1]), T, nothing
+                        )
+                        call = m_p.grad_logdensity_batch
+                        @test call.platform == "cuda"
+
+                        inputs, out = _run_compiled(call, X_d)
+                        GC.@preserve out begin
+                            @test out isa Reactant.ConcretePJRTArray
+                            @test REACTANT_EXT._device_pointer(out) isa Ptr{Cvoid}
+
+                            G = REACTANT_EXT._download(call.template, out, call.platform)
+                            @test G isa CUDA.CuArray{Float32,2}
+                            @test size(G) == (D_R, T)
+                            @test Array(G) ≈ gradlogp_batch_r(X_h)
+                        end
+                        _release_compiled!(inputs, out)
+
+                        Hvb = m_p.hvp_batch(X_d, V_d)
+                        @test Hvb isa CUDA.CuArray{Float32,2}
+                        @test size(Hvb) == (D_R, T)
+                        @test Array(Hvb) ≈
+                            reduce(hcat, [hvp_r(X_h[:, t], V_h[:, t]) for t in 1:T])
+                    end
+
+                    @testset "results outlive the buffers they came from" begin
+                        model = DensityModel(logp_r32, AutoReactant(), D_R)
+                        m_p = ParallelMCMC._prepare_model(
+                            model, CUDA.CuArray(randn(rng, Float32, D_R))
+                        )
+                        xs = [CUDA.CuArray(randn(rng, Float32, D_R)) for _ in 1:32]
+                        gs = map(m_p.grad_logdensity, xs)
+                        GC.gc(true)
+                        @test all(((x, g),) -> Array(g) ≈ gradlogp_r(Array(x)), zip(xs, gs))
+                    end
+
+                    @testset "an unsupported destination falls back to the host" begin
+                        x0 = StagedArray(randn(rng, Float32, D_R))
+                        model = DensityModel(logp_r32, AutoReactant(), D_R)
+                        call = ParallelMCMC._prepare_model(model, x0).grad_logdensity
+                        @test call.platform == "cuda"
+                        res = call(x0)
+                        @test res isa StagedArray{Float32,1}
+                        @test res.data ≈ gradlogp_r(x0.data)
+                    end
+                end
+            end
+        finally
+            REACTANT_PLATFORM == "unknown" ||
+                Reactant.set_default_backend(_reactant_backend_name(REACTANT_PLATFORM))
         end
     end
 end

@@ -76,6 +76,34 @@ pkg> activate .
 pkg> test
 ```
 
+### Reactant tests
+
+`test/test-Reactant-HVP.jl` is skipped unless `PARALLELMCMC_TEST_REACTANT=true`,
+because `Reactant_jll` is a large download and `Reactant` is only an `[extra]`
+in `test/Project.toml`, which `Pkg.test` does not install. Add it first, then
+opt in:
+
+```bash
+julia --project=test -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.add("Reactant")'
+PARALLELMCMC_TEST_REACTANT=true julia --project=test test/runtests.jl
+```
+
+Some of that file covers paths that only exist on a GPU:
+
+- The `CuArray` boundary tests need a functional CUDA device, no matter which
+  device XLA executes on.
+- The device-to-device download (`ReactantExt._download` copying an XLA buffer
+  straight into the result array) additionally needs Reactant's own XLA client
+  to be a CUDA one. The testset selects it with
+  `Reactant.set_default_backend("gpu")` and restores the previous client
+  afterwards; it skips with an `@info` when no GPU client is available, which
+  is what happens on the GitHub-hosted runners.
+
+Run that file on a CUDA machine before changing anything in the staging or
+download paths of `ext/ReactantExt.jl`, `ext/CUDAExt.jl`, or the
+`needs_host_staging` / `_host_staging_buffer` / `_copy_from_device_pointer!`
+hooks in `src/ParallelMCMC.jl`: CI cannot cover them.
+
 ## Working on a new issue
 
 We try to keep a linear history in this repo, so it is important to keep your branches up-to-date.
