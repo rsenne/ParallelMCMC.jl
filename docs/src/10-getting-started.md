@@ -159,6 +159,37 @@ As above, the returned chain will always contain parameters in the original spac
 
 ---
 
+## Wren integration
+
+Loading `WrenCore` enables `DensityModel` constructors for [Wren](https://github.com/JuliaBayes/Wren.jl) models. Sampling happens in the model's unconstrained space, and the batched log-density comes from `WrenCore.batched_lp_function`, so `ParallelMALASampler` evaluates whole trajectories at once.
+
+```julia
+using ParallelMCMC, WrenCore, ForwardDiff
+using WrenDists: WrenDists as WD
+
+@wren function linreg(X, y)
+    N, D = size(X)
+    @iid β ~ WD.Normal() size=D
+    σ ~ WD.Exponential()
+    μ = X * β
+    @batch for i in 1:N
+        @observe y[i] ~ WD.Normal(μ[i], σ)
+    end
+end
+
+model = DensityModel(linreg(X, y); backend=AutoForwardDiff())
+chain = sample(model, ParallelMALASampler(0.002; T=16, backend=AutoForwardDiff()), 500)
+```
+
+`DensityModel(vm::VecModel)` wraps an existing `VecModel` and uses its AD type unless you pass `backend`. The backend differentiates the log-density, and ParallelMCMC derives batched gradients and HVPs from it.
+
+- **Enzyme**: an `AutoEnzyme` backend gets `function_annotation=Enzyme.Const` automatically. Enzyme cannot yet take batched HVPs of a Wren model, so pair it with `hvp=DifferentiationInterface.SecondOrder(AutoForwardDiff(), AutoForwardDiff())`.
+- **Reactant**: `DensityModel(model; backend=AutoReactant())` also builds the `VecModel` with `AutoReactant`, so the model's data are compiled as inputs rather than constants. Pass `backend=AutoReactant()` to the sampler too. See [Reactant HVPs](15-gpu.md#Reactant-HVPs).
+
+Chains contain the unconstrained parameter vector, not named model variables.
+
+---
+
 ## Parallel chains
 
 All samplers support `MCMCThreads()`.  Start Julia with multiple threads (e.g. `julia -t 4`):

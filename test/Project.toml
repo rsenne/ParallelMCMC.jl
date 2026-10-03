@@ -28,3 +28,5 @@ JuliaFormatter = "2.12"
 [extras]
 CUDA_Runtime_jll = "76a88914-d11a-5bdc-97e0-2f5a05c973a2"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
+WrenCore = "008b59e7-bbda-4991-901b-b08f5cfc584d"
+WrenDists = "2ad4af40-d7c9-42b2-92b0-e09d37d1e75a"

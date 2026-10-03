@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AutoReactant()` on both AD passes of an HVP (#37, #52).
 - The `DensityModel` constructors in `DynamicPPLExt` and `LogDensityProblemsExt`
   now accept `hvp` and the batched derivative slots.
+- `WrenCoreExt` adds `DensityModel` constructors for Wren `Model`s and
+  `VecModel`s, with batched log-densities from `WrenCore.batched_lp_function`
+  and support for `AutoReactant()`.
 
 ### Fixed
 
