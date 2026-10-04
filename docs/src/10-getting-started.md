@@ -183,7 +183,7 @@ chain = sample(model, ParallelMALASampler(0.002; T=16, backend=AutoForwardDiff()
 
 `DensityModel(vm::VecModel)` wraps an existing `VecModel` and uses its AD type unless you pass `backend`. The backend differentiates the log-density, and ParallelMCMC derives batched gradients and HVPs from it.
 
-- **Enzyme**: an `AutoEnzyme` backend gets `function_annotation=Enzyme.Const` automatically. Enzyme cannot yet take batched HVPs of a Wren model, so pair it with `hvp=DifferentiationInterface.SecondOrder(AutoForwardDiff(), AutoForwardDiff())`.
+- **Enzyme**: an `AutoEnzyme` backend gets `function_annotation=Enzyme.Const` automatically. Its HVPs default to Enzyme forward-over-reverse with runtime activity, which Enzyme needs to differentiate twice through a Wren model; the gradient itself does not use runtime activity.
 - **Reactant**: `DensityModel(model; backend=AutoReactant())` also builds the `VecModel` with `AutoReactant`, so the model's data are compiled as inputs rather than constants. Pass `backend=AutoReactant()` to the sampler too. See [Reactant HVPs](15-gpu.md#Reactant-HVPs).
 
 Chains contain the unconstrained parameter vector, not named model variables.

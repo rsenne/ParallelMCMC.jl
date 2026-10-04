@@ -2,6 +2,7 @@ module WrenCoreExt
 
 using ParallelMCMC
 using ADTypes: ADTypes, AbstractADType, AutoReactant
+using EnzymeCore: EnzymeCore
 using WrenCore: WrenCore
 
 #=
@@ -42,20 +43,33 @@ _logdensity(vm::ReactantVecModel) = ReactantWrenLogDensity(vm)
 _logdensity_batch(vm::WrenCore.VecModel) = WrenCore.batched_lp_function(vm)
 _logdensity_batch(vm::ReactantVecModel) = ReactantWrenLogDensityBatch(vm)
 
-#= The log-density closes over the model, so Enzyme has to treat the function as
-constant. `WrenCore.Reverse` comes from EnzymeCore, which WrenCore loads, so
-`Const` is available without Enzyme. =#
-const _EnzymeConst = parentmodule(typeof(WrenCore.Reverse)).Const
-
+# The log-density closes over the model, so Enzyme has to treat it as constant.
 _grad_backend(backend) = backend
 function _grad_backend(backend::ADTypes.AutoEnzyme{M,Nothing}) where {M}
-    return ADTypes.AutoEnzyme(; mode=backend.mode, function_annotation=_EnzymeConst)
+    return ADTypes.AutoEnzyme(; mode=backend.mode, function_annotation=EnzymeCore.Const)
 end
 # ParallelMCMC only supports the default AutoReactant mode, which is reverse mode.
 function _grad_backend(backend::AutoReactant)
     ADTypes.mode(backend.mode) isa ADTypes.ForwardMode && return backend
     return AutoReactant()
 end
+#= Enzyme forward-over-reverse needs runtime activity on a Wren model: the
+log-density is a constant closure holding the model's data, which Enzyme's static
+activity analysis rejects when nested. Only the HVP pays for this; an explicit
+`SecondOrder` bypasses the gradient slot, which keeps the faster mode. =#
+_default_hvp(backend) = nothing
+function _default_hvp(::ADTypes.AutoEnzyme)
+    rt = EnzymeCore.set_runtime_activity
+    return ParallelMCMC.DI.SecondOrder(
+        ADTypes.AutoEnzyme(;
+            mode=rt(EnzymeCore.Forward), function_annotation=EnzymeCore.Const
+        ),
+        ADTypes.AutoEnzyme(;
+            mode=rt(EnzymeCore.Reverse), function_annotation=EnzymeCore.Const
+        ),
+    )
+end
+
 function _grad_backend(::Nothing)
     return throw(
         ArgumentError(
@@ -67,8 +81,8 @@ end
 
 """
     DensityModel(vm::WrenCore.VecModel; backend=vm.adtype, param_names=nothing,
-                 hvp=nothing, logdensity_batch=..., grad_logdensity_batch=nothing,
-                 hvp_batch=nothing)
+                 hvp=..., logdensity_batch=..., grad_logdensity_batch=nothing,
+                 hvp_batch=...)
 
 Wrap a Wren `VecModel` as a `DensityModel`. Sampling happens in the `VecModel`'s
 (unconstrained) parameter space.
@@ -84,9 +98,11 @@ forwarded to `DensityModel`.
 For `backend=AutoReactant()`, build `vm` with `AutoReactant` as well, so the
 model's data enter the compiled programs as inputs rather than constants.
 
-With an Enzyme gradient on CPU, pass `hvp=DI.SecondOrder(AutoForwardDiff(),
-AutoForwardDiff())`: Enzyme cannot yet take batched forward-over-reverse HVPs of
-a Wren model.
+With an `AutoEnzyme` backend, `hvp` and `hvp_batch` default to Enzyme
+forward-over-reverse with runtime activity, which Enzyme needs to nest through a
+Wren model. The gradient itself does not use runtime activity. Other backends
+leave both as `nothing`, so ParallelMCMC builds HVPs from the sampler's
+`backend`.
 
 # Example
 ```julia
@@ -106,10 +122,10 @@ function ParallelMCMC.DensityModel(
     vm::WrenCore.VecModel;
     backend=vm.adtype,
     param_names=nothing,
-    hvp=nothing,
+    hvp=_default_hvp(backend),
     logdensity_batch=_logdensity_batch(vm),
     grad_logdensity_batch=nothing,
-    hvp_batch=nothing,
+    hvp_batch=_default_hvp(backend),
 )
     return ParallelMCMC.DensityModel(
         _logdensity(vm),

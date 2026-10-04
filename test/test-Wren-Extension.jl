@@ -7,7 +7,7 @@ using ParallelMCMC
 using ADTypes
 using Enzyme: Enzyme
 using ForwardDiff: ForwardDiff
-import DifferentiationInterface as DI
+const DI_WREN = ParallelMCMC.DI
 
 #= This file only runs when PARALLELMCMC_TEST_WREN opts in (see runtests.jl).
 WrenCore and WrenDists are not registered, so they have to be added to the test
@@ -33,11 +33,22 @@ end
 
 const WREN_BETA = [1.0, -2.0, 0.5]
 
+#= Few, noisy observations keep the posterior wide enough for a moderate step size:
+the largest Hessian eigenvalue at the mode is about 40, so ε < 2/40. =#
 function wren_make_model(rng)
-    N = 40
+    N = 20
     X = randn(rng, N, length(WREN_BETA))
-    y = X * WREN_BETA .+ 0.3 .* randn(rng, N)
+    y = X * WREN_BETA .+ randn(rng, N)
     return wren_linreg(X, y)
+end
+
+# Posterior mode, by gradient ascent; the posterior is close to Gaussian around it.
+function wren_mode(lp, x0)
+    x = copy(x0)
+    for _ in 1:20_000
+        x .+= 1e-3 .* ForwardDiff.gradient(lp, x)
+    end
+    return x
 end
 
 # Per-column ForwardDiff references from the plain per-vector log-density.
@@ -59,13 +70,12 @@ function wren_check_derivatives(dm, P, V, backend, ref_lp)
     return nothing
 end
 
-# The posterior is tight around the generating coefficients.
-function wren_check_samples(samples, D)
+function wren_check_samples(samples, D, mode)
     xs = reduce(hcat, [s.x for s in samples])
     @test size(xs, 1) == D
     @test all(isfinite, xs)
     @test all(s -> isfinite(s.logp), samples)
-    @test isapprox(vec(mean(xs[1:length(WREN_BETA), :]; dims=2)), WREN_BETA; atol=0.3)
+    @test isapprox(vec(mean(xs; dims=2)), mode; atol=0.25)
     return nothing
 end
 
@@ -80,7 +90,11 @@ end
     T = 8
     P = randn(rng, D, T)
     V = randn(rng, D, T)
-    x0 = zeros(D)
+    # Start with σ = e: at σ = 1 the residuals of the zero coefficients make the
+    # posterior locally much sharper than at the mode.
+    x0 = [zeros(D - 1); 1.0]
+    mode = wren_mode(ref_lp, x0)
+    eps = 0.02
 
     @testset "constructors" begin
         dm = DensityModel(ref_vm)
@@ -96,6 +110,10 @@ end
         # Enzyme cannot prove the closed-over model read-only without `Const`.
         dm_enzyme = DensityModel(VecModel(model, AutoEnzyme(; mode=Enzyme.Reverse)))
         @test dm_enzyme.grad_logdensity isa AutoEnzyme{<:Any,Enzyme.Const}
+        # Nested Enzyme needs runtime activity; only the HVP slots get it.
+        @test dm_enzyme.hvp isa DI_WREN.SecondOrder
+        @test dm_enzyme.hvp_batch isa DI_WREN.SecondOrder
+        @test dm.hvp === nothing
 
         @test_throws ArgumentError DensityModel(VecModel(model, nothing))
         @test DensityModel(VecModel(model, nothing); backend=AutoForwardDiff()) isa
@@ -107,17 +125,14 @@ end
         wren_check_derivatives(dm, P, V, AutoForwardDiff(), ref_lp)
     end
 
-    @testset "Enzyme gradients with ForwardDiff HVPs" begin
-        dm = DensityModel(
-            VecModel(model, AutoEnzyme(; mode=Enzyme.Reverse));
-            hvp=DI.SecondOrder(AutoForwardDiff(), AutoForwardDiff()),
-        )
+    @testset "Enzyme derivatives" begin
+        dm = DensityModel(VecModel(model, AutoEnzyme(; mode=Enzyme.Reverse)))
         wren_check_derivatives(dm, P, V, nothing, ref_lp)
     end
 
     @testset "ParallelMALASampler (ForwardDiff)" begin
         dm = DensityModel(ref_vm)
-        sampler = ParallelMALASampler(0.002; T=16, backend=AutoForwardDiff())
+        sampler = ParallelMALASampler(eps; T=16, backend=AutoForwardDiff())
         samples = sample(
             Xoshiro(1),
             dm,
@@ -128,7 +143,23 @@ end
             progress=false,
         )
         @test length(samples) == 300
-        wren_check_samples(samples, D)
+        wren_check_samples(samples, D, mode)
+    end
+
+    @testset "ParallelMALASampler (Enzyme)" begin
+        dm = DensityModel(VecModel(model, AutoEnzyme(; mode=Enzyme.Reverse)))
+        sampler = ParallelMALASampler(eps; T=16)
+        samples = sample(
+            Xoshiro(1),
+            dm,
+            sampler,
+            300;
+            initial_params=x0,
+            discard_initial=100,
+            progress=false,
+        )
+        @test length(samples) == 300
+        wren_check_samples(samples, D, mode)
     end
 
     if _WREN_RUN_REACTANT
@@ -159,7 +190,7 @@ end
 
             @testset "ParallelMALASampler (AutoReactant)" begin
                 dm = DensityModel(model; backend=AutoReactant())
-                sampler = ParallelMALASampler(0.002; T=16, backend=AutoReactant())
+                sampler = ParallelMALASampler(eps; T=16, backend=AutoReactant())
                 samples = sample(
                     Xoshiro(1),
                     dm,
@@ -170,7 +201,7 @@ end
                     progress=false,
                 )
                 @test length(samples) == 300
-                wren_check_samples(samples, D)
+                wren_check_samples(samples, D, mode)
             end
         end
     else

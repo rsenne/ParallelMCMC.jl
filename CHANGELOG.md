@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now accept `hvp` and the batched derivative slots.
 - `WrenCoreExt` adds `DensityModel` constructors for Wren `Model`s and
   `VecModel`s, with batched log-densities from `WrenCore.batched_lp_function`
-  and support for `AutoReactant()`.
+  and support for `AutoReactant()`. With `AutoEnzyme`, HVPs default to Enzyme
+  forward-over-reverse with runtime activity.
+- CUDA 6 is allowed in compat.
 
 ### Fixed
 
