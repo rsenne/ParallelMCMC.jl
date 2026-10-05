@@ -138,5 +138,25 @@ end
         dest2 = CUDA.CuArray{Float32}(undef, 4)
         @test ParallelMCMC._copy_from_device_pointer!(dest2, raw_ptr, "rocm") == false
         @test ParallelMCMC._copy_from_device_pointer!(dest2, raw_ptr, "cpu") == false
+
+        # A source on another GPU must fall back to the host instead of copying
+        # in the wrong context.
+        if length(CUDA.devices()) < 2
+            @info "CUDAExt device buffer hooks: one GPU, skipping the device-mismatch check"
+        else
+            dev0, dev1 = collect(CUDA.devices())[1:2]
+            src1 = CUDA.device!(() -> CUDA.CuArray(Float32[5, 6, 7, 8]), dev1)
+            raw_ptr1 = Ptr{Cvoid}(UInt(pointer(src1)))
+            dest0 = CUDA.device!(() -> CUDA.CuArray{Float32}(undef, 4), dev0)
+            @test ParallelMCMC._copy_from_device_pointer!(dest0, raw_ptr1, "cuda") == false
+
+            # Matching devices still copy when the task's current device differs.
+            dest1 = CUDA.device!(() -> CUDA.CuArray{Float32}(undef, 4), dev1)
+            CUDA.device!(dev0) do
+                @test ParallelMCMC._copy_from_device_pointer!(dest1, raw_ptr1, "cuda") ==
+                    true
+            end
+            @test CUDA.device!(() -> Array(dest1), dev1) == Float32[5, 6, 7, 8]
+        end
     end
 end

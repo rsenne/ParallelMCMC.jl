@@ -109,6 +109,8 @@ garbage, so GC may not run before device memory fills up. Finalize buffers as
 soon as they are no longer needed; PJRT waits for any pending work before freeing
 them. Finalization runs only once, even if a compiled function returns an input
 wrapped in a new array. Donated inputs no longer own their buffers, so skip them.
+Free on the error path too, or a model that throws on every call keeps its
+buffers until GC.
 =#
 function _free!(x)
     x isa Reactant.ConcretePJRTArray || return nothing
@@ -119,11 +121,14 @@ end
 
 function (c::ReactantCall)(args::AbstractArray...)
     inputs = map(_upload, args, c.stages)
-    out = c.compiled(inputs...)
-    res = _download(c.template, out, c.platform)
-    foreach(_free!, inputs)
-    _free!(out)
-    return res
+    out = nothing
+    try
+        out = c.compiled(inputs...)
+        return _download(c.template, out, c.platform)
+    finally
+        foreach(_free!, inputs)
+        _free!(out)
+    end
 end
 
 function _compiled(core, templates::AbstractArray...)

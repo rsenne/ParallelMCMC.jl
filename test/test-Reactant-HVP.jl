@@ -318,6 +318,27 @@ end
         end
     end
 
+    # The free has no observable flag; this checks that a throwing call frees
+    # its inputs without a later GC finalizing them a second time.
+    @testset "a throwing call still frees its buffers" begin
+        ext = REACTANT_EXT
+        rng = MersenneTwister(77)
+        for template in (randn(rng, Float32, D_R), StagedArray(randn(rng, Float32, D_R)))
+            call = ext._compiled(identity, template)
+            failing = ext.ReactantCall(
+                _ -> error("compiled call failed"),
+                call.stages,
+                call.template,
+                call.platform,
+            )
+            for _ in 1:20
+                @test_throws ErrorException("compiled call failed") failing(template)
+            end
+            GC.gc(true)
+            @test collect(call(template)) == collect(template)
+        end
+    end
+
     @testset "a host-resident output declines the pointer path" begin
         x0 = StagedArray(randn(MersenneTwister(76), Float32, D_R))
         model = DensityModel(logp_r32, AutoReactant(), D_R)
