@@ -6,9 +6,9 @@ the derivative path while still being easy to inspect.
 
 ## Install an AD backend
 
-ParallelMCMC treats automatic differentiation packages as optional
-dependencies. This guide uses ForwardDiff to build the Hessian-vector products
-that parallel MALA needs.
+Parallel MALA is the main algorithm in ParallelMCMC. It requires an automatic
+differentiation backend to compute Hessian–vector products, so you will have to
+load one yourself. In this guide we will use ForwardDiff.
 
 ```julia-repl
 pkg> add ParallelMCMC ForwardDiff
@@ -43,15 +43,16 @@ model = DensityModel(
 )
 ```
 
-The gradient is hand-written, but it does not have to be. See
-[Defining models](12-models.md) for AD-derived gradients, analytical
-Hessian-vector products, batched functions, and Turing models.
+Here, the gradient is hand-written, but it does not have to be. See
+[Defining models](12-models.md) for AD-derived gradients and analytical
+Hessian-vector products.
 
 ## Tune the step size
 
-MALA is sensitive to its step size. A value that is too large causes frequent
-rejections; one that is too small produces highly correlated samples. Start
-with [`AdaptiveMALASampler`](@ref), which tunes the step size during warmup.
+MALA is sensitive to its step size, such that a value that is too large causes
+frequent rejections, while one that is too small produces highly correlated
+samples. Start with [`AdaptiveMALASampler`](@ref), which tunes the step size
+during warmup.
 
 ```julia
 rng = MersenneTwister(42)
@@ -79,9 +80,7 @@ every transition marked as warmup from the returned chain. `:step_size`,
 
 ## Run parallel MALA
 
-Pass the tuned value to [`ParallelMALASampler`](@ref). Because the model does
-not provide an analytical Hessian-vector product, `backend=AutoForwardDiff()`
-tells the sampler how to construct one from `banana_gradient`.
+Pass the tuned value to [`ParallelMALASampler`](@ref).
 
 ```julia
 sampler = ParallelMALASampler(
@@ -107,8 +106,7 @@ The important arguments are:
   number of samples returned by `sample`.
 - `backend`: the AD backend used for missing Hessian-vector products. Leave it
   out when the model provides `hvp` and, when applicable, `hvp_batch`.
-- `initial_params`: the first state. Its array type also selects CPU or GPU
-  storage.
+- `initial_params`: the first state.
 - `chain_type`: use `VNChain` for `VarName` keys or `SymChain` for `Symbol`
   keys. Turing models require `VNChain`.
 
@@ -152,7 +150,7 @@ models.
 
 ParallelMCMC returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
 With the parameter names above, values are available as `chain[:x1]` and
-`chain[:x2]`. Sampler diagnostics live in extra columns such as
+`chain[:x2]`. Sampler diagnostics are stored in extra columns such as
 `chain[:accepted]` and `chain[:logp]`.
 
 Use several chains for convergence diagnostics. Start Julia with multiple
@@ -172,31 +170,5 @@ chains = sample(
 ess(chains)
 ```
 
-`MCMCThreads()` runs independent chains concurrently. That is separate from
+`MCMCThreads()` runs independent chains concurrently, which is separate from
 the within-chain parallelism controlled by `T`.
-
-## When something goes wrong
-
-### The DEER solve takes many iterations
-
-First reduce `epsilon` or `T`. If the model otherwise behaves well, lower
-`damping` from `0.5` toward `0.3`. Do not loosen the convergence tolerances
-until you have ruled out a derivative error.
-
-### Parallel MALA is slower than sequential MALA
-
-That is expected for small, cheap targets on a CPU. Parallel MALA has setup,
-derivative, and scan overhead. It is designed for targets with enough batched
-work to benefit from parallel hardware. Benchmark the complete sampling call,
-including compilation separately from steady-state execution.
-
-### The chain does not move or has many rejections
-
-Run [`MALASampler`](@ref) or [`AdaptiveMALASampler`](@ref) first. Check the
-gradient against finite differences or an independent AD backend, then try a
-smaller step size.
-
-### GPU code reports scalar indexing or AD compilation errors
-
-The model must be written in GPU-compatible array operations, and backend
-support differs. Continue with [GPU execution](15-gpu.md).
