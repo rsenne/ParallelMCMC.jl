@@ -85,11 +85,12 @@ chain length.
 ## Where to go next
 
 - [Getting started](10-getting-started.md) walks through step-size tuning,
-  running parallel MALA, reading the result, and common failure modes.
+  running parallel MALA, and reading the result.
 - [Defining models](12-models.md) covers hand-written derivatives, automatic
   differentiation, batched functions, parameter names, and Turing models.
 - [GPU execution](15-gpu.md) explains when a GPU is worthwhile and shows a
   complete logistic-regression example.
+- [Troubleshooting](16-troubleshooting.md) covers common failure modes.
 - [How the algorithm works](20-algorithms.md) develops the DEER update and the
   diagonal parallel scan.
 - [API reference](95-reference.md) lists constructors and low-level building

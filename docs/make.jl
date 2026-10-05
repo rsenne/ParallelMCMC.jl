@@ -9,6 +9,7 @@ const pages = [
     "Getting started" => "10-getting-started.md",
     "Defining models" => "12-models.md",
     "GPU execution" => "15-gpu.md",
+    "Troubleshooting" => "16-troubleshooting.md",
     "How the algorithm works" => "20-algorithms.md",
     "API reference" => "95-reference.md",
     "Contributing" => [
