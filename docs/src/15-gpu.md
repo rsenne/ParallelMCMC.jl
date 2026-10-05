@@ -1,18 +1,19 @@
 # GPU execution
 
-[`ParallelMALASampler`](@ref) follows the storage of `initial_params`, so the
-same sampler can work with CPU vectors or supported device vectors. Moving the
-initial state is not enough, though: the target density, its derivatives, and
-the selected AD backend must all support the device.
+[`ParallelMALASampler`](@ref) automatically infers the backend depending on the
+array type of `initial_params`, so the same sampler can work with CPU vectors or
+supported device vectors. For example, `CuArray`s can be used after
+ParallelMCMC's CUDA extension is loaded with `using CUDA`.
 
-CUDA is an optional dependency. `using CUDA` activates ParallelMCMC's extension
-for `CuArray` storage without making CUDA part of a CPU-only installation.
+Changing the type of the initial state is not enough, though: the target
+density, its derivatives, and the selected AD backend must all be written in a
+device-compatible manner.
 
 ---
 
 ## Decide whether a GPU is worthwhile
 
-A GPU helps only when each DEER iteration provides enough work to amortize
+A GPU helps only when each DEER iteration is expensive enough to amortize
 kernel launches and data movement. The important workload is the evaluation of
 batched densities, gradients, and Hessian-vector products across a `T`-column
 trajectory.
@@ -75,7 +76,7 @@ otherwise CPU-only function GPU compatible.
 
 ### Enzyme may need broadcasts split into separate expressions
 
-Some `CuArray` gradients fail during Enzyme compilation with the same `gc-transition` error. If you encounter it, try splitting broadcasts into separate expressions, as in this example:
+Some `CuArray` gradients fail during Enzyme compilation with the same `gc-transition` error. If you encounter this error, try splitting broadcasts into separate expressions, as in this example:
 
 ```julia
 # ABORTS during Enzyme compile on GPU
@@ -238,7 +239,7 @@ chain = sample(model, sampler, 1_600;
                chain_type=VNChain)
 ```
 
-Both examples describe the same posterior. The Enzyme version separates operations to avoid the compilation failures above.
+Both examples describe the same posterior; the Enzyme version only differs because it separates operations to avoid the compilation failures above.
 
 ---
 
