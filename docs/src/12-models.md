@@ -19,10 +19,10 @@ For a parameter vector `x` of length `dim`:
 - `grad_logdensity(x)` returns a vector with the same shape as `x`.
 - `dim` is the number of unconstrained parameters.
 
-The derivative slot may contain either a callable or an
-`ADTypes.AbstractADType` backend.
+The gradient argument may be either a callable or an `ADTypes.AbstractADType`
+backend.
 
-## Option 1: write the derivatives
+## Option 1: write the gradient
 
 Hand-written derivatives keep the execution path predictable and are often the
 best choice for GPU models.
@@ -32,25 +32,19 @@ using ParallelMCMC
 
 logdensity(x) = -sum(abs2, x) / 2
 gradient(x) = -x
-hvp(x, v) = -v
 
 model = DensityModel(
     logdensity,
     gradient,
     4;
-    hvp=hvp,
     param_names=[:a, :b, :c, :d],
 )
 ```
 
-Sequential MALA needs the gradient. Parallel MALA also needs
-Hessian-vector products (HVPs). You can supply `hvp(x, v)` as above, or let the
-sampler construct it with an AD backend.
+## Option 2: derive the gradient with AD
 
-## Option 2: derive gradients with AD
-
-Pass an AD backend in the gradient slot to build a model from the log-density
-alone:
+Pass an AD backend as the gradient argument to build a model from the
+log-density alone:
 
 ```julia
 using ADTypes, ForwardDiff, ParallelMCMC
@@ -62,15 +56,19 @@ model = DensityModel(logdensity, AutoForwardDiff(), 4)
 Backends are prepared when sampling begins, once the package knows the element
 type and storage of `initial_params`.
 
-For parallel MALA, also provide a backend to the sampler unless the model has
-an `hvp`:
+## Hessian-vector products for parallel MALA
+
+Parallel MALA additionally requires Hessian-vector products (HVPs). Just like
+for gradients, you can either hand-write them or use AD.
+
+A hand-written HVP is passed with the `hvp` keyword:
 
 ```julia
-sampler = ParallelMALASampler(0.1; backend=AutoForwardDiff())
+hvp(x, v) = -v
+model = DensityModel(logdensity, gradient, 4; hvp=hvp)
 ```
 
-You can mix approaches. For example, keep a hand-written gradient and use AD
-only for the HVP:
+To use AD instead, provide a backend to the sampler:
 
 ```julia
 model = DensityModel(logdensity, gradient, 4)
@@ -79,14 +77,13 @@ sampler = ParallelMALASampler(0.1; backend=AutoForwardDiff())
 
 ### Which function does an HVP backend differentiate?
 
-| Gradient slot | HVP slot | What ParallelMCMC differentiates |
+| `gradient = ...` | `hvp = ...` | HVP calculated by... |
 |---|---|---|
-| callable | backend | the callable gradient |
-| backend | backend | the log-density with a second-order backend pair |
-| either | `SecondOrder(...)` | the log-density with that explicit pair |
+| callable | backend | differentiating `gradient` with `backend` |
+| backend1 | backend2 | differentiating log-density with `SecondOrder(backend2, backend1)` |
+| either | `SecondOrder(...)` | differentiating log-density with `SecondOrder(...)` |
 
-An explicit `DifferentiationInterface.SecondOrder` takes precedence over the
-gradient slot. Backend combinations are not equally useful on every device;
+Backend combinations are not equally useful on every device;
 see [GPU execution](15-gpu.md) before selecting one for GPU work.
 
 ## Batched functions
@@ -114,19 +111,19 @@ model = DensityModel(
 )
 ```
 
-Both batched derivative slots require `logdensity_batch`. When the gradient
-slot contains an AD backend, ParallelMCMC can derive a batched gradient by
+Both batched derivative arguments require `logdensity_batch`. When the
+gradient argument is an AD backend, ParallelMCMC can derive a batched gradient by
 differentiating `sum(logdensity_batch(X))`. For that to be correct, each output
 of `logdensity_batch` must depend only on the corresponding column of `X`.
 
-The scalar functions remain part of the contract even when all batched
+The scalar functions must still be provided even when all batched
 functions are present.
 
 ## Parameter names
 
-Without `param_names`, the chain contains one vector-valued parameter named
-`:x`. Pass names when separate scalar or array-valued entries would be easier to
-work with.
+If `param_names` is not passed, the chain will contain one vector-valued
+parameter named `:x`. Pass names when separate scalar or array-valued entries
+would be easier to work with.
 
 ```julia
 # Three scalar parameters
@@ -140,14 +137,16 @@ Names may be `Symbol`s or `VarName`s. The declared shapes must account for
 exactly `dim` scalar values. `VNChain` accepts `VarName` keys, while `SymChain`
 uses `Symbol` keys.
 
-## Turing models
+## DynamicPPL models
 
-Loading Turing activates a convenience constructor that handles unconstraining,
-parameter names, and conversion back to the model's original parameter space.
-The AD backend is required.
+DynamicPPL is the package that defines Turing's `@model` syntax. Loading it
+activates a convenience constructor that handles unconstraining, parameter
+names, and conversion back to the model's original parameter space. Unlike when
+sampling with Turing, the AD backend must be explicitly passed, and is used to
+calculate the gradient of the log-density.
 
 ```julia
-using ADTypes, FlexiChains, ForwardDiff, ParallelMCMC, Turing
+using ADTypes, Distributions, DynamicPPL, FlexiChains, ForwardDiff, ParallelMCMC
 
 @model function normal_location(y)
     mu ~ Normal(0, 1)
@@ -168,11 +167,11 @@ chain = sample(
 )
 ```
 
-Turing-backed models require `VNChain`. Their output includes `:logjoint`,
-`:logprior`, and `:loglikelihood`; a manually constructed model has a single
-`:logp` field.
+DynamicPPL-backed models require `VNChain`. Their output includes `:logjoint`,
+`:logprior`, and `:loglikelihood`; this is more informative than a manually
+constructed model, which has a single `:logp` field.
 
-To use parallel MALA, supply an HVP or an appropriate sampler backend:
+To use parallel MALA, supply an analytical HVP or an appropriate AD backend:
 
 ```julia
 using Enzyme
@@ -181,14 +180,15 @@ sampler = ParallelMALASampler(0.1; T=64, backend=AutoEnzyme())
 chain = sample(model, sampler, 1_000; chain_type=VNChain)
 ```
 
-Do not assume that the model's gradient backend is also a valid HVP backend.
-In particular, applying ForwardDiff around a DynamicPPL gradient that already
-uses ForwardDiff creates unsupported nested dual numbers. Enzyme is the
-supported default for differentiating that gradient; an explicit second-order
-backend pair or analytical HVP can also be used.
+You should not assume that a model's gradient backend is also a valid HVP
+backend. In particular, applying ForwardDiff around a DynamicPPL gradient that
+already uses ForwardDiff creates nested dual numbers, which are not supported.
+For such a gradient, Enzyme is the supported default, but you may also specify
+an explicit second-order backend pair or analytical HVP.
 
-Turing models currently run on the CPU. For a GPU target, write the density and
-derivatives directly with GPU-compatible array operations.
+DynamicPPL models currently run on the CPU, because DynamicPPL evaluates the
+model with CPU vectors. For a GPU target, write the density and derivatives
+directly with GPU-compatible array operations.
 
 ## LogDensityProblems models
 

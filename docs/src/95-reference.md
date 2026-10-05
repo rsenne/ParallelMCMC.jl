@@ -22,7 +22,7 @@ Additional constructors become available when their packages are loaded:
   model, extracts its parameter names, and converts output back to the original
   parameter space.
 
-See [Defining models](12-models.md) for examples and the derivative-slot rules.
+See [Defining models](12-models.md) for examples and the meanings of the derivative arguments.
 
 ## Samplers
 
@@ -54,7 +54,7 @@ MALATapeElement
 ## Device support
 
 Loading CUDA activates the package extension for `CuArray` storage. Loading
-Reactant activates `ADTypes.AutoReactant()` support for derivative slots and
+Reactant activates `ADTypes.AutoReactant()` support for derivative arguments and
 the parallel sampler's `backend`. The restrictions and backend comparison are
 documented in [GPU execution](15-gpu.md).
 
