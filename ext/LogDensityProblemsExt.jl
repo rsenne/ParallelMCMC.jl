@@ -21,9 +21,11 @@ The optional `param_names` keyword accepts a collection of parameter names that 
 for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
 parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
-`hvp` and the batched slots are forwarded to `DensityModel`. Use a callable or
-explicit `DifferentiationInterface.SecondOrder` for HVPs; plain backends and
-`AutoReactant()` are unsupported. Batched derivatives require a hand-written
+`hvp` and the batched slots are forwarded to `DensityModel`. A backend in `hvp`
+differentiates `logdensity_and_gradient`, so that function must be differentiable by the
+backend. If it is not (for example, it calls AD internally), pass an explicit
+`DifferentiationInterface.SecondOrder`, which differentiates `logdensity` twice instead.
+`AutoReactant()` is unsupported. Batched derivatives require a hand-written
 `logdensity_batch`.
 
 # Example

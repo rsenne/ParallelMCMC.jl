@@ -20,9 +20,9 @@ derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
 ParallelMCMC.needs_host_staging
 ```
 
-## Extension constructors
+## Extension constructor
 
-`DensityModel(ld; param_names=nothing)` wraps any `LogDensityProblems` object with gradients when `LogDensityProblems` is loaded. See [Getting Started](10-getting-started.md) for an example.
+`DensityModel(ld; param_names=nothing)` wraps any `LogDensityProblems` object with gradients when `LogDensityProblems` is loaded. See [LogDensityProblems models](@ref) for an example.
 
 ## Model
 

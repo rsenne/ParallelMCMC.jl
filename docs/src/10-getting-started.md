@@ -47,7 +47,7 @@ Hand-written and AD-derived slots can be mixed.
 | backend | backend | `SecondOrder(hvp, grad_logdensity)` on `logdensity` |
 | either | `SecondOrder(...)` | that pair on `logdensity`, gradient slot unused |
 
-An explicit `SecondOrder` bypasses the gradient slot. Use it for an AD-derived HVP on LogDensityProblems models.
+An explicit `SecondOrder` bypasses the gradient slot. Use it when the gradient can't be differentiated.
 
 See [GPU Execution](15-gpu.md) for backend compatibility.
 
@@ -114,10 +114,26 @@ With `LogDensityProblems` loaded, `DensityModel` accepts any object that impleme
 ```julia
 using LogDensityProblems, ParallelMCMC, FlexiChains
 
-model = DensityModel(ld; param_names=[:μ])   # ld is your LogDensityProblems object
+# μ ~ Normal(0, 1), y ~ Normal(μ, 0.5)
+struct NormalPosterior
+    y::Float64
+end
+LogDensityProblems.capabilities(::Type{NormalPosterior}) =
+    LogDensityProblems.LogDensityOrder{1}()
+LogDensityProblems.dimension(::NormalPosterior) = 1
+LogDensityProblems.logdensity(ld::NormalPosterior, x) = -0.5 * x[1]^2 - 2 * (ld.y - x[1])^2
+function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
+    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
+end
+
+model = DensityModel(NormalPosterior(1.5); param_names=[:μ])
+chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
+               chain_type=VNChain, discard_warmup=true)
 ```
 
-The object must implement `capabilities` (at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`. `hvp` and the batched slots are forwarded to `DensityModel`; for an AD-derived HVP, pass an explicit `SecondOrder`.
+The object must implement `capabilities` (at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`. `hvp` and the batched slots are forwarded to `DensityModel`.
+
+A backend in `hvp` differentiates `logdensity_and_gradient`, so that function must be differentiable by the backend. If it is not (for example, it calls AD internally), pass an explicit `SecondOrder`, which differentiates `logdensity` twice instead. `AutoReactant()` is not supported for these models.
 
 ---
 

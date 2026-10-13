@@ -58,7 +58,19 @@ end
     @test only(FlexiChains.parameters(chain)) == @varname(μ)
     draws = vec(chain[@varname(μ)])
     @test abs(mean(draws) - LDP_MU_POST) < 0.1
-    @test abs(var(draws) - LDP_VAR_POST) < 0.1
+    @test abs(var(draws) - LDP_VAR_POST) < 0.05
+end
+
+@testset "parameter is named x by default" begin
+    chain = sample(
+        MersenneTwister(2),
+        DensityModel(_NormalLD()),
+        MALASampler(0.3),
+        20;
+        chain_type=SymChain,
+        progress=false,
+    )
+    @test only(FlexiChains.parameters(chain)) == :x
 end
 
 @testset "SecondOrder hvp drives ParallelMALA" begin
@@ -71,6 +83,35 @@ end
 
     chain = sample(
         MersenneTwister(12),
+        model,
+        ParallelMALASampler(0.02; T=8),
+        64;
+        chain_type=SymChain,
+        progress=false,
+    )
+    @test all(isfinite, vec(chain[:μ]))
+end
+
+@testset "batched slots reach the prepared model" begin
+    logp_b(X) = vec(-0.5 .* X .^ 2 .- 2 .* (LDP_OBS .- X) .^ 2)
+    grad_b(X) = -X .+ 4 .* (LDP_OBS .- X)
+    hvp_b(X, V) = -5 .* V
+    model = DensityModel(
+        _NormalLD();
+        param_names=[:μ],
+        hvp=(x, v) -> -5 .* v,
+        logdensity_batch=logp_b,
+        grad_logdensity_batch=grad_b,
+        hvp_batch=hvp_b,
+    )
+
+    prepped = ParallelMCMC._prepare_model(model, [0.0], 8, nothing)
+    @test prepped.logdensity_batch === logp_b
+    @test prepped.grad_logdensity_batch === grad_b
+    @test prepped.hvp_batch === hvp_b
+
+    chain = sample(
+        MersenneTwister(13),
         model,
         ParallelMALASampler(0.02; T=8),
         64;

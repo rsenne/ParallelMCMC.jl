@@ -392,10 +392,9 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
     )
 end
 
-#= Callable structs that allow us to dispatch on the type of the LogDensityProblems object in
-the postprocessing stage. Ideally these would be defined in the LogDensityProblemsExt.
-However, structs defined in extensions are hard to get hold of so we define them here.
-The callable behaviour itself is implemented in LogDensityProblemsExt =#
+#= Wrappers for LogDensityProblems objects. They are defined here rather than in
+LogDensityProblemsExt so `_check_reactant_hvp_source` can dispatch on them. The call
+methods live in the extension. =#
 struct LogDensityProblemPrimal{L}
     ld::L
 end
@@ -927,7 +926,6 @@ function _parallel_mala_run!(
 )
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    # Postprocessing receives the user's `model`, not `prepped`.
     prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0
