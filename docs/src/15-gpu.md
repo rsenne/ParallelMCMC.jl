@@ -32,15 +32,6 @@ step size, and tolerances.
 
 ## Current limitations
 
-### Turing models are CPU-only
-
-The Turing constructor and its DynamicPPL/LogDensityProblems path currently
-execute with CPU vectors. They cannot run a `@model` directly against a
-`CuArray`.
-
-For GPU sampling, write the density and derivatives with GPU-compatible array
-operations and pass them to [`DensityModel`](@ref), as in the example below.
-
 ### Enzyme needs ParallelMCMC's linear-algebra wrappers
 
 `ParallelMCMC` exports three thin wrappers:
@@ -269,7 +260,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 
     **Reactant chooses the execution device independently of the input array.** With a CUDA client, `CuArray` inputs are staged through pinned host memory and results are copied back on the device. With the CPU client, both directions go through the host and the sampler warns when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
 
-- The log-density must be Reactant-traceable. DynamicPPL-built log-densities are not.
+- The log-density must be Reactant-traceable.
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
 - Only the default `AutoReactant()` mode is supported.
 

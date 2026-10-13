@@ -40,8 +40,8 @@ each output of `logdensity_batch` must depend only on the matching input column.
 
 `param_names` controls the parameter keys in the returned `FlexiChain`. With
 the default `nothing`, the chain contains one vector-valued parameter named
-`:x`. See [Defining models](@ref) for naming, batching, Turing integration, and
-the rules for combining derivative backends.
+`:x`. See [Defining models](@ref) for naming, batching, and the rules for
+combining derivative backends.
 """
 struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
     logdensity::F
