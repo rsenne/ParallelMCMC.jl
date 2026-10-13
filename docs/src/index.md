@@ -95,30 +95,7 @@ chain = sample(model, sampler, 2_000;
                progress=true)
 ```
 
-### Turing.jl integration
-
-When `DynamicPPL` (part of Turing.jl) is loaded, a one-argument `DensityModel` constructor is available that wraps a `@model` directly.
-Parameter names are automatically extracted, and values transformed back to the original model space:
-
-```julia
-using Turing, ParallelMCMC, FlexiChains
-
-@model function normal_model(y)
-    μ ~ Normal(0.0, 1.0)
-    y ~ Normal(μ, 0.5)
-end
-
-model   = DensityModel(normal_model(1.5))
-sampler = AdaptiveMALASampler(0.3; n_warmup=500)
-
-chain = sample(model, sampler, 2_000;
-               chain_type=VNChain,
-               discard_warmup=true)
-```
-
 See [Getting Started](10-getting-started.md) for worked examples and guidance on choosing samplers, and [Algorithm Details](20-algorithms.md) for the mathematics behind DEER.
-
-For Turing models the chain type used must be `VNChain` (not `SymChain`), as that is the natural parameter type for Turing models.
 
 ## Contributors
 

@@ -47,7 +47,7 @@ Hand-written and AD-derived slots can be mixed.
 | backend | backend | `SecondOrder(hvp, grad_logdensity)` on `logdensity` |
 | either | `SecondOrder(...)` | that pair on `logdensity`, gradient slot unused |
 
-An explicit `SecondOrder` bypasses the gradient slot. Use it for an AD-derived HVP on Turing or LogDensityProblems models.
+An explicit `SecondOrder` bypasses the gradient slot. Use it for an AD-derived HVP on LogDensityProblems models.
 
 See [GPU Execution](15-gpu.md) for backend compatibility.
 
@@ -103,59 +103,21 @@ The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic.
 2. Pass for example, `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
 3. Pass a `CuVector` as `initial_params` to `sample`.
 
-GPU execution has its own caveats (Turing models are CPU-only, `AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients should avoid scalar indexing).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
+GPU execution has its own caveats (`AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients should avoid scalar indexing).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
 
 ---
 
-## Turing.jl integration
+## LogDensityProblems models
 
-ParallelMCMC.jl integrates with Turing.jl models through the `DynamicPPL` and `LogDensityProblems` extensions.
-
-### One-step convenience constructor
-
-Load `DynamicPPL` (part of Turing.jl) and a single-argument `DensityModel` constructor becomes available:
+With `LogDensityProblems` loaded, `DensityModel` accepts any object that implements the [LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface with gradients:
 
 ```julia
-using Turing, ParallelMCMC, FlexiChains
+using LogDensityProblems, ParallelMCMC, FlexiChains
 
-@model function normal_model(y)
-    μ ~ Normal(0.0, 1.0)
-    y ~ Normal(μ, 0.5)
-end
-
-model = DensityModel(normal_model(1.5))   # param_names=[:μ] extracted automatically
-
-chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()), 500;
-               chain_type=VNChain)
+model = DensityModel(ld; param_names=[:μ])   # ld is your LogDensityProblems object
 ```
 
-Much like Turing's own samplers, the resulting chain will always have parameters in the original (possibly constrained) space, even though the MCMC sampling itself is performed in unconstrained space.
-Furthermore, parameter names are automatically extracted from the Turing model (and will always be the same as those when using Turing's own samplers).
-
-Note that when sampling with a Turing model the returned chain will have `:logjoint`, `:logprior`, and `:loglikelihood` columns, since Turing models provide enough information to separate these contributions to the log-density.
-This is in contrast to sampling with a manually constructed `DensityModel`, which returns only a single `:logp` column.
-
-### Manual `LogDensityProblems` path
-
-For explicit control over the AD backend, construct the `LogDensityFunction`
-directly with DynamicPPL's `adtype` interface:
-
-```julia
-using Turing, LogDensityProblems, ADTypes
-using ParallelMCMC, FlexiChains
-
-ld = DynamicPPL.LogDensityFunction(
-    normal_model(1.5),
-    DynamicPPL.getlogjoint_internal,
-    DynamicPPL.LinkAll();
-    adtype=ADTypes.AutoEnzyme(),
-)
-
-model = DensityModel(ld; param_names=[:μ])
-```
-
-This also accepts any other `LogDensityProblems`-compatible object.
-As above, the returned chain will always contain parameters in the original space: the use of `LinkAll()` above only stipulates that MCMC sampling itself is to be performed in unconstrained space, and has no result on the form of the returned chain.
+The object must implement `capabilities` (at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`. `hvp` and the batched slots are forwarded to `DensityModel`; for an AD-derived HVP, pass an explicit `SecondOrder`.
 
 ---
 
@@ -206,8 +168,6 @@ model = DensityModel(...; param_names=[:x1, :x2, :x3])
 # One scalar parameter called `x`, and a 1x2 matrix parameter called `y`
 model = DensityModel(...; param_names=[:x, (:y, (1, 2))])
 ```
-
-For Turing.jl models, parameter names are automatically derived from the model and do not need to be specified manually.
 
 ---
 

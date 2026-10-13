@@ -11,7 +11,7 @@ using Zygote
 using CUDA: CUDA
 
 #=
-Coverage for the GPU AD-HVP path: when the user supplies a non-Turing model
+Coverage for the GPU AD-HVP path: when the user supplies a model
 with `gradlogp` / `grad_logdensity_batch` but no analytical `hvp`/`hvp_batch`,
 the sampler should fall back to AD on the user's gradient and run on GPU
 without crashing.

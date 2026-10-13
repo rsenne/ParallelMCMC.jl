@@ -927,8 +927,7 @@ function _parallel_mala_run!(
 )
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
-    # Postprocessing dispatches on the user's model type (e.g. from the
-    # DynamicPPL extension), so `model` itself stays unprepped.
+    # Postprocessing receives the user's `model`, not `prepped`.
     prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
     ws = nothing
     nsteps = 0

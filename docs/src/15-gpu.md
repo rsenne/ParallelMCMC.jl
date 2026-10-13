@@ -22,13 +22,7 @@ A useful heuristic: if your CPU `grad_logdensity_batch` already saturates BLAS a
 
 ## Limitations
 
-### 1. DynamicPPL / Turing models are CPU-only
-
-The one-argument `DensityModel(::DynamicPPL.Model)` constructor (and the `LogDensityProblems` path that backs it) executes the model with `Vector{Float64}` parameters on CPU.  There is no path today that runs a `@model` against `CuArray` parameters.
-
-To run on GPU, hand-write `logdensity` / `grad_logdensity` (and the batched variants) directly over `CuArray`s and pass them to `DensityModel`.  This is shown in the example below.
-
-### 2. Enzyme on GPU currently needs `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum`
+### 1. Enzyme on GPU currently needs `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum`
 
 `ParallelMCMC` exports three thin wrappers:
 
@@ -58,9 +52,9 @@ When you do **not** need them:
 
 These wrappers are a workaround pending upstream Enzyme support for GPU matmul rules.  Once that lands, plain `A * B` on `CuArray`s will work and the wrappers will be deprecated.
 
-### 3. Some Enzyme GPU gradients hit a `gc-transition` abort. Staging them as single ops is a workaround
+### 2. Some Enzyme GPU gradients hit a `gc-transition` abort. Staging them as single ops is a workaround
 
-Certain `CuArray` gradient expressions abort during Enzyme compilation on GPU with the same `gc-transition` failure as limitation 2. In practice the fused form below aborts while the staged form compiles, so **writing the gradient as single-op stages is a reliable workaround**:
+Certain `CuArray` gradient expressions abort during Enzyme compilation on GPU with the same `gc-transition` failure as limitation 1. In practice the fused form below aborts while the staged form compiles, so **writing the gradient as single-op stages is a reliable workaround**:
 
 ```julia
 # ABORTS during Enzyme compile on GPU
@@ -253,7 +247,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 
     **Reactant chooses the execution device independently of the input array.** With a CUDA client, `CuArray` inputs are staged through pinned host memory and results are copied back on the device. With the CPU client, both directions go through the host and the sampler warns when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
 
-- The log-density must be Reactant-traceable. DynamicPPL-built log-densities are not.
+- The log-density must be Reactant-traceable.
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
 - Only the default `AutoReactant()` mode is supported.
 
@@ -268,7 +262,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 
 - **The HVP has a clean closed form.**  Quadratic priors, Gaussian likelihoods, GLMs (logistic, Poisson, probit) — the second derivative is a known function of intermediate quantities you already compute in `gradlogp`.  A few extra lines and you skip the AD pipeline entirely.
 - **Performance matters and the AD compile is heavy.**  Enzyme and Mooncake both pay a one-shot compilation cost on the user's gradient.  For long-running chains this amortizes, but for many short runs the analytical HVP wins.
-- **You're hitting AD-backend-specific GPU restrictions.**  The [Enzyme limitations](#2-enzyme-on-gpu-currently-needs-pmcmc_matmul-pmcmc_dot-pmcmc_dotsum) above (`pmcmc_*` wrappers, staged broadcasts) only matter when the AD backend is invoked.  Supplying analytical HVP sidesteps them — your `gradlogp` and `hvp` can use plain `*`, `dot`, `sum`, and the sampler's `backend` can be omitted entirely because no AD is ever invoked.
+- **You're hitting AD-backend-specific GPU restrictions.**  The [Enzyme limitations](#1-enzyme-on-gpu-currently-needs-pmcmc_matmul-pmcmc_dot-pmcmc_dotsum) above (`pmcmc_*` wrappers, staged broadcasts) only matter when the AD backend is invoked.  Supplying analytical HVP sidesteps them — your `gradlogp` and `hvp` can use plain `*`, `dot`, `sum`, and the sampler's `backend` can be omitted entirely because no AD is ever invoked.
 - **You can reuse intermediates between gradient and HVP.**  When `hvp` shares $X\beta$, $\sigma(X\beta)$, or similar with the gradient computation, an analytical version can be both faster *and* shorter than what AD produces.
 
 ### Same example with analytical HVP

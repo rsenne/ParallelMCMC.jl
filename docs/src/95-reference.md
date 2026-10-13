@@ -22,12 +22,7 @@ ParallelMCMC.needs_host_staging
 
 ## Extension constructors
 
-`DensityModel` also has extension constructors for common probabilistic-programming interfaces:
-
-- `DensityModel(ld; param_names=nothing)` for `LogDensityProblems` models with gradients
-- `DensityModel(turing_model)` for `DynamicPPL` / Turing models when the relevant extension packages are loaded
-
-See [Getting Started](10-getting-started.md) for end-to-end examples of both.
+`DensityModel(ld; param_names=nothing)` wraps any `LogDensityProblems` object with gradients when `LogDensityProblems` is loaded. See [Getting Started](10-getting-started.md) for an example.
 
 ## Model
 
