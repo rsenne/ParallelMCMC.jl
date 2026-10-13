@@ -108,7 +108,7 @@ The important arguments are:
   out when the model provides `hvp` and, when applicable, `hvp_batch`.
 - `initial_params`: the first state.
 - `chain_type`: use `VNChain` for `VarName` keys or `SymChain` for `Symbol`
-  keys. Turing models require `VNChain`.
+  keys.
 
 ## Choose `T` and the DEER controls
 

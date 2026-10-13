@@ -83,8 +83,8 @@ chain = sample(
 
 Start with the [documentation](https://rsenne.github.io/ParallelMCMC.jl/dev/)
 or the repository's [getting-started guide](docs/src/10-getting-started.md).
-The docs cover step-size tuning, model and AD setup, Turing integration, GPU
-execution, troubleshooting, and the DEER algorithm.
+The docs cover step-size tuning, model and AD setup, GPU execution,
+troubleshooting, and the DEER algorithm.
 
 ## How to cite
 

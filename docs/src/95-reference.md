@@ -14,13 +14,8 @@ for custom solvers. For an end-to-end example, begin with
 DensityModel
 ```
 
-Additional constructors become available when their packages are loaded:
-
-- `DensityModel(ld; param_names=nothing, kwargs...)` wraps a gradient-capable
-  `LogDensityProblems` object.
-- `DensityModel(turing_model; ad_backend, kwargs...)` wraps a DynamicPPL/Turing
-  model, extracts its parameter names, and converts output back to the original
-  parameter space.
+Loading `LogDensityProblems` adds `DensityModel(ld; param_names=nothing,
+kwargs...)`, which wraps a gradient-capable `LogDensityProblems` object.
 
 See [Defining models](12-models.md) for examples and the meanings of the derivative arguments.
 

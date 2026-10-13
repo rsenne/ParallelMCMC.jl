@@ -27,7 +27,6 @@ trajectory length, AD backend, and hardware.
 | Try the parallel-across-sequence algorithm | [`ParallelMALASampler`](@ref) |
 | Tune a step size automatically | [`AdaptiveMALASampler`](@ref) |
 | Check a model against ordinary sequential MALA | [`MALASampler`](@ref) |
-| Sample a Turing model | [`DensityModel`](@ref) with the Turing extension |
 | Run a large, batch-friendly target on a GPU | [GPU execution](15-gpu.md) |
 
 Parallel MALA is most compelling when evaluating the target and its derivatives
@@ -87,7 +86,8 @@ chain length.
 - [Getting started](10-getting-started.md) walks through step-size tuning,
   running parallel MALA, and reading the result.
 - [Defining models](12-models.md) covers hand-written derivatives, automatic
-  differentiation, batched functions, parameter names, and Turing models.
+  differentiation, batched functions, parameter names, and LogDensityProblems
+  models.
 - [GPU execution](15-gpu.md) explains when a GPU is worthwhile and shows a
   complete logistic-regression example.
 - [Troubleshooting](16-troubleshooting.md) covers common failure modes.
