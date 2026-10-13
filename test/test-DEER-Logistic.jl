@@ -6,12 +6,8 @@ using FlexiChains
 
 using ParallelMCMC
 
-using DynamicPPL
-using LogDensityProblems
 using ADTypes
 using Enzyme
-using ForwardDiff
-using Distributions: MvNormal, Bernoulli
 
 #=
 Bayesian logistic regression:
@@ -35,8 +31,8 @@ end
 const _LR_X, _LR_y = _lr_data(MersenneTwister(1234), _LR_N, _LR_D, _LR_β_true)
 
 #=
-Array-type-agnostic logp and gradlogp — identical math as the Turing model,
-but expressed as plain broadcasts so they run on CPU or GPU without change.
+Array-type-agnostic logp and gradlogp, written as plain broadcasts so they run
+on CPU or GPU without change.
 =#
 function _logp_lr(β, X, y)
     logits = X * β
@@ -55,94 +51,6 @@ function _hvp_lr(β, v, X, y)
     p = @. 1 / (1 + exp(-logits))
     w = @. p * (1 - p)
     return -(X' * (w .* (X * v))) .- v
-end
-
-@model function _deer_logistic_regression(X, y)
-    D = size(X, 2)
-    β ~ MvNormal(zeros(D), I)
-    for i in eachindex(y)
-        p_i = 1 / (1 + exp(-dot(view(X, i, :), β)))
-        y[i] ~ Bernoulli(p_i)
-    end
-end
-
-function _deer_logistic_turing_density_model()
-    return DensityModel(
-        _deer_logistic_regression(_LR_X, _LR_y);
-        ad_backend=ADTypes.AutoForwardDiff(),
-        hvp=(β, v) -> _hvp_lr(β, v, _LR_X, _LR_y),
-    )
-end
-
-# Turing integration tests (CPU)
-
-@testset "ParallelMALASampler Turing logistic: param names extracted correctly" begin
-    model = _deer_logistic_turing_density_model()
-
-    @test model.dim == _LR_D
-    @test isfinite(model.logdensity(zeros(_LR_D)))
-    @test all(isfinite, model.grad_logdensity(zeros(_LR_D)))
-end
-
-@testset "ParallelMALASampler Turing logistic: chains output well-formed" begin
-    model = _deer_logistic_turing_density_model()
-    sampler = ParallelMALASampler(
-        0.05;
-        T=16,
-        maxiter=80,
-        tol_abs=1e-4,
-        tol_rel=1e-3,
-        jacobian=:diag,
-        damping=0.5,
-        backend=ADTypes.AutoEnzyme(),
-    )
-
-    chain = sample(
-        MersenneTwister(42),
-        model,
-        sampler,
-        400;
-        initial_params=zeros(_LR_D),
-        chain_type=VNChain,
-        progress=false,
-    )
-
-    @test chain isa VNChain
-    @test FlexiChains.niters(chain) == 400
-    @test @varname(β) in FlexiChains.parameters(chain)
-    @test all(isfinite, chain[@varname(β), stack = true])
-end
-
-@testset "ParallelMALASampler Turing logistic: posterior sign correct" begin
-    model = _deer_logistic_turing_density_model()
-    sampler = ParallelMALASampler(
-        0.05;
-        T=16,
-        maxiter=80,
-        tol_abs=1e-4,
-        tol_rel=1e-3,
-        jacobian=:diag,
-        damping=0.5,
-        backend=ADTypes.AutoEnzyme(),
-    )
-
-    chain = sample(
-        MersenneTwister(99),
-        model,
-        sampler,
-        800;
-        initial_params=zeros(_LR_D),
-        chain_type=VNChain,
-        progress=false,
-    )
-
-    post = chain[@varname(β), stack = true][201:end, :, :]
-    β_mean = vec(mean(post; dims=1))
-
-    @test sign(β_mean[1]) == sign(_LR_β_true[1])
-    @test sign(β_mean[2]) == sign(_LR_β_true[2])
-    @test abs(β_mean[1] - _LR_β_true[1]) < 0.6
-    @test abs(β_mean[2] - _LR_β_true[2]) < 0.6
 end
 
 # Statistical correctness: DEER posterior mean matches AdaptiveMALA reference.

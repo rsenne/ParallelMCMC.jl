@@ -14,41 +14,39 @@ Construct a `DensityModel` from any object implementing the
 - `LogDensityProblems.capabilities(ld)` returning at least
   `LogDensityProblems.LogDensityOrder{1}` (i.e. gradient available).
 - `LogDensityProblems.dimension(ld)` -> `Int`
+- `LogDensityProblems.logdensity(ld, x)` -> `logp`
 - `LogDensityProblems.logdensity_and_gradient(ld, x)` -> `(logp, grad)`
 
 The optional `param_names` keyword accepts a collection of parameter names that will be used
 for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
 parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
-`hvp` and the batched slots are forwarded to `DensityModel`. Use a callable or
-explicit `DifferentiationInterface.SecondOrder` for HVPs; plain backends and
-`AutoReactant()` are unsupported. Batched derivatives require a hand-written
+`hvp` and the batched slots are forwarded to `DensityModel`. A backend in `hvp`
+differentiates `logdensity_and_gradient`, so that function must be differentiable by the
+backend. If it is not (for example, it calls AD internally), pass an explicit
+`DifferentiationInterface.SecondOrder`, which differentiates `logdensity` twice instead.
+`AutoReactant()` is unsupported. Batched derivatives require a hand-written
 `logdensity_batch`.
 
-# Turing.jl / DynamicPPL example
+# Example
 ```julia
-using Turing, LogDensityProblems, ADTypes, Enzyme, ParallelMCMC, FlexiChains
+using LogDensityProblems, ParallelMCMC, FlexiChains
 
-@model function mymodel(y)
-    μ ~ Normal(0, 1)
-    y ~ Normal(μ, 0.5)
+struct NormalPosterior
+    y::Float64
+end
+LogDensityProblems.capabilities(::Type{NormalPosterior}) =
+    LogDensityProblems.LogDensityOrder{1}()
+LogDensityProblems.dimension(::NormalPosterior) = 1
+LogDensityProblems.logdensity(ld::NormalPosterior, x) = -0.5 * x[1]^2 - 2 * (ld.y - x[1])^2
+function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
+    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
 end
 
-obs = 1.5
-ld = DynamicPPL.LogDensityFunction(
-    mymodel(obs),
-    DynamicPPL.getlogjoint_internal,
-    DynamicPPL.LinkAll();
-    adtype=ADTypes.AutoEnzyme(),
-)
-
-model = DensityModel(ld; param_names=[:μ])
+model = DensityModel(NormalPosterior(1.5); param_names=[:μ])
 chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
                chain_type=VNChain, discard_warmup=true, progress=true)
 ```
-
-If DynamicPPL is loaded, the simpler one-step constructor `DensityModel(mymodel(obs))`
-is also available and extracts parameter names automatically.
 """
 function ParallelMCMC.DensityModel(
     ld;

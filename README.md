@@ -41,7 +41,7 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 | [`MALASampler`](src/interface.jl) | Baseline — sequential MALA with a fixed step size |
 | [`AdaptiveMALASampler`](src/interface.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
 
-All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects, so they slot into existing Turing.jl / AbstractMCMC workflows.
+All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects, so they slot into existing AbstractMCMC workflows.
 
 
 ### Quick start
@@ -66,7 +66,7 @@ sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
 chain = sample(model, sampler, 500; chain_type=VNChain)
 ```
 
-See the [Getting Started guide](docs/src/10-getting-started.md) for worked examples, GPU usage, Turing.jl integration, and step-size tuning.
+See the [Getting Started guide](docs/src/10-getting-started.md) for worked examples, GPU usage, and step-size tuning.
 
 ## How to Cite
 

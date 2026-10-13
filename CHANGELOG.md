@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ADTypes.AutoReactant()` can supply derivatives and sampler HVPs through
   Reactant.jl. It requires `using Reactant`, a traceable log-density, and
   `AutoReactant()` on both AD passes of an HVP (#37, #52).
-- The `DensityModel` constructors in `DynamicPPLExt` and `LogDensityProblemsExt`
-  now accept `hvp` and the batched derivative slots.
+- The `DensityModel` constructor in `LogDensityProblemsExt` now accepts `hvp`
+  and the batched derivative slots.
 
 ### Fixed
 
@@ -54,7 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- `DynamicPPLExt` no longer requires `ForwardDiff` as a triggering library to load.
+- Turing/DynamicPPL support (#74). `DynamicPPLExt` and the
+  `DensityModel(::DynamicPPL.Model)` constructor are gone, since DynamicPPL
+  models cannot run on the GPU. Use ParallelMCMC 0.2 for Turing models, or wrap
+  the log-density in a `LogDensityProblems` object or a plain `DensityModel`.
 
 ## [0.2.0] - 2026-06-29
 
