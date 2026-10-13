@@ -137,27 +137,31 @@ Names may be `Symbol`s or `VarName`s. The declared shapes must account for
 exactly `dim` scalar values. `VNChain` accepts `VarName` keys, while `SymChain`
 uses `Symbol` keys.
 
-## DynamicPPL models
+## LogDensityProblems models
 
-DynamicPPL is the package that defines Turing's `@model` syntax. Loading it
-activates a convenience constructor that handles unconstraining, parameter
-names, and conversion back to the model's original parameter space. Unlike when
-sampling with Turing, the AD backend must be explicitly passed, and is used to
-calculate the gradient of the log-density.
+Any object implementing the gradient-capable
+[LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface
+can be wrapped directly:
 
 ```julia
-using ADTypes, Distributions, DynamicPPL, FlexiChains, ForwardDiff, ParallelMCMC
+using FlexiChains, LogDensityProblems, ParallelMCMC
 
-@model function normal_location(y)
-    mu ~ Normal(0, 1)
-    y ~ Normal(mu, 0.5)
+# mu ~ Normal(0, 1), y ~ Normal(mu, 0.5)
+struct NormalPosterior
+    y::Float64
 end
 
-model = DensityModel(
-    normal_location(1.5);
-    ad_backend=AutoForwardDiff(),
-)
+LogDensityProblems.capabilities(::Type{NormalPosterior}) =
+    LogDensityProblems.LogDensityOrder{1}()
+LogDensityProblems.dimension(::NormalPosterior) = 1
+LogDensityProblems.logdensity(ld::NormalPosterior, x) =
+    -x[1]^2 / 2 - 2 * (ld.y - x[1])^2
 
+function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
+    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
+end
+
+model = DensityModel(NormalPosterior(1.5); param_names=[:mu])
 chain = sample(
     model,
     AdaptiveMALASampler(0.3; n_warmup=500),
@@ -167,39 +171,13 @@ chain = sample(
 )
 ```
 
-DynamicPPL-backed models require `VNChain`. Their output includes `:logjoint`,
-`:logprior`, and `:loglikelihood`; this is more informative than a manually
-constructed model, which has a single `:logp` field.
-
-To use parallel MALA, supply an analytical HVP or an appropriate AD backend:
-
-```julia
-using Enzyme
-
-sampler = ParallelMALASampler(0.1; T=64, backend=AutoEnzyme())
-chain = sample(model, sampler, 1_000; chain_type=VNChain)
-```
-
-You should not assume that a model's gradient backend is also a valid HVP
-backend. In particular, applying ForwardDiff around a DynamicPPL gradient that
-already uses ForwardDiff creates nested dual numbers, which are not supported.
-For such a gradient, Enzyme is the supported default, but you may also specify
-an explicit second-order backend pair or analytical HVP.
-
-DynamicPPL models currently run on the CPU, because DynamicPPL evaluates the
-model with CPU vectors. For a GPU target, write the density and derivatives
-directly with GPU-compatible array operations.
-
-## LogDensityProblems models
-
-Any object implementing the gradient-capable
-[LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface
-can be wrapped directly:
-
-```julia
-model = DensityModel(logdensity_problem; param_names=[:a, :b])
-```
-
 This constructor gets the dimension, log-density, and gradient from the
-interface. The same HVP and batching keywords accepted by the main constructor
-are available when you need them.
+interface, so the object must implement `capabilities` (at least
+`LogDensityOrder{1}`), `dimension`, `logdensity`, and
+`logdensity_and_gradient`. The same HVP and batching keywords accepted by the
+main constructor are available when you need them.
+
+An HVP backend differentiates `logdensity_and_gradient`, so that function must
+be differentiable by the backend. If it is not, for example because it calls AD
+internally, pass an explicit `SecondOrder`, which differentiates `logdensity`
+twice instead. `AutoReactant()` is not supported for these models.
