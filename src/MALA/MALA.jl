@@ -49,8 +49,7 @@ _logdet_M(cholM::Cholesky) = logdet(cholM)
 """
 Reusable scratch buffers for allocation-light MALA primitives.
 
-All vectors are created with the same array type / device placement as `x_template`,
-so this workspace is GPU-compatible when constructed from a `CuVector`.
+All vectors have the same array type and device as `x`.
 """
 struct MALAWorkspace{V}
     g_x::V
@@ -85,8 +84,8 @@ end
 """
 Reusable scratch buffers for batched MALA primitives.
 
-Matrix buffers have the same size, eltype, and device placement as `X_template`.
-Vector buffers have length `size(X_template, 2)`.
+Matrix buffers have the same size, eltype, and device as `X`.
+Vector buffers have length `size(X, 2)`.
 """
 struct MALABatchedWorkspace{M,V,RM,BV,BM}
     G_X::M
@@ -411,7 +410,10 @@ function mala_step_with_logα!(
 end
 
 """
-Stop-gradient surrogate step used for Jacobians.
+MALA step with the accept test replaced by a sigmoid, used for Jacobians.
+
+Returns `g * y + (1 - g) * x`, where `y` is the proposal and
+`g = sigmoid(logα - log(u))`.
 """
 function mala_step_surrogate_sigmoid(
     logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing
@@ -548,9 +550,10 @@ function mala_step_batched(
 end
 
 """
-Batched fused surrogate forward step and JVP over columns.
+Batched MALA forward step and JVP of the sigmoid surrogate over columns.
 
-`X`, `Ξ`, and `Z` are all D×T, and `u` has length T.
+`FT` is the exact step with a hard accept test. Only the JVP `Jt` uses the
+sigmoid surrogate. `X`, `Ξ`, and `Z` are all D×T, and `u` has length T.
 Returns `(FT, Jt)` where both outputs are D×T.
 """
 function mala_step_batched_fwd_and_jvp!(

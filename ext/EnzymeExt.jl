@@ -17,7 +17,8 @@ using Enzyme.EnzymeCore.EnzymeRules:
     overwritten,
     width
 
-# TODO: Implement matmul overloads upstream in Enzyme. See: https://github.com/EnzymeAD/Enzyme.jl/issues/3122
+# TODO: Enzyme has GPU matmul support since EnzymeAD/Enzyme.jl#3148, but forward mode
+# on CuArray still fails (EnzymeAD/Enzyme.jl#3841). Revisit these rules once that is fixed.
 
 # Add the default function annotation without changing the user's mode.
 function DEER._normalized_backend(backend::ADTypes.AutoEnzyme{M,A}) where {M,A}

@@ -6,9 +6,9 @@ the derivative path while still being easy to inspect.
 
 ## Install an AD backend
 
-Parallel MALA is the main algorithm in ParallelMCMC. It requires an automatic
-differentiation backend to compute Hessian–vector products, so you will have to
-load one yourself. In this guide we will use ForwardDiff.
+Parallel MALA is the main algorithm in ParallelMCMC. It needs Hessian-vector
+products, which you can either write yourself or get from an automatic
+differentiation backend. This guide uses ForwardDiff.
 
 ```julia-repl
 pkg> add ParallelMCMC ForwardDiff
@@ -128,7 +128,7 @@ ParallelMALASampler(
     maxiter=200,
     tol_abs=1e-6,
     tol_rel=1e-5,
-    backend=AutoForwardDiff(),
+    backend=nothing,
 )
 ```
 
@@ -150,8 +150,8 @@ models.
 
 ParallelMCMC returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
 With the parameter names above, values are available as `chain[:x1]` and
-`chain[:x2]`. Sampler diagnostics are stored in extra columns such as
-`chain[:accepted]` and `chain[:logp]`.
+`chain[:x2]`. The log-density of each sample is stored in the extra column
+`chain[:logp]`.
 
 Use several chains for convergence diagnostics. Start Julia with multiple
 threads, for example `julia -t 4`, then run:
@@ -163,12 +163,13 @@ chains = sample(
     MCMCThreads(),
     2_000,
     4;
-    initial_params=zeros(2),
+    initial_params=fill(zeros(2), 4),
     chain_type=VNChain,
 )
 
 ess(chains)
 ```
 
+With several chains, `initial_params` needs one starting point per chain.
 `MCMCThreads()` runs independent chains concurrently, which is separate from
 the within-chain parallelism controlled by `T`.
