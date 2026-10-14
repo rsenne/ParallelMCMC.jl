@@ -124,7 +124,7 @@ y_gpu = CUDA.CuVector(y_cpu)
 ### Mooncake backend (plain operators)
 
 ```julia
-using ParallelMCMC, FlexiChains
+using ParallelMCMC, FlexiChains, LinearAlgebra
 using ADTypes, Mooncake
 
 softplus(z) = log1p(exp(-abs(z))) + max(z, zero(z))
