@@ -130,12 +130,13 @@ would be easier to work with.
 DensityModel(logdensity, gradient, 3; param_names=[:a, :b, :c])
 
 # One scalar and one 1 x 2 matrix
-DensityModel(logdensity, gradient, 3; param_names=[:a, (:B, (1, 2))])
+DensityModel(logdensity, gradient, 3; param_names=[:a, :B => (1, 2)])
 ```
 
-Names may be `Symbol`s or `VarName`s. The declared shapes must account for
-exactly `dim` scalar values. `VNChain` accepts `VarName` keys, while `SymChain`
-uses `Symbol` keys.
+Names may be `Symbol`s or `VarName`s. Give an array-valued entry as a pair of
+its name and shape, as with `:B => (1, 2)` above. The declared shapes must
+account for exactly `dim` scalar values. `VNChain` accepts `VarName` keys, while
+`SymChain` uses `Symbol` keys.
 
 ## LogDensityProblems models
 
