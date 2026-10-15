@@ -1,34 +1,23 @@
-# [API Reference](@id reference)
+# API reference
 
 ```@meta
 CurrentModule = ParallelMCMC
 ```
 
-This page documents all public types and functions exported by ParallelMCMC.jl.
-
-## Reactant
-
-Loading `Reactant` (`using Reactant`) enables `ADTypes.AutoReactant()` as a
-derivative-slot backend on `DensityModel` and as `ParallelMALASampler`'s
-`backend`. See [GPU Execution](15-gpu.md) for its constraints.
-
-## CUDA and other device arrays
-
-`using CUDA` loads the `CUDAExt` extension; see [GPU Execution](15-gpu.md).
-
-```@docs
-ParallelMCMC.needs_host_staging
-```
-
-## Extension constructor
-
-`DensityModel(ld; param_names=nothing)` wraps any `LogDensityProblems` object with gradients when `LogDensityProblems` is loaded. See [LogDensityProblems models](@ref) for an example.
+This page collects the public API and the low-level DEER types that are useful
+for custom solvers. For an end-to-end example, begin with
+[Getting started](10-getting-started.md).
 
 ## Model
 
 ```@docs
 DensityModel
 ```
+
+Loading `LogDensityProblems` adds `DensityModel(ld; param_names=nothing,
+kwargs...)`, which wraps a gradient-capable `LogDensityProblems` object.
+
+See [Defining models](12-models.md) for examples and the meanings of the derivative arguments.
 
 ## Samplers
 
@@ -38,24 +27,40 @@ AdaptiveMALASampler
 ParallelMALASampler
 ```
 
-## Internal types
+All three implement the AbstractMCMC interface. The usual entry point is
+`sample(model, sampler, n; kwargs...)`, optionally with an RNG or an
+AbstractMCMC ensemble such as `MCMCThreads()`.
 
-These types appear in the `AbstractMCMC` state/transition protocol.  You generally do not need to construct them directly.
+## Transition and state types
+
+These types are part of the AbstractMCMC protocol. Most users receive them from
+`AbstractMCMC.step` and do not construct them directly.
 
 ```@docs
-MALATapeElement
 MALAState
 MALATransition
 AdaptiveMALAState
 AdaptiveMALATransition
 ParallelMALAState
 ParallelMALATransition
+MALATapeElement
 ```
 
-## Low-level namespaces
+## Device support
 
-These lower-level building blocks power the public samplers and are useful if you
-want to work with taped recursions or the diagonal affine scan directly.
+Loading CUDA activates the package extension for `CuArray` storage. Loading
+Reactant activates `ADTypes.AutoReactant()` support for derivative arguments and
+the parallel sampler's `backend`. The restrictions and backend comparison are
+documented in [GPU execution](15-gpu.md).
+
+```@docs
+ParallelMCMC.needs_host_staging
+```
+
+## Low-level DEER API
+
+[`ParallelMALASampler`](@ref) builds on the types below. Use them directly when
+solving a custom taped recursion or managing workspaces across repeated solves.
 
 ```@docs
 DEER.TapedRecursion
@@ -65,7 +70,9 @@ ParallelMCMC.DEERScan.AffineScanWorkspace
 MALA.mala_step_surrogate_sigmoid
 ```
 
-The diagonal scan implementation itself lives in `ParallelMCMC.DEERScan.solve_affine_scan_diag!`.
+The in-place diagonal scan is available as
+`ParallelMCMC.DEERScan.solve_affine_scan_diag!`. See
+[How the algorithm works](20-algorithms.md) before using the low-level API.
 
 ## Index
 
