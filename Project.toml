@@ -31,11 +31,11 @@ ReactantExt = ["Reactant", "Enzyme"]
 [compat]
 ADTypes = "1.21.0"
 AbstractMCMC = "5.10.0"
-CUDA = "5.11.0"
+CUDA = "5.11, 6"
 CUDA_Runtime_jll = "0.21"
 DifferentiationInterface = "0.7.13"
 Enzyme = "0.13.146"
-FlexiChains = "0.6.6"
+FlexiChains = "0.7"
 ForwardDiff = "1"
 LinearAlgebra = "1"
 LogDensityProblems = "2"

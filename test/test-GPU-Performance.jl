@@ -79,6 +79,7 @@ else
             model,
             sampler,
             sampler isa ParallelMALASampler ? sampler.T : 100;
+            chain_type=Any,
             progress=false,
             initial_params=x0,
         )
@@ -95,7 +96,13 @@ else
             end
             t0 = time_ns()
             sample(
-                MersenneTwister(42), model, sampler, N; progress=false, initial_params=x0
+                MersenneTwister(42),
+                model,
+                sampler,
+                N;
+                chain_type=Any,
+                progress=false,
+                initial_params=x0,
             )
             if x0 isa CUDA.CuArray
                 CUDA.synchronize()

@@ -55,8 +55,8 @@ end
         discard_warmup=true,
         progress=false,
     )
-    @test only(FlexiChains.parameters(chain)) == @varname(μ)
-    draws = vec(chain[@varname(μ)])
+    @test only(FlexiChains.parameters(chain)) == @vn(μ)
+    draws = vec(chain[@vn(μ)])
     @test abs(mean(draws) - LDP_MU_POST) < 0.1
     @test abs(var(draws) - LDP_VAR_POST) < 0.05
 end

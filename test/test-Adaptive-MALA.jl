@@ -174,8 +174,9 @@ end
     model = DensityModel(logp_adapt, gradlogp_adapt, 2)
     sampler = AdaptiveMALASampler(0.2; n_warmup=50)
 
-    samples = sample(MersenneTwister(1), model, sampler, 100; progress=false)
-    @test length(samples) == 100
+    chain = sample(MersenneTwister(1), model, sampler, 100; progress=false)
+    @test chain isa VNChain
+    @test FlexiChains.niters(chain) == 100
 end
 
 @testset "sample() with chain_type=Chains" begin

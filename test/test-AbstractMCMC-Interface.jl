@@ -131,7 +131,8 @@ gradlogp_iface(x) = -x
         sampler = MALASampler(0.1)
 
         chain = sample(model, sampler, 100; progress=false)
-        @test length(chain) == 100
+        @test chain isa VNChain
+        @test FlexiChains.niters(chain) == 100
     end
 
     @testset "sample() with chain_type=Chains" begin
@@ -144,7 +145,7 @@ gradlogp_iface(x) = -x
         @test FlexiChains.niters(chain) == 200
 
         # Parameter columns present
-        @test only(FlexiChains.parameters(chain)) == @varname(x)
+        @test only(FlexiChains.parameters(chain)) == @vn(x)
 
         # Internal columns present
         @test Set(FlexiChains.extras(chain)) == Set(FlexiChains.Extra.([:logp, :accepted]))
@@ -226,7 +227,7 @@ gradlogp_iface(x) = -x
             )
 
             @test chain isa VNChain
-            @test FlexiChains.parameters(chain) == [@varname(mu), @varname(sigma)]
+            @test FlexiChains.parameters(chain) == [@vn(mu), @vn(sigma)]
         end
 
         @testset "with vector-valued symbols" begin
@@ -251,12 +252,12 @@ gradlogp_iface(x) = -x
                 50;
                 chain_type=VNChain,
                 progress=false,
-                param_names=[@varname(param) => (2,)],
+                param_names=[@vn(param) => (2,)],
             )
 
             @test chain isa VNChain
-            @test FlexiChains.parameters(chain) == [@varname(param)]
-            @test size(chain[@varname(param), stack = true]) == (50, 1, 2)
+            @test FlexiChains.parameters(chain) == [@vn(param)]
+            @test size(chain[@vn(param), stack = true]) == (50, 1, 2)
         end
     end
 
@@ -287,7 +288,7 @@ gradlogp_iface(x) = -x
         @testset "VNChain" begin
             chain = sample(model, sampler, 50; chain_type=VNChain, progress=false)
             @test chain isa VNChain
-            @test FlexiChains.parameters(chain) == [@varname(mu), @varname(sigma)]
+            @test FlexiChains.parameters(chain) == [@vn(mu), @vn(sigma)]
         end
     end
 

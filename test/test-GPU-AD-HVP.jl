@@ -99,6 +99,7 @@ else
             model,
             sampler,
             n_samples;
+            chain_type=Any,
             initial_params=x0,
             progress=false,
         )
@@ -206,6 +207,7 @@ else
             model,
             sampler,
             n_samples;
+            chain_type=Any,
             initial_params=x0,
             progress=false,
         )
@@ -256,6 +258,7 @@ else
             model,
             sampler,
             n_samples;
+            chain_type=Any,
             initial_params=x0,
             progress=false,
         )

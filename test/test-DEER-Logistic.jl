@@ -198,7 +198,14 @@ else
 
         n_samples, n_burn = 400, 100
 
-        raw_cpu = sample(MersenneTwister(42), model_cpu, sampler, n_samples; progress=false)
+        raw_cpu = sample(
+            MersenneTwister(42),
+            model_cpu,
+            sampler,
+            n_samples;
+            chain_type=Any,
+            progress=false,
+        )
         β_cpu = vec(mean(reduce(hcat, [s.x for s in raw_cpu[(n_burn + 1):end]]); dims=2))
 
         raw_gpu = sample(
@@ -206,6 +213,7 @@ else
             model_gpu,
             sampler,
             n_samples;
+            chain_type=Any,
             initial_params=CUDA.CuArray(zeros(Float32, _LR_D)),
             progress=false,
         )

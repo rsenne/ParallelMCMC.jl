@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- FlexiChains compat is now `0.7`. FlexiChains 0.7 takes its `VarName` from
+  VarNames.jl, so `VNChain` is a `FlexiChain{VarNames.VarName}`. The
+  `@varname` macro is no longer exported there; use `@vn`.
+- `sample` on a `DensityModel` now returns a `VNChain` by default. Pass
+  `chain_type=Any` for the raw transition vector, or `chain_type=SymChain`
+  for `Symbol` keys.
+- CUDA compat widened to `5.11, 6`.
 - CUDA is now a weak dependency behind the `CUDAExt` extension; `using CUDA`
   loads it (#59). The `CuArray` checks in the random fills are replaced by the
   `needs_host_staging` trait.

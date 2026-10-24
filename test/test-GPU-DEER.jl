@@ -213,6 +213,7 @@ else
             model,
             sampler,
             3_000;
+            chain_type=Any,
             initial_params=CUDA.CuArray(zeros(Float32, D)),
             progress=false,
         )

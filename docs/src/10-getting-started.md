@@ -171,7 +171,7 @@ If you do not specify `param_names`, the chain will store a single vector-valued
 You can specify parameter names as a collection of either:
 
 - `Symbol`s (e.g. `[:x1, :x2]`);
-- `VarName`s (e.g. `[@varname(x[1]), @varname(x[2])]`) if `chain_type=VNChain`; or
+- `VarName`s (e.g. `[@vn(x[1]), @vn(x[2])]`) if `chain_type=VNChain`; or
 - A tuple of the above, *plus* a size. In this case, a total of `prod(size)` entries will be allocated to the named parameter, and the results in the chain will be reshaped to that size.
 
 The above can be mixed and matched as desired, as long as the total number of parameters matches the dimension of the model.

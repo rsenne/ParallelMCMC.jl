@@ -205,8 +205,9 @@ end
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
 
-    samples = sample(MersenneTwister(1), model, sampler, 50; progress=false)
-    @test length(samples) == 50
+    chain = sample(MersenneTwister(1), model, sampler, 50; progress=false)
+    @test chain isa VNChain
+    @test FlexiChains.niters(chain) == 50
 end
 
 @testset "ParallelMALASampler sample() with chain_type=Chains" begin
@@ -291,7 +292,14 @@ end
         @test fast[:logp] == slow[:logp]
 
         raw = sample(
-            MersenneTwister(7), model, sampler, N; initial_params=x0, progress=false, kw...
+            MersenneTwister(7),
+            model,
+            sampler,
+            N;
+            chain_type=Any,
+            initial_params=x0,
+            progress=false,
+            kw...,
         )
         slow_raw = ParallelMCMC._default_parallel_mala_mcmcsample(
             MersenneTwister(7), model, sampler, N; initial_params=x0, progress=false, kw...
