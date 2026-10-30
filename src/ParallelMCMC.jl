@@ -61,13 +61,18 @@ finished, so the caller may release the source.
 _copy_from_device_pointer!(::AbstractArray, ::Ptr{Cvoid}, ::AbstractString) = false
 
 #= Lives here rather than in `DEER` because both DEER's `ReactantHVP` fallbacks
-and `interface.jl`'s gradient hooks report it. =#
+and `model.jl`'s gradient hooks report it. =#
 const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using Reactant` to load ParallelMCMC's ReactantExt."
 
 include("MALA/MALA.jl")
 include("DEER/DEERScan.jl")
 include("DEER/DEER.jl")
-include("interface.jl")
+include("model.jl")
+include("chains.jl")
+include("samplers/mala.jl")
+include("samplers/parallel_mala.jl")
+include("samplers/adaptive_mala.jl")
+include("sample.jl")
 
 export DensityModel
 export MALASampler, MALATransition, MALAState

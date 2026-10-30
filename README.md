@@ -37,9 +37,9 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 
 | Sampler | Role |
 |---|---|
-| [`ParallelMALASampler`](src/interface.jl) | **Primary** — parallel-across-sequence MALA via DEER; $O(\log T)$ per solve |
-| [`MALASampler`](src/interface.jl) | Baseline — sequential MALA with a fixed step size |
-| [`AdaptiveMALASampler`](src/interface.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
+| [`ParallelMALASampler`](src/samplers/parallel_mala.jl) | **Primary** — parallel-across-sequence MALA via DEER; $O(\log T)$ per solve |
+| [`MALASampler`](src/samplers/mala.jl) | Baseline — sequential MALA with a fixed step size |
+| [`AdaptiveMALASampler`](src/samplers/adaptive_mala.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
 
 All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects, so they slot into existing AbstractMCMC workflows.
 
