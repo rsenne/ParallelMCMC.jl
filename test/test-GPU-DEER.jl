@@ -4,6 +4,8 @@ using LinearAlgebra
 using Statistics
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 import ParallelMCMC: DEER, MALA
 using ADTypes: ADTypes
 using ForwardDiff: ForwardDiff
@@ -91,7 +93,7 @@ else
         us = Float32.(rand(rng, T))
         x0_cpu = randn(rng, Float32, D)
 
-        xs_seq = MALA.run_mala_sequential_taped(_logp, _gradlogp, x0_cpu, ε, ξs_cpu, us)
+        xs_seq = run_mala_sequential_taped(_logp, _gradlogp, x0_cpu, ε, ξs_cpu, us)
 
         tape = [(ξ=CUDA.CuArray(ξs_cpu[t]), u=us[t]) for t in 1:T]
         rec = _make_gpu_rec(tape, ε, backend)

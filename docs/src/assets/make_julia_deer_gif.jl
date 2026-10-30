@@ -354,10 +354,10 @@ function main()
 
     noise = [step.xi for step in tape]
     uniforms = [step.u for step in tape]
-    sequential = MALA.run_mala_sequential_taped(
-        logposterior, gradposterior, x0, epsilon, noise, uniforms
-    )
-    final_trajectory = reduce(hcat, sequential[2:end])
+    sequential = accumulate(zip(noise, uniforms); init=x0) do x, (xi, u)
+        return MALA.mala_step_taped(logposterior, gradposterior, x, epsilon, xi, u)
+    end
+    final_trajectory = reduce(hcat, sequential)
 
     output = isempty(ARGS) ? joinpath(@__DIR__, "julia_deer_posterior.gif") : ARGS[1]
     mkpath(dirname(output))

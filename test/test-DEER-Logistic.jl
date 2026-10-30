@@ -5,6 +5,8 @@ using Statistics
 using FlexiChains
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 
 using ADTypes
 using Enzyme
@@ -124,9 +126,7 @@ else
         logp_cpu = β -> _logp_lr(β, _X_f32, _y_f32)
         gradlogp_cpu = β -> _gradlogp_lr(β, _X_f32, _y_f32)
 
-        xs_seq = ParallelMCMC.MALA.run_mala_sequential_taped(
-            logp_cpu, gradlogp_cpu, x0_cpu, ε, ξs_cpu, us
-        )
+        xs_seq = run_mala_sequential_taped(logp_cpu, gradlogp_cpu, x0_cpu, ε, ξs_cpu, us)
 
         X_gpu = CUDA.CuMatrix(_X_f32)
         y_gpu = CUDA.CuVector(_y_f32)

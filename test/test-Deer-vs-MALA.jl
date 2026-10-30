@@ -5,6 +5,8 @@ using ADTypes
 using Enzyme
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 const MALA = ParallelMCMC.MALA
 const DEER = ParallelMCMC.DEER
 const _AD = ADTypes.AutoEnzyme()
@@ -20,7 +22,7 @@ function count_mala_rejections(logp, gradlogp, x0, ϵ, ξs, us)
     T = length(ξs)
     @assert length(us) == T
     for t in 1:T
-        a = MALA.mala_accept_indicator(logp, gradlogp, x, ϵ, ξs[t], us[t])  # 1.0 accept, 0.0 reject
+        a = mala_accept_indicator(logp, gradlogp, x, ϵ, ξs[t], us[t])  # 1.0 accept, 0.0 reject
         if a == 0.0
             rejects += 1
             # x unchanged on rejection
@@ -59,9 +61,7 @@ end
     us = rand(rng, T)
 
     # Ground truth: sequential taped MALA
-    xs_seq = MALA.run_mala_sequential_taped(
-        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
-    )
+    xs_seq = run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
     @test length(xs_seq) == T + 1
     # Ensure we actually exercised the rejection (gate a=0) case at least once.
     rejects = count_mala_rejections(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
@@ -80,9 +80,7 @@ end
     us = rand(rng, T)
 
     # Ground truth: sequential taped MALA
-    xs_seq = MALA.run_mala_sequential_taped(
-        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
-    )
+    xs_seq = run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
     @test length(xs_seq) == T + 1
 
     tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
@@ -170,9 +168,7 @@ end
     us = rand(rng, T)
 
     # Ground truth: sequential taped MALA
-    xs_seq = MALA.run_mala_sequential_taped(
-        logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us
-    )
+    xs_seq = run_mala_sequential_taped(logp_stdnormal, gradlogp_stdnormal, x0, ϵ, ξs, us)
     @test length(xs_seq) == T + 1
 
     # Ensure at least one rejection occurred (so gating is exercised)
