@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ADTypes.AbstractADType`. AD preparations are cached per model (#40, #52).
 - `ParallelMALASampler`'s `backend` is optional when the model supplies its
   own HVPs (#52).
+- `ParallelMALASampler`'s `backend` is also optional when `grad_logdensity` is
+  an AD backend. The HVP then runs that backend's forward-mode counterpart
+  (`DifferentiationInterface.forward_counterpart`) over the gradient, e.g.
+  `AutoMooncakeForward()` over `AutoMooncake()`. Requires
+  DifferentiationInterface 0.7.19 (#39).
 - Batched gradients are derived from `logdensity_batch` when
   `grad_logdensity` is a backend (#52).
 - HVP backends over AD-derived gradients now use

@@ -7,6 +7,7 @@ using ParallelMCMC
 using ADTypes
 using Enzyme: Enzyme
 using ForwardDiff: ForwardDiff
+using Mooncake: Mooncake
 
 logp_slots(x) = -0.5 * dot(x, x)
 gradlogp_slots(x) = -x
@@ -537,4 +538,53 @@ end
     @test_throws ArgumentError sample(
         MersenneTwister(62), bare, s, 32; chain_type=CT_SLOTS, progress=false
     )
+end
+
+@testset "an AD gradient supplies the HVP when nothing else does" begin
+    rng = MersenneTwister(71)
+    x0 = randn(rng, D_SLOTS)
+    v = randn(rng, D_SLOTS)
+
+    @test ParallelMCMC._default_hvp_backend(AutoMooncake()) isa AutoMooncakeForward
+    @test ParallelMCMC._default_hvp_backend(AutoForwardDiff()) == AutoForwardDiff()
+    @test ParallelMCMC._default_hvp_backend(nothing) === nothing
+
+    @testset "$(nameof(typeof(b)))" for b in
+                                        (AutoForwardDiff(), AutoMooncake(), AutoEnzyme())
+        model = DensityModel(logp_slots, b, D_SLOTS)
+        m_r = ParallelMCMC._prepare_model(model, x0, 8, nothing)
+        @test m_r.hvp(x0, v) ≈ -v
+    end
+
+    @testset "batched" begin
+        T = 8
+        model = DensityModel(
+            logp_slots, AutoForwardDiff(), D_SLOTS; logdensity_batch=logp_batch_slots
+        )
+        m_r = ParallelMCMC._prepare_model(model, x0, T, nothing)
+        X = randn(rng, D_SLOTS, T)
+        V = randn(rng, D_SLOTS, T)
+        @test m_r.hvp_batch(X, V) ≈ -V
+    end
+
+    @testset "sampling matches an explicit forward backend" begin
+        model = DensityModel(logp_slots, AutoForwardDiff(), D_SLOTS)
+        c_default = sample(
+            MersenneTwister(72),
+            model,
+            ParallelMALASampler(0.05; T=16),
+            64;
+            chain_type=CT_SLOTS,
+            progress=false,
+        )
+        c_explicit = sample(
+            MersenneTwister(72),
+            model,
+            ParallelMALASampler(0.05; T=16, backend=AutoForwardDiff()),
+            64;
+            chain_type=CT_SLOTS,
+            progress=false,
+        )
+        @test c_default[:x] == c_explicit[:x]
+    end
 end

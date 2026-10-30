@@ -211,6 +211,11 @@ function _resolve_hvp_batch(
     end
 end
 
+# With no HVP source, run forward mode over an AD-derived gradient.
+# AutoReactant gradient maps to itself, so the Reactant pairing still holds.
+_default_hvp_backend(::Nothing) = nothing
+_default_hvp_backend(grad_backend::AbstractADType) = DI.forward_counterpart(grad_backend)
+
 # Reactant implements the two passes itself; DI composes all other backends.
 _second_order(hvp_backend, grad_backend) = DI.SecondOrder(hvp_backend, grad_backend)
 function _second_order(hvp_backend::ADTypes.AutoReactant, ::ADTypes.AutoReactant)
@@ -298,12 +303,18 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
     # Validate the pair before an AutoReactant gradient triggers compilation.
     needs_hvp = model.hvp === nothing || model.hvp isa AbstractADType
     hvp_backend = if needs_hvp
-        hb = model.hvp === nothing ? backend : model.hvp
+        hb = if model.hvp !== nothing
+            model.hvp
+        elseif backend !== nothing
+            backend
+        else
+            _default_hvp_backend(grad_backend)
+        end
         hb === nothing && throw(
             ArgumentError(
                 "ParallelMALASampler needs a Hessian-vector product: supply `hvp` " *
-                "on the DensityModel (callable or AD backend), or pass `backend=` " *
-                "to ParallelMALASampler",
+                "on the DensityModel (callable or AD backend), pass `backend=` " *
+                "to ParallelMALASampler, or give `grad_logdensity` as an AD backend",
             ),
         )
         _check_reactant_pair(grad_backend, hb)
@@ -341,10 +352,14 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
 
         needs_hvp_batch = hvp_batch === nothing || hvp_batch isa AbstractADType
         hvp_batch_backend = if needs_hvp_batch
-            hbb = if hvp_batch === nothing
-                model.hvp isa AbstractADType ? model.hvp : backend
-            else
+            hbb = if hvp_batch !== nothing
                 hvp_batch
+            elseif model.hvp isa AbstractADType
+                model.hvp
+            elseif backend !== nothing
+                backend
+            else
+                _default_hvp_backend(grad_batch_backend)
             end
             hbb === nothing && throw(
                 ArgumentError("batched DEER requires `hvp_batch` or a sampler `backend`"),
@@ -592,7 +607,9 @@ estimator) and `:diag` (exact diagonal via `D` JVPs).
 
 `backend` supplies Hessian-vector products when the `DensityModel` brings no
 `hvp` / `hvp_batch` of its own. It does not supply gradients. Leave it out when
-the model carries its own HVPs.
+the model carries its own HVPs. When it is left out and `grad_logdensity` is an
+AD backend, the HVP runs the forward-mode counterpart of that backend over the
+gradient (`DifferentiationInterface.forward_counterpart`).
 
 With `backend=ADTypes.AutoReactant()`, `grad_logdensity` must be `AutoReactant()`
 or a callable.
