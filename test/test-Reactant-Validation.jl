@@ -4,7 +4,7 @@ using ADTypes
 using ForwardDiff: ForwardDiff
 using LogDensityProblems: LogDensityProblems
 
-#= The AutoReactant validation in src/interface.jl needs no Reactant, so it runs
+#= The AutoReactant validation in src/model.jl needs no Reactant, so it runs
 in every test invocation. The Reactant-backed tests are opt-in in
 test-Reactant-HVP.jl. =#
 

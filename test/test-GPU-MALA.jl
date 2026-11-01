@@ -4,6 +4,8 @@ using LinearAlgebra
 using Statistics
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 const MALA = ParallelMCMC.MALA
 
 using CUDA: CUDA
@@ -104,7 +106,7 @@ else
         # Scalar step on CPU
         logp_scalar = x -> -0.5f0 * dot(x, x)
         grad_scalar = x -> -x
-        x_scalar, acc_scalar = MALA.mala_step_full(logp_scalar, grad_scalar, x, 0.1f0, ξ, u)
+        x_scalar, acc_scalar = mala_step_full(logp_scalar, grad_scalar, x, 0.1f0, ξ, u)
 
         # Batched N=1 on GPU
         X_gpu = CUDA.CuArray(reshape(copy(x), D, 1))

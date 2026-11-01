@@ -5,6 +5,8 @@ using Statistics
 using FlexiChains
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 const MALA = ParallelMCMC.MALA
 
 logp_adapt(x) = -0.5 * dot(x, x)
@@ -18,7 +20,7 @@ gradlogp_adapt(x) = -x
         ξ = randn(rng, D)
         u = rand(rng) * 0.999 + 1e-15
 
-        x1, a1 = MALA.mala_step_full(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
+        x1, a1 = mala_step_full(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
         x2, a2, logα = MALA.mala_step_with_logα(logp_adapt, gradlogp_adapt, x, 0.1, ξ, u)
 
         @test x1 == x2

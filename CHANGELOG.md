@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DensityModel(::DynamicPPL.Model)` constructor are gone, since DynamicPPL
   models cannot run on the GPU. Use ParallelMCMC 0.2 for Turing models, or wrap
   the log-density in a `LogDensityProblems` object or a plain `DensityModel`.
+- `MALA.run_mala_sequential_taped`, `MALA.mala_accept_indicator` and
+  `MALA.mala_step_full`. Nothing in the package called them; they now live in
+  the test suite as references. Use `MALA.mala_step_taped` or
+  `MALA.mala_step_with_logα` instead.
 
 ## [0.2.0] - 2026-06-29
 

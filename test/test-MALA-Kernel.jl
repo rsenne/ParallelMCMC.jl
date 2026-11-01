@@ -3,6 +3,8 @@ using Random
 using LinearAlgebra
 
 using ParallelMCMC
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 const MALA = ParallelMCMC.MALA
 
 # Standard normal target in R^d
@@ -52,10 +54,10 @@ end
         # Fixed tape
         ξs, us = make_tape(rng, D, T)
 
-        xs1 = MALA.run_mala_sequential_taped(
+        xs1 = run_mala_sequential_taped(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
-        xs2 = MALA.run_mala_sequential_taped(
+        xs2 = run_mala_sequential_taped(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
 
@@ -91,7 +93,7 @@ end
         x0 = randn(rng, D)
         ξs, us = make_tape(rng, D, T)
 
-        xs = MALA.run_mala_sequential_taped(
+        xs = run_mala_sequential_taped(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x0, ϵ, ξs, us
         )
 
@@ -156,10 +158,10 @@ end
         @test x_rej == x
 
         # Also sanity-check the accept indicator
-        a_acc = MALA.mala_accept_indicator(
+        a_acc = mala_accept_indicator(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_accept
         )
-        a_rej = MALA.mala_accept_indicator(
+        a_rej = mala_accept_indicator(
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u_reject
         )
         @test a_acc == 1.0
@@ -228,7 +230,7 @@ end
         for j in 1:N
             xj = copy(view(X, :, j))
             ξj = copy(view(Ξ, :, j))
-            x_ref, a_ref = MALA.mala_step_full(
+            x_ref, a_ref = mala_step_full(
                 logp_stdnormal_kernel,
                 gradlogp_stdnormal_kernel,
                 xj,
