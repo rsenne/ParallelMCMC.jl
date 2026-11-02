@@ -1,30 +1,40 @@
 # Getting started
 
-This guide takes a model from a log-density to a tuned parallel MALA run. The
-example uses a banana-shaped target because it is nonlinear enough to exercise
-the derivative path while still being easy to inspect.
+This guide samples a two-dimensional banana-shaped density with parallel MALA.
+We tune the step size with sequential MALA first, then reuse it in the parallel sampler.
+The target is
 
-## Install an AD backend
-
-Parallel MALA is the main algorithm in ParallelMCMC. It needs Hessian-vector
-products, which you can either write yourself or get from an automatic
-differentiation backend. This guide uses ForwardDiff.
-
-```julia-repl
-pkg> add ParallelMCMC ForwardDiff
+```math
+\log p(x) = -\frac{1}{2}\left(\frac{x_1^2}{100} + \left(x_2 + 0.1\, x_1^2 - 1\right)^2\right).
 ```
 
-```julia
+Its Hessian changes with $x$, so it tests the Hessian-vector products in a way that a Gaussian target would not.
+
+## Installation
+
+Parallel MALA is the main algorithm in ParallelMCMC.
+It needs Hessian-vector products of the log-density, which you can write yourself or get from an automatic differentiation (AD) backend.
+ParallelMCMC does not depend on any AD package, so you load the one you want.
+This guide uses ForwardDiff.
+
+```julia-repl
+pkg> add ParallelMCMC ADTypes ForwardDiff FlexiChains AbstractMCMC
+```
+
+ADTypes provides `AutoForwardDiff()`, FlexiChains provides `ess` and `rhat`, and AbstractMCMC provides `MCMCThreads()`.
+
+```@example gs
+using ParallelMCMC
+using ADTypes, FlexiChains, ForwardDiff, Random
 using AbstractMCMC: MCMCThreads
-using ADTypes, FlexiChains, ForwardDiff, ParallelMCMC, Random
 ```
 
 ## Define the target
 
-A [`DensityModel`](@ref) needs a log-density, a gradient, and the number of
-unconstrained parameters. The log-density may omit its normalizing constant.
+A [`DensityModel`](@ref) needs a log-density, a gradient, and the number of unconstrained parameters.
+The log-density may omit its normalizing constant.
 
-```julia
+```@example gs
 function banana_logdensity(x)
     a = x[2] + 0.1 * x[1]^2 - 1
     return -(x[1]^2 / 100 + a^2) / 2
@@ -35,130 +45,75 @@ function banana_gradient(x)
     return [-x[1] / 100 - 0.2 * x[1] * a, -a]
 end
 
-model = DensityModel(
-    banana_logdensity,
-    banana_gradient,
-    2;
-    param_names=[:x1, :x2],
-)
+model = DensityModel(banana_logdensity, banana_gradient, 2; param_names=[:x1, :x2])
+nothing # hide
 ```
 
-Here, the gradient is hand-written, but it does not have to be. See
-[Defining models](12-models.md) for AD-derived gradients and analytical
-Hessian-vector products.
+The gradient here is written by hand, but it does not have to be.
+[Defining models](12-models.md) shows how to get it from an AD backend instead.
 
 ## Tune the step size
 
-MALA is sensitive to its step size, such that a value that is too large causes
-frequent rejections, while one that is too small produces highly correlated
-samples. Start with [`AdaptiveMALASampler`](@ref), which tunes the step size
-during warmup.
+MALA is sensitive to its step size.
+If the step size is too large, most proposals are rejected; if it is too small, the chain moves slowly and successive samples are highly correlated.
+[`AdaptiveMALASampler`](@ref) tunes the step size during warmup, so we run it first and reuse the result.
 
-```julia
-rng = MersenneTwister(42)
+```@example gs
 tuning = sample(
-    rng,
+    MersenneTwister(42),
     model,
     AdaptiveMALASampler(0.1; n_warmup=500),
     750;
     initial_params=zeros(2),
-    chain_type=VNChain,
     discard_warmup=true,
 )
 
 epsilon = last(vec(tuning[:step_size]))
 ```
 
-The requested 750 transitions include warmup; `discard_warmup=true` removes
-every transition marked as warmup from the returned chain. `:step_size`,
-`:accepted`, and `:logp` are stored as extra fields alongside the parameters.
+The 750 transitions include the 500 warmup transitions, and `discard_warmup=true` removes those from the returned chain.
+After warmup the step size is fixed, so we take the last value of `:step_size`, which the chain stores next to the parameters.
 
-!!! tip "Treat tuning as a diagnostic"
-    Check that the tuned step size settles to a finite, positive value and that
-    the chain moves through the target. Automatic tuning cannot rescue an
-    incorrect gradient or a badly chosen parameterization.
+!!! tip "Check the tuned step size"
+    A tuned step size that collapses toward zero usually means that the gradient is wrong or that the parameters have very different scales.
+    Adaptation cannot fix either problem.
 
 ## Run parallel MALA
 
-Pass the tuned value to [`ParallelMALASampler`](@ref).
+Pass the tuned step size to [`ParallelMALASampler`](@ref).
+The model has no hand-written Hessian-vector product, so `backend=AutoForwardDiff()` tells the sampler to compute one by differentiating `banana_gradient`.
 
-```julia
-sampler = ParallelMALASampler(
-    epsilon;
-    T=64,
-    backend=AutoForwardDiff(),
-)
-
-chain = sample(
-    MersenneTwister(43),
-    model,
-    sampler,
-    2_000;
-    initial_params=zeros(2),
-    chain_type=VNChain,
-)
+```@example gs
+sampler = ParallelMALASampler(epsilon; T=64, backend=AutoForwardDiff())
+chain = sample(MersenneTwister(43), model, sampler, 2_000; initial_params=zeros(2))
 ```
 
-The important arguments are:
-
-- `epsilon`: the MALA step size.
-- `T`: the number of transitions in each DEER solve. It does not change the
-  number of samples returned by `sample`.
-- `backend`: the AD backend used for missing Hessian-vector products. Leave it
-  out when the model provides `hvp` and, when applicable, `hvp_batch`, or when
-  `grad_logdensity` is an AD backend; the HVP then uses that backend's
-  forward-mode counterpart.
-- `initial_params`: the first state.
-- `chain_type`: defaults to `VNChain`, which uses `VarName` keys. `SymChain`
-  uses `Symbol` keys.
+`T=64` sets how many transitions DEER solves together; `sample` still returns 2,000 samples.
 
 ## Choose `T` and the DEER controls
 
-`T=64` is a reasonable first experiment. Larger blocks expose more work to
-parallel hardware but use more memory and can make the nonlinear solve harder.
-Increase `T` only after the model works at a smaller value.
+Start with the default `T=64`, and change it only after the model samples correctly.
+Larger blocks give parallel hardware more work per iteration, but they use more memory and the nonlinear solve may need more iterations.
 
-The defaults are intended to be a usable starting point:
+The other keywords control the solve:
 
-```julia
-ParallelMALASampler(
-    epsilon;
-    T=64,
-    jacobian=:stoch_diag,
-    probes=1,
-    damping=0.5,
-    maxiter=200,
-    tol_abs=1e-6,
-    tol_rel=1e-5,
-    backend=nothing,
-)
-```
+- `jacobian=:stoch_diag`, the default, estimates the diagonal of each transition's Jacobian with `probes` random vectors. Each extra probe makes the estimate less noisy and costs one more Jacobian-vector product per transition.
+- `jacobian=:diag` computes the diagonal exactly with one Jacobian-vector product per parameter. Use it to check results on small models.
+- `damping`, which defaults to `0.5`, is the fraction of each DEER update that is applied. Lower it if the solve does not converge.
+- `maxiter`, `tol_abs`, and `tol_rel` decide when the solve stops. See [`ParallelMALASampler`](@ref) for the exact rule.
 
-- `jacobian=:stoch_diag` uses a Hutchinson estimate of the Jacobian diagonal.
-  This is the scalable default.
-- `probes` controls the number of random vectors in that estimate. More probes
-  reduce estimator noise but require more derivative work.
-- `damping` blends each DEER update with the previous trajectory. Lower it when
-  the solve is unstable; raise it cautiously when convergence is already
-  reliable.
-- `maxiter`, `tol_abs`, and `tol_rel` control the nonlinear solve. Tightening
-  tolerances costs more iterations.
-
-For a low-dimensional correctness check, `jacobian=:diag` computes the exact
-diagonal with one JVP per dimension. It is usually too expensive for large
-models.
+If a block reaches `maxiter` before it meets the tolerances, the sampler still returns its states as samples, without a warning.
+[Troubleshooting](16-troubleshooting.md) explains how to recognize this.
 
 ## Use the returned chain
 
-ParallelMCMC returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
-With the parameter names above, values are available as `chain[:x1]` and
-`chain[:x2]`. The log-density of each sample is stored in the extra column
-`chain[:logp]`.
+`sample` returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
+Index it with the parameter names from the model, as in `chain[:x1]`, and use `chain[:logp]` to get the log-density of each sample.
 
-Use several chains for convergence diagnostics. Start Julia with multiple
-threads, for example `julia -t 4`, then run:
+To check convergence, run several chains and compare them with $\hat{R}$.
+Start Julia with several threads, for example `julia -t 4`, so that `MCMCThreads()` can run the chains at the same time:
 
-```julia
+```@example gs
 chains = sample(
     model,
     sampler,
@@ -166,12 +121,14 @@ chains = sample(
     2_000,
     4;
     initial_params=fill(zeros(2), 4),
-    chain_type=VNChain,
 )
 
 ess(chains)
 ```
 
-With several chains, `initial_params` needs one starting point per chain.
-`MCMCThreads()` runs independent chains concurrently, which is separate from
-the within-chain parallelism controlled by `T`.
+```@example gs
+rhat(chains)
+```
+
+`initial_params` now holds one starting point per chain.
+Each chain runs on its own thread and still solves blocks of `T` transitions with DEER.

@@ -417,10 +417,12 @@ function mala_step_cached!(
 end
 
 """
+    mala_step_surrogate_sigmoid(logp, gradlogp, x, ϵ, ξ, u; cholM=nothing)
+
 MALA step with the accept test replaced by a sigmoid, used for Jacobians.
 
-Returns `g * y + (1 - g) * x`, where `y` is the proposal and
-`g = sigmoid(logα - log(u))`.
+Returns `g * y + (1 - g) * x`, where `y` is the proposal built from the noise
+`ξ`, `logα` is its log acceptance ratio, and `g = sigmoid(logα - log(u))`.
 """
 function mala_step_surrogate_sigmoid(
     logp, gradlogp, x::AbstractVector, ϵ::Real, ξ::AbstractVector, u::Real; cholM=nothing

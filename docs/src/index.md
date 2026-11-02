@@ -10,17 +10,24 @@ CurrentModule = ParallelMCMC
 </p>
 ```
 
-ParallelMCMC.jl implements Markov chain Monte Carlo methods that parallelize
-*across the sequence of samples*. Its main sampler, [`ParallelMALASampler`](@ref),
-uses DEER to solve a block of MALA transitions together instead of waiting for
-each transition before starting the next one.
+ParallelMCMC.jl parallelizes Markov chain Monte Carlo (MCMC) *within* a single chain.
+Its main sampler, [`ParallelMALASampler`](@ref), draws the random numbers for a block of MALA transitions in advance.
+It then solves for all states in the block at once with DEER, a Newton method whose linear solves are parallel scans.
+You can still run several chains in parallel on top of this.
 
-This is different from running several independent chains at once. You can do
-that too, but the package's main goal is to shorten the critical path *within*
-each chain. Whether that produces a speedup depends on the target density,
-trajectory length, AD backend, and hardware.
+Parallel MALA does more total work than sequential MALA, so it finishes sooner only when that work can be spread over many cores or a GPU.
+The speedup depends on the target, the block length `T`, the AD backend, and the hardware.
 
-## Is this package a good fit?
+```@raw html
+<p align="center">
+  <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
+</p>
+<p align="center">
+  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+</p>
+```
+
+## Which sampler to use
 
 | If you want to... | Start with... |
 |---|---|
@@ -28,10 +35,6 @@ trajectory length, AD backend, and hardware.
 | Tune a step size automatically | [`AdaptiveMALASampler`](@ref) |
 | Check a model against ordinary sequential MALA | [`MALASampler`](@ref) |
 | Run a large, batch-friendly target on a GPU | [GPU execution](15-gpu.md) |
-
-Parallel MALA is most compelling when evaluating the target and its derivatives
-is expensive enough to keep parallel hardware busy. For a small target on a
-CPU, sequential MALA will often finish sooner.
 
 ## Install
 
@@ -41,60 +44,37 @@ ParallelMCMC supports Julia 1.10 and later.
 pkg> add ParallelMCMC
 ```
 
-AD backends and GPU packages are optional. Add one only when your model needs
-it; the first example below supplies its derivatives directly.
+ParallelMCMC does not depend on any AD or GPU package, so you load the ones your model needs.
+The example below writes its derivatives by hand and needs only ParallelMCMC.
 
 ## A complete first run
 
-The target here is a two-dimensional standard normal. Its gradient and
-Hessian-vector product are simple enough to write down, so the example has no
-optional dependencies.
+The target is a two-dimensional standard normal, $\log p(x) = -\tfrac{1}{2}\|x\|^2$.
+Its gradient is $-x$ and its Hessian-vector product is $-v$.
 
-```julia
-using ParallelMCMC, FlexiChains, Random
+```@example index
+using ParallelMCMC, Random
 
 logdensity(x) = -sum(abs2, x) / 2
 gradient(x) = -x
 hvp(x, v) = -v
 
-model = DensityModel(
-    logdensity,
-    gradient,
-    2;
-    hvp=hvp,
-    param_names=[:x1, :x2],
-)
-
+model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
 sampler = ParallelMALASampler(0.1; T=64)
-
-chain = sample(
-    MersenneTwister(42),
-    model,
-    sampler,
-    1_000;
-    initial_params=zeros(2),
-    chain_type=VNChain,
-)
+chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
 
-`T=64` means that DEER solves blocks of 64 transitions. The call still returns
-exactly 1,000 samples; `T` controls the internal block size, not the requested
-chain length.
+`T=64` makes DEER solve 64 transitions at a time.
+It does not change the length of the chain: `sample` still returns 1,000 samples.
 
 ## Where to go next
 
-- [Getting started](10-getting-started.md) walks through step-size tuning,
-  running parallel MALA, and reading the result.
-- [Defining models](12-models.md) covers hand-written derivatives, automatic
-  differentiation, batched functions, parameter names, and LogDensityProblems
-  models.
-- [GPU execution](15-gpu.md) explains when a GPU is worthwhile and shows a
-  complete logistic-regression example.
-- [Troubleshooting](16-troubleshooting.md) covers common failure modes.
-- [How the algorithm works](20-algorithms.md) develops the DEER update and the
-  diagonal parallel scan.
-- [API reference](95-reference.md) lists constructors and low-level building
-  blocks.
+- [Getting started](10-getting-started.md) walks through step-size tuning, running parallel MALA, and reading the result.
+- [Defining models](12-models.md) covers hand-written derivatives, automatic differentiation, batched functions, parameter names, and LogDensityProblems models.
+- [GPU execution](15-gpu.md) explains when a GPU is worthwhile and shows a complete logistic-regression example.
+- [Troubleshooting](16-troubleshooting.md) covers common errors and failure modes.
+- [How the algorithm works](20-algorithms.md) develops the DEER update and the diagonal parallel scan.
+- [API reference](95-reference.md) lists constructors and low-level building blocks.
 
 ## Citation
 
@@ -104,5 +84,4 @@ The parallel-across-sequence method is described in:
 > (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS 2025.
 > [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
 
-If you use ParallelMCMC.jl in published work, please use the package citation
-in [`CITATION.cff`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CITATION.cff).
+If you use ParallelMCMC.jl in published work, please use the package citation in [`CITATION.cff`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CITATION.cff).

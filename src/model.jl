@@ -17,11 +17,13 @@ model = DensityModel(logdensity, AutoForwardDiff(), dim)
 ```
 
 Sequential MALA needs only the gradient. Parallel MALA also needs
-Hessian-vector products. Supply `hvp(x, v)`, put an AD backend in `hvp`, or pass
-a `backend` to [`ParallelMALASampler`](@ref). If none of these is given and
-`grad_logdensity` is an AD backend, the HVP runs that backend's forward-mode
-counterpart over the gradient. AD backends are prepared when sampling starts,
-after the element type and storage of the initial state are known.
+Hessian-vector products: pass a function `hvp(x, v)`, an AD backend as `hvp`, or
+a `backend` to [`ParallelMALASampler`](@ref). A backend in `hvp` takes
+precedence over the sampler's `backend`. If neither is given and
+`grad_logdensity` is an AD backend `g`, the HVP is computed with
+`SecondOrder(forward_counterpart(g), g)` from DifferentiationInterface. AD
+backends are prepared when sampling starts, once the element type and array
+type of the initial state are known.
 
 The optional batched functions operate on independent columns:
 
@@ -32,9 +34,11 @@ The optional batched functions operate on independent columns:
   they share, such as `X * B` in a GLM, runs once per state. It must be a callable
   and cannot be combined with `grad_logdensity_batch` or `hvp_batch`.
 
-All batched derivative slots require `logdensity_batch`. A derivative slot may
-hold a callable or an AD backend. When a batched gradient is derived with AD,
-each output of `logdensity_batch` must depend only on the matching input column.
+All batched derivative slots require `logdensity_batch`. `grad_logdensity_batch`
+and `hvp_batch` may each be a function or an AD backend. If `grad_logdensity` is an AD backend and
+`grad_logdensity_batch` is omitted, the batched gradient differentiates
+`sum(logdensity_batch(X))`. This is correct only if each entry of
+`logdensity_batch(X)` depends on the matching column of `X` alone.
 
 `param_names` controls the parameter keys in the returned `FlexiChain`. With
 the default `nothing`, the chain contains one vector-valued parameter named

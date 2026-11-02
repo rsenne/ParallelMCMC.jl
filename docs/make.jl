@@ -1,4 +1,5 @@
 using ParallelMCMC
+using LogDensityProblems
 using Documenter
 using Documenter.Remotes: GitHub
 
@@ -19,7 +20,7 @@ const pages = [
 ]
 
 makedocs(;
-    modules=[ParallelMCMC],
+    modules=[ParallelMCMC, Base.get_extension(ParallelMCMC, :LogDensityProblemsExt)],
     authors="Ryan Senne <rsenne@bu.edu>",
     repo=GitHub("rsenne", "ParallelMCMC.jl"),
     sitename="ParallelMCMC.jl",
