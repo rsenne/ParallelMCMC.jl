@@ -1,9 +1,7 @@
 # Defining models
 
-Every sampler in ParallelMCMC works with a [`DensityModel`](@ref). The model is
-the boundary between your statistical problem and the sampling algorithm: it
-describes the target density, its derivatives, its dimension, and optionally
-how parameters should be named in the result.
+Every sampler in ParallelMCMC samples from a [`DensityModel`](@ref).
+A `DensityModel` holds the log-density, its derivatives, the number of parameters, and optionally the parameter names used in the returned chain.
 
 ## The basic contract
 
@@ -19,112 +17,126 @@ For a parameter vector `x` of length `dim`:
 - `grad_logdensity(x)` returns a vector with the same shape as `x`.
 - `dim` is the number of unconstrained parameters.
 
-The gradient argument may be either a callable or an `ADTypes.AbstractADType`
-backend.
+The gradient argument may be either a function or an `ADTypes.AbstractADType` backend.
 
 ## Option 1: write the gradient
 
-Hand-written derivatives keep the execution path predictable and are often the
-best choice for GPU models.
+A hand-written gradient needs no AD package and has no AD compilation step.
+On the GPU it also avoids the backend restrictions described in [GPU execution](15-gpu.md).
 
-```julia
+```@example models
 using ParallelMCMC
 
 logdensity(x) = -sum(abs2, x) / 2
 gradient(x) = -x
 
-model = DensityModel(
-    logdensity,
-    gradient,
-    4;
-    param_names=[:a, :b, :c, :d],
-)
+model = DensityModel(logdensity, gradient, 4; param_names=[:a, :b, :c, :d])
+nothing # hide
 ```
 
 ## Option 2: derive the gradient with AD
 
-Pass an AD backend as the gradient argument to build a model from the
-log-density alone:
+Pass an AD backend as the gradient argument to build a model from the log-density alone:
 
-```julia
-using ADTypes, ForwardDiff, ParallelMCMC
+```@example models
+using ADTypes, ForwardDiff
 
-logdensity(x) = -sum(abs2, x) / 2
 model = DensityModel(logdensity, AutoForwardDiff(), 4)
+nothing # hide
 ```
 
-Backends are prepared when sampling begins, once the package knows the element
-type and storage of `initial_params`.
+ParallelMCMC prepares the backend when `sample` starts, using the element type and array type of `initial_params`.
+The first call to `sample` therefore includes the AD preparation time.
 
 ## Hessian-vector products for parallel MALA
 
-Parallel MALA additionally requires Hessian-vector products (HVPs). Just like
-for gradients, you can either hand-write them or use AD.
+[`ParallelMALASampler`](@ref) also needs Hessian-vector products (HVPs) $\nabla^2 \log p(x)\, v$.
+The sequential samplers do not use them.
+As with gradients, you can write the HVP yourself or let an AD backend compute it.
 
 A hand-written HVP is passed with the `hvp` keyword:
 
-```julia
+```@example models
 hvp(x, v) = -v
 model = DensityModel(logdensity, gradient, 4; hvp=hvp)
+nothing # hide
 ```
 
-To use AD instead, provide a backend to the sampler:
+To compute the HVP with AD, pass a backend either as the model's `hvp` or as the sampler's `backend`:
 
-```julia
+```@example models
 model = DensityModel(logdensity, gradient, 4)
 sampler = ParallelMALASampler(0.1; backend=AutoForwardDiff())
+nothing # hide
 ```
 
-### Which function does an HVP backend differentiate?
+If the gradient argument is already an AD backend, as in Option 2, you can leave out both.
+The sampler then builds the HVP from the gradient's backend, as the table below shows.
 
-| `gradient = ...` | `hvp = ...` | HVP calculated by... |
+### How the HVP is computed
+
+The HVP backend is the model's `hvp` if it is a backend, and otherwise the sampler's `backend`.
+
+| Gradient argument | HVP backend | How the HVP is computed |
 |---|---|---|
-| callable | backend | differentiating `gradient` with `backend` |
-| backend1 | backend2 | differentiating log-density with `SecondOrder(backend2, backend1)` |
-| either | `SecondOrder(...)` | differentiating log-density with `SecondOrder(...)` |
-| backend | `nothing`, no sampler `backend` | differentiating `gradient` with the forward-mode counterpart of its backend |
+| function | `b` | `b` differentiates the gradient function |
+| backend `g` | `b` | `SecondOrder(b, g)` differentiates the log-density |
+| either | `SecondOrder(...)` | that `SecondOrder` differentiates the log-density |
+| backend `g` | none | `SecondOrder(forward_counterpart(g), g)` differentiates the log-density |
+| function | none | `sample` throws an `ArgumentError` |
 
-Backend combinations are not equally useful on every device;
-see [GPU execution](15-gpu.md) before selecting one for GPU work.
+`SecondOrder` and `forward_counterpart` come from DifferentiationInterface.
+`forward_counterpart` returns a forward-mode version of the backend when one exists, such as `AutoMooncakeForward` for `AutoMooncake`, and the backend itself otherwise.
+
+Not every combination works on every device.
+See [GPU execution](15-gpu.md) before choosing one for GPU work.
+
+### AD or a hand-written HVP?
+
+AD is the simpler choice when the Hessian has no convenient closed form, as in hierarchical models with many transformations, mixtures, or neural networks.
+It also lets you switch backends without changing the model.
+
+A hand-written HVP is worth writing when it has a closed form in quantities the gradient already computes, as in generalized linear models.
+It skips AD compilation, which matters when you run many short chains.
+On the GPU it also avoids the Enzyme restrictions in [GPU execution](15-gpu.md), because the sampler then calls no AD backend.
 
 ## Batched functions
 
-DEER evaluates corresponding operations across all `T` columns of a trajectory.
-If your model has an efficient matrix implementation, provide:
+Each DEER iteration evaluates the log-density, the gradient, and HVPs at all `T` states of the current trajectory.
+By default it does this one state at a time.
+If your model can process a matrix whose columns are states, pass batched versions:
 
-```julia
-logdensity_batch(X)             # one log-density per column
-grad_logdensity_batch(X)        # one gradient per column
-hvp_batch(X, V)                 # H(X[:, j]) * V[:, j] per column
-```
+```@example models
+logdensity_batch(X) = vec(-sum(abs2, X; dims=1) / 2)  # one value per column
+grad_logdensity_batch(X) = -X                          # column j is the gradient at X[:, j]
+hvp_batch(X, V) = -V                                   # column j is H(X[:, j]) * V[:, j]
 
-Pass them as keywords:
-
-```julia
 model = DensityModel(
     logdensity,
     gradient,
-    dim;
+    4;
     hvp=hvp,
     logdensity_batch=logdensity_batch,
     grad_logdensity_batch=grad_logdensity_batch,
     hvp_batch=hvp_batch,
 )
+nothing # hide
 ```
 
-Both batched derivative arguments require `logdensity_batch`. When the
-gradient argument is an AD backend, ParallelMCMC can derive a batched gradient by
-differentiating `sum(logdensity_batch(X))`. For that to be correct, each output
-of `logdensity_batch` must depend only on the corresponding column of `X`.
+Only [`ParallelMALASampler`](@ref) uses the batched derivatives, and only with `jacobian=:stoch_diag`, so you still need the scalar functions.
+`grad_logdensity_batch` and `hvp_batch` both require `logdensity_batch`.
 
-The scalar functions must still be provided even when all batched
-functions are present.
+Like `hvp`, `hvp_batch` can be a function or an AD backend.
+If you leave it out, the sampler picks a backend for it by the same rules as for `hvp`.
+A hand-written scalar `hvp` is not used for the batched HVP, so a model with batched functions needs `hvp_batch`, an HVP backend, or an AD gradient.
+
+If the gradient argument is an AD backend and you leave out `grad_logdensity_batch`, ParallelMCMC differentiates `sum(logdensity_batch(X))` instead.
+This is correct only if each entry of `logdensity_batch(X)` depends on the matching column of `X` alone.
 
 ## Parameter names
 
-If `param_names` is not passed, the chain will contain one vector-valued
-parameter named `:x`. Pass names when separate scalar or array-valued entries
-would be easier to work with.
+If `param_names` is not passed, the chain contains one vector-valued parameter named `:x`.
+Pass names when separate scalar or array-valued entries are easier to work with.
 
 ```julia
 # Three scalar parameters
@@ -134,52 +146,46 @@ DensityModel(logdensity, gradient, 3; param_names=[:a, :b, :c])
 DensityModel(logdensity, gradient, 3; param_names=[:a, :B => (1, 2)])
 ```
 
-Names may be `Symbol`s or `VarName`s. Give an array-valued entry as a pair of
-its name and shape, as with `:B => (1, 2)` above. The declared shapes must
-account for exactly `dim` scalar values. `VNChain` accepts `VarName` keys, while
-`SymChain` uses `Symbol` keys.
+Names may be `Symbol`s or `VarName`s.
+Give an array-valued entry as a pair of its name and shape, as with `:B => (1, 2)` above.
+The shapes must add up to exactly `dim` values.
+The default chain type, `VNChain`, converts `Symbol` names to `VarName`s.
+Pass `chain_type=SymChain` to `sample` to keep `Symbol` keys.
 
 ## LogDensityProblems models
 
-Any object implementing the gradient-capable
-[LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface
-can be wrapped directly:
+You can wrap any object that implements the [LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface with gradients.
+The constructor becomes available once you load LogDensityProblems:
 
-```julia
-using FlexiChains, LogDensityProblems, ParallelMCMC
+```julia-repl
+pkg> add LogDensityProblems
+```
+
+```@example ldp
+using LogDensityProblems, ParallelMCMC
 
 # mu ~ Normal(0, 1), y ~ Normal(mu, 0.5)
 struct NormalPosterior
     y::Float64
 end
 
-LogDensityProblems.capabilities(::Type{NormalPosterior}) =
-    LogDensityProblems.LogDensityOrder{1}()
+LogDensityProblems.capabilities(::Type{NormalPosterior}) = LogDensityProblems.LogDensityOrder{1}()
 LogDensityProblems.dimension(::NormalPosterior) = 1
-LogDensityProblems.logdensity(ld::NormalPosterior, x) =
-    -x[1]^2 / 2 - 2 * (ld.y - x[1])^2
+LogDensityProblems.logdensity(ld::NormalPosterior, x) = -x[1]^2 / 2 - 2 * (ld.y - x[1])^2
 
 function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
     return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
 end
 
 model = DensityModel(NormalPosterior(1.5); param_names=[:mu])
-chain = sample(
-    model,
-    AdaptiveMALASampler(0.3; n_warmup=500),
-    2_000;
-    chain_type=VNChain,
-    discard_warmup=true,
-)
+chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000; discard_warmup=true)
 ```
 
-This constructor gets the dimension, log-density, and gradient from the
-interface, so the object must implement `capabilities` (at least
-`LogDensityOrder{1}`), `dimension`, `logdensity`, and
-`logdensity_and_gradient`. The same HVP and batching keywords accepted by the
-main constructor are available when you need them.
+The constructor reads the dimension, log-density, and gradient from the interface.
+Your type must implement `capabilities` (returning at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`.
+It accepts the same HVP and batching keywords as the main constructor.
 
-An HVP backend differentiates `logdensity_and_gradient`, so that function must
-be differentiable by the backend. If it is not, for example because it calls AD
-internally, pass an explicit `SecondOrder`, which differentiates `logdensity`
-twice instead. `AutoReactant()` is not supported for these models.
+These models have no default HVP, so for parallel MALA you have to pass `hvp` or a sampler `backend`.
+An AD backend differentiates `logdensity_and_gradient`, which must therefore be differentiable by that backend.
+If it is not, for example because it already calls AD internally, pass a `DifferentiationInterface.SecondOrder` backend instead, which differentiates `logdensity` twice.
+`AutoReactant()` cannot be used with these models.

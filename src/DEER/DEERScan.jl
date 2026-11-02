@@ -9,9 +9,11 @@ export AffineScanWorkspace,
     affine_scan_residual
 
 """
-Reusable workspace for the diagonal affine scan.
+    AffineScanWorkspace(A_template::AbstractMatrix)
 
-Buffers use the same array type and device as the template matrix.
+Reusable workspace for `solve_affine_scan_diag!`.
+
+Buffers have the same size, array type, and device as `A_template`.
 """
 struct AffineScanWorkspace{M}
     alpha::M

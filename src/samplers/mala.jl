@@ -9,6 +9,8 @@ checking a model with an ordinary sequential transition. Pass
 `cholM=cholesky(M)` to precondition proposals with a positive-definite mass
 matrix `M`. With `M = L * L'`, the proposal is
 `y = x + epsilon * M * gradient(x) + sqrt(2epsilon) * L * noise`.
+
+The chain stores `:logp` and `:accepted` as extra fields.
 """
 struct MALASampler{FP<:AbstractFloat,CM} <: AbstractMCMC.AbstractSampler
     epsilon::FP

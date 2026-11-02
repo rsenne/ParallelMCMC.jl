@@ -22,10 +22,10 @@ Create a MALA sampler that solves blocks of transitions with DEER.
 `epsilon` is the positive MALA step size. `T` is the number of transitions in
 each DEER block; it does not determine how many samples `sample` returns.
 
-The nonlinear solve stops after `maxiter` updates or when its largest
-elementwise change is no greater than
-`tol_abs + tol_rel * maximum(abs, trajectory)`. If any block reaches `maxiter`
-first, `sample` logs one warning for the run.
+The nonlinear solve stops after `maxiter` updates, or when its largest
+elementwise change is at most `tol_abs + tol_rel * maximum(abs, trajectory)`. A
+block that reaches `maxiter` is still returned as samples, and `sample` logs one
+warning for the run.
 
 `jacobian_damping` and `jacobian_clip` replace each diagonal Jacobian estimate
 `J` with `clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)`. This
@@ -38,14 +38,15 @@ deprecated.
 `probes` Hutchinson vectors. `jacobian=:diag` computes the exact diagonal with
 one Jacobian-vector product per parameter dimension.
 
-`backend` constructs missing Hessian-vector products; it does not supply the
-model's gradient. Leave it as `nothing` when the [`DensityModel`](@ref) provides
-the required `hvp` and `hvp_batch` functions. If it is left as `nothing` and
-`grad_logdensity` is an AD backend, the HVP runs the forward-mode counterpart of
-that backend (`DifferentiationInterface.forward_counterpart`) over the
-gradient. With `backend=ADTypes.AutoReactant()`, the model's `grad_logdensity`
-must be `AutoReactant()` or a callable. `cholM` has the same preconditioning
-meaning as in [`MALASampler`](@ref).
+`backend` is the AD backend for Hessian-vector products that the model does
+not provide; it is never used for the gradient. It is not needed when the
+[`DensityModel`](@ref) has a function `hvp` (and a function `hvp_batch`, if it
+has batched functions), and a backend given as the model's `hvp` takes
+precedence over it. If `backend` is `nothing` and `grad_logdensity` is an AD
+backend, the HVP is built from that backend as described in
+[`DensityModel`](@ref). With `backend=ADTypes.AutoReactant()`, the model's
+`grad_logdensity` must be `AutoReactant()` or a function. `cholM` has the same
+preconditioning meaning as in [`MALASampler`](@ref).
 
 `sample` normally runs whole DEER blocks. Passing `callback` or `initial_state`
 switches it to the generic step-wise AbstractMCMC loop.
