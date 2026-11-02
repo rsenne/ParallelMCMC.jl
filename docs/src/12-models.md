@@ -82,6 +82,7 @@ sampler = ParallelMALASampler(0.1; backend=AutoForwardDiff())
 | callable | backend | differentiating `gradient` with `backend` |
 | backend1 | backend2 | differentiating log-density with `SecondOrder(backend2, backend1)` |
 | either | `SecondOrder(...)` | differentiating log-density with `SecondOrder(...)` |
+| backend | `nothing`, no sampler `backend` | differentiating `gradient` with the forward-mode counterpart of its backend |
 
 Backend combinations are not equally useful on every device;
 see [GPU execution](15-gpu.md) before selecting one for GPU work.
