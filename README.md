@@ -23,14 +23,10 @@
 
 ## What this package does
 
-ParallelMCMC.jl implements MCMC methods that parallelize *within* a chain. Its
-main sampler uses DEER to solve a block of MALA transitions together instead of
-waiting for each transition before starting the next one.
-
-This is parallel-across-the-sequence MCMC, not just several independent chains
-running at once. It is most useful when density and derivative evaluations are
-expensive enough to keep parallel hardware busy. Small CPU targets may still be
-faster with ordinary sequential MALA.
+ParallelMCMC.jl parallelizes Markov chain Monte Carlo *within* a single chain.
+Its main sampler draws the random numbers for a block of MALA transitions in advance, then solves for every state in the block at once with DEER.
+This pays off when evaluating the target and its derivatives is expensive enough to keep parallel hardware busy.
+For small targets on a CPU, ordinary sequential MALA is usually faster.
 
 The method is described in:
 
@@ -42,49 +38,33 @@ The method is described in:
 
 | Sampler | Role |
 |---|---|
-| [`ParallelMALASampler`](docs/src/95-reference.md) | Parallel-across-sequence MALA via DEER |
-| [`AdaptiveMALASampler`](docs/src/95-reference.md) | Sequential MALA with step-size adaptation |
-| [`MALASampler`](docs/src/95-reference.md) | Sequential MALA with a fixed step size |
+| [`ParallelMALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.ParallelMALASampler) | MALA parallelized within the chain with DEER |
+| [`AdaptiveMALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.AdaptiveMALASampler) | Sequential MALA with step-size adaptation |
+| [`MALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.MALASampler) | Sequential MALA with a fixed step size |
 
-All three implement the
-[AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and
-return [FlexiChains](https://pysm.dev/FlexiChains.jl) objects.
+All three implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [FlexiChains](https://pysm.dev/FlexiChains.jl) objects.
 
 ## Quick start
 
-ParallelMCMC can be installed via Julia's package manager. In the Julia REPL, press `]` to enter pkg mode, then run:
+Install ParallelMCMC from the Julia REPL by pressing `]` and running:
 
 ```julia-repl
 pkg> add ParallelMCMC
 ```
 
 ```julia
-using ParallelMCMC, FlexiChains, Random
+using ParallelMCMC, Random
 
 logdensity(x) = -sum(abs2, x) / 2
 gradient(x) = -x
 hvp(x, v) = -v
 
-model = DensityModel(
-    logdensity,
-    gradient,
-    2;
-    hvp=hvp,
-    param_names=[:x1, :x2],
-)
-
+model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
 sampler = ParallelMALASampler(0.1; T=64)
-chain = sample(
-    MersenneTwister(42), model, sampler, 1_000;
-    initial_params=zeros(2),
-    chain_type=VNChain,
-)
+chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
 
-Start with the [documentation](https://rsenne.github.io/ParallelMCMC.jl/dev/)
-or the repository's [getting-started guide](docs/src/10-getting-started.md).
-The docs cover step-size tuning, model and AD setup, GPU execution,
-troubleshooting, and the DEER algorithm.
+The [documentation](https://rsenne.github.io/ParallelMCMC.jl/dev/) covers step-size tuning, AD backends, GPU execution, and how DEER works.
 
 ## How to cite
 

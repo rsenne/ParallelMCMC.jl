@@ -16,6 +16,8 @@ export TapedRecursion,
     DEERWorkspace, deer_update!, deer_update, solve, _prepare_hvp, _hvp_prepared, _hvp_nopre
 
 """
+    TapedRecursion(step_fwd, jvp, tape; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing)
+
 Deterministic recursion driven by a pre-generated tape.
 
 - `step_fwd(x, tape_t)`: exact forward transition (may include MH accept/reject).
@@ -39,6 +41,9 @@ function TapedRecursion(
 end
 
 """
+    DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
+    DEERWorkspace(s0_template::AbstractVector, T::Integer)
+
 Reusable buffers for DEER updates and solves.
 
 Matrix buffers use the array type and device of `S_template`; vector buffers
@@ -554,11 +559,18 @@ function deer_update(
 end
 
 """
+    solve(rec::TapedRecursion, s0; init=nothing, tol_abs=1e-4, tol_rel=1e-3,
+          maxiter=200, jacobian=:stoch_diag, damping=1.0, probes=1,
+          rng=Random.default_rng(), return_info=false, workspace=nothing,
+          copy_result=nothing)
+
 Run DEER until the change between iterates meets the tolerances or `maxiter`
-is reached. Set `return_info=true` to return `(trajectory, info)` and check
-`info.converged`. Reaching `maxiter` logs a warning rather than throwing an
-error, and the returned trajectory is then not the sequential one; pass
-`warn=false` to silence the warning.
+is reached. These defaults differ from those of `ParallelMALASampler`.
+
+Set `return_info=true` to return `(trajectory, info)`, where `info` has fields
+`converged`, `iters`, `metric`, `jacobian`, `damping`, `probes`,
+`jacobian_damping`, and `jacobian_clip`. Reaching `maxiter` logs a warning
+rather than throwing an error; pass `warn=false` to silence it.
 
 Pass a `DEERWorkspace` to reuse buffers across solves. Otherwise, one is created.
 

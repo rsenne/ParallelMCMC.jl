@@ -15,7 +15,8 @@ chain.
 are usually a better starting point than manual adjustment. `cholM` has the
 same preconditioning meaning as in [`MALASampler`](@ref).
 
-The chain stores `:step_size`, `:accepted`, and `:is_warmup` as extra fields.
+The chain stores `:logp`, `:accepted`, `:step_size`, and `:is_warmup` as extra
+fields.
 This sampler is a convenient way to choose an `epsilon` for
 [`ParallelMALASampler`](@ref).
 """
