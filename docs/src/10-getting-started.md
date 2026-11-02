@@ -105,10 +105,12 @@ The important arguments are:
 - `T`: the number of transitions in each DEER solve. It does not change the
   number of samples returned by `sample`.
 - `backend`: the AD backend used for missing Hessian-vector products. Leave it
-  out when the model provides `hvp` and, when applicable, `hvp_batch`.
+  out when the model provides `hvp` and, when applicable, `hvp_batch`, or when
+  `grad_logdensity` is an AD backend; the HVP then uses that backend's
+  forward-mode counterpart.
 - `initial_params`: the first state.
-- `chain_type`: use `VNChain` for `VarName` keys or `SymChain` for `Symbol`
-  keys.
+- `chain_type`: defaults to `VNChain`, which uses `VarName` keys. `SymChain`
+  uses `Symbol` keys.
 
 ## Choose `T` and the DEER controls
 
