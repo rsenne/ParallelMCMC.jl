@@ -110,7 +110,18 @@ If a block reaches `maxiter` before it meets the tolerances, the sampler still r
 `sample` returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
 Index it with the parameter names from the model, as in `chain[:x1]`, and use `chain[:logp]` to get the log-density of each sample.
 
+## Run several chains
+
 To check convergence, run several chains and compare them with $\hat{R}$.
+
+!!! warning "Multiple chains are experimental"
+    Parallel MALA and multiple chains both get their speed from the same hardware.
+    DEER does more total work than sequential MALA and only wins when that work runs in parallel on hardware that would otherwise sit idle.
+    With many chains the hardware is already busy, so the extra work is no longer free, and plain sequential chains can end up faster.
+    [Zoltowski et al. (2025)](https://arxiv.org/abs/2508.18413) observed this on a GPU: with 32 chains, sequential MALA was slightly faster than parallel MALA.
+    How best to split resources between more chains and longer chains is still an open question.
+    Run a few chains to compute diagnostics such as $\hat{R}$, not to sample faster.
+
 Start Julia with several threads, for example `julia -t 4`, so that `MCMCThreads()` can run the chains at the same time:
 
 ```@example gs
