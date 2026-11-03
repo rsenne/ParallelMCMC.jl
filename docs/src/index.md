@@ -13,9 +13,11 @@ CurrentModule = ParallelMCMC
 ParallelMCMC.jl parallelizes Markov chain Monte Carlo (MCMC) *within* a single chain.
 Its main sampler, [`ParallelMALASampler`](@ref), draws the random numbers for a block of MALA transitions in advance.
 It then solves for all states in the block at once with DEER, a Newton method whose linear solves are parallel scans.
-You can still run several chains in parallel on top of this.
+Running several chains at once also works, but it is experimental (see [Run several chains](10-getting-started.md#Run-several-chains)).
 
-Parallel MALA does more total work than sequential MALA, so it finishes sooner only when that work can be spread over many cores or a GPU.
+Parallel MALA does more total work than sequential MALA, so it finishes sooner only when the hardware can run that work in parallel.
+In practice that means a GPU.
+On the CPU, the DEER solve runs on a single thread, so expect speedups there only if a batched log density hands most of the work to multithreaded BLAS.
 The speedup depends on the target, the block length `T`, the AD backend, and the hardware.
 
 ```@raw html
