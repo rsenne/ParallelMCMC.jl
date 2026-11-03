@@ -105,7 +105,6 @@ else
             jacobian=:stoch_diag,
             probes=2,
             rng=MersenneTwister(123),
-            damping=0.5,
             tol_abs=1e-5,
             tol_rel=1e-4,
             maxiter=400,
@@ -144,6 +143,36 @@ else
         @test length(state.logps) == 8
         @test state.workspace isa DEER.DEERWorkspace
         @test state.t == 1
+    end
+
+    @testset "GPU Jacobian damping matches CPU ($jac)" for jac in (:diag, :stoch_diag)
+        D, T = 3, 16
+        model = DensityModel(_logp, _gradlogp, D)
+        kw = (
+            T=T,
+            maxiter=200,
+            jacobian=jac,
+            jacobian_damping=0.5,
+            jacobian_clip=1.0,
+            tol_abs=1e-5,
+            tol_rel=1e-4,
+        )
+        x0_cpu = randn(MersenneTwister(5), Float32, D)
+
+        _, state_cpu = ParallelMCMC.AbstractMCMC.step(
+            MersenneTwister(7),
+            model,
+            ParallelMALASampler(1.0f0; backend=ADTypes.AutoForwardDiff(), kw...);
+            initial_params=x0_cpu,
+        )
+        _, state_gpu = ParallelMCMC.AbstractMCMC.step(
+            MersenneTwister(7),
+            model,
+            ParallelMALASampler(1.0f0; backend=_gpu_backend, kw...);
+            initial_params=CUDA.CuArray(x0_cpu),
+        )
+        @test state_gpu.trajectory isa CUDA.CuMatrix
+        @test Array(state_gpu.trajectory) ≈ state_cpu.trajectory rtol=1e-3 atol=1e-4
     end
 
     @testset "ParallelMALASampler sequential steps advance trajectory index on GPU" begin
@@ -204,7 +233,6 @@ else
             maxiter=100,
             jacobian=:stoch_diag,
             probes=1,
-            damping=0.5,
             backend=_gpu_backend,
         )
 

@@ -210,7 +210,6 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
             rec,
             x0;
             jacobian=:diag,
-            damping=0.5,
             tol_abs=1e-12,
             tol_rel=1e-10,
             maxiter=200,

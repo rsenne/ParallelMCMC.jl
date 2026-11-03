@@ -409,11 +409,45 @@ function jac_diag_stoch(
     return d
 end
 
+#=
+Damping and clipping of the diagonal Jacobian, as in the parallel-mcmc reference
+code: J <- clamp(k J, -c, c). The offset is formed from the modified diagonal,
+u_t = f_t(s_{t-1}) - J s_{t-1}, so the fixed point does not move.
+=#
+_modifies_jacobian(k::Real, c::Real) = k != 1 || isfinite(c)
+
+function _modify_jacobian!(J::AbstractArray, k::Real, c::Real)
+    FT = eltype(J)
+    kT = convert(FT, k)
+    cT = convert(FT, c)
+    @. J = clamp(kT * J, -cT, cT)
+    return J
+end
+
+function _check_jacobian_modifiers(k::Real, c::Real)
+    0 < k ≤ 1 || throw(ArgumentError("jacobian_damping must be in (0,1]"))
+    c > 0 || throw(ArgumentError("jacobian_clip must be > 0"))
+    return nothing
+end
+
+function _depwarn_damping(damping::Real, caller::Symbol)
+    damping == 1 && return nothing
+    Base.depwarn(
+        "`damping` is deprecated and will be removed; use `jacobian_damping` and " *
+        "`jacobian_clip` instead. Relaxing the iterate can stop DEER from converging " *
+        "in at most `T` iterations.",
+        caller,
+    )
+    return nothing
+end
+
 """
 In-place DEER update.
 
 Writes the updated trajectory into `S_out` using `S_in` as the current iterate and
 workspace buffers for all internal temporaries that can be controlled here.
+
+`jacobian_damping` and `jacobian_clip` modify the linearization; see [`solve`](@ref).
 """
 function deer_update!(
     ws::DEERWorkspace,
@@ -425,6 +459,8 @@ function deer_update!(
     damping::Real=1.0,
     probes::Int=1,
     rng::AbstractRNG=Random.default_rng(),
+    jacobian_damping::Real=1,
+    jacobian_clip::Real=Inf,
 )
     s0 = vec(s0_in)
     D, T = size(S_in)
@@ -434,6 +470,8 @@ function deer_update!(
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
     probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
     size(ws.A) == (D, T) || throw(ArgumentError("workspace matrix size mismatch"))
+    _check_jacobian_modifiers(jacobian_damping, jacobian_clip)
+    modify = _modifies_jacobian(jacobian_damping, jacobian_clip)
 
     A = ws.A
     B = ws.B
@@ -459,6 +497,7 @@ function deer_update!(
         if probes > 1
             A .*= one(eltype(A)) / probes
         end
+        modify && _modify_jacobian!(A, jacobian_damping, jacobian_clip)
         @. B = FT - A * Xbar
     else
         zbuf = ws.zbuf
@@ -490,6 +529,7 @@ function deer_update!(
                 if probes > 1
                     jt_buf .*= one(eltype(jt_buf)) / probes
                 end
+                modify && _modify_jacobian!(jt_buf, jacobian_damping, jacobian_clip)
 
                 colstart = (t - 1) * D + 1
                 copyto!(A, colstart, jt_buf, 1, D)
@@ -499,6 +539,7 @@ function deer_update!(
             elseif jacobian === :diag
                 ft = rec.step_fwd(xbar, rec.tape[t])
                 jt = jac_diag_via_jvps(rec, xbar, t)
+                modify && _modify_jacobian!(jt, jacobian_damping, jacobian_clip)
                 colstart = (t - 1) * D + 1
                 copyto!(A, colstart, jt, 1, D)
                 @. xbar_buf = ft - jt * xbar
@@ -525,11 +566,24 @@ function deer_update(
     damping::Real=1.0,
     probes::Int=1,
     rng::AbstractRNG=Random.default_rng(),
+    jacobian_damping::Real=1,
+    jacobian_clip::Real=Inf,
 )
+    _depwarn_damping(damping, :deer_update)
     ws = DEERWorkspace(S, vec(s0_in))
     S_out = similar(S)
     deer_update!(
-        ws, S_out, rec, s0_in, S; jacobian=jacobian, damping=damping, probes=probes, rng=rng
+        ws,
+        S_out,
+        rec,
+        s0_in,
+        S;
+        jacobian=jacobian,
+        damping=damping,
+        probes=probes,
+        rng=rng,
+        jacobian_damping=jacobian_damping,
+        jacobian_clip=jacobian_clip,
     )
     return S_out
 end
@@ -545,6 +599,19 @@ trajectory is owned by the caller and will not be overwritten by a later solve
 using the same workspace. Set `copy_result=false` for allocation-sensitive
 internal loops; in that mode the returned trajectory may alias workspace-owned
 buffers such as `workspace.S_tmp`.
+
+Two keywords stabilise the Newton step when the linearized recursion amplifies
+errors, which happens for multimodal targets and large step sizes (Zoltowski et
+al. 2025, App. B). Each diagonal Jacobian estimate `J` is replaced with
+`clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)` before the scan.
+Damping by `k < 1` is the scale-ELK of Gonzalez et al. (2024). Both only change
+the linearization, so the fixed point is the same and the solve still finishes
+in at most `T` iterations. The defaults (`1` and `Inf`) leave the Jacobian
+untouched.
+
+`damping` is deprecated. It relaxes the iterate, `S ← (1 - damping) S_old +
+damping S_new`, which loses the `T`-iteration bound; use the Jacobian options
+instead.
 """
 function solve(
     rec::TapedRecursion,
@@ -560,6 +627,8 @@ function solve(
     return_info::Bool=false,
     workspace::Union{Nothing,DEERWorkspace}=nothing,
     copy_result::Union{Nothing,Bool}=nothing,
+    jacobian_damping::Real=1,
+    jacobian_clip::Real=Inf,
 )
     s0 = vec(s0_in)
     D = length(s0)
@@ -569,6 +638,8 @@ function solve(
     tol_abs ≥ 0 || throw(ArgumentError("tol_abs must be ≥ 0"))
     tol_rel ≥ 0 || throw(ArgumentError("tol_rel must be ≥ 0"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
+    _depwarn_damping(damping, :solve)
+    _check_jacobian_modifiers(jacobian_damping, jacobian_clip)
 
     copy_result === nothing && (copy_result = workspace !== nothing)
 
@@ -605,6 +676,8 @@ function solve(
             damping=damping,
             probes=probes,
             rng=rng,
+            jacobian_damping=jacobian_damping,
+            jacobian_clip=jacobian_clip,
         )
 
         @. ws.diff_buf = abs(S_new - S)
@@ -634,6 +707,8 @@ function solve(
         jacobian=jacobian,
         damping=damping,
         probes=probes,
+        jacobian_damping=jacobian_damping,
+        jacobian_clip=jacobian_clip,
     )
 end
 

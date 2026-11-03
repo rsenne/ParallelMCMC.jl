@@ -62,7 +62,7 @@ The batched pair differentiates `sum(logdensity_batch(X))`, so each output must 
 [`ParallelMALASampler`](@ref) reformulates a trajectory of `T` MALA steps as a fixed-point problem and solves it via Newton iterations, each of which costs $O(\log T)$ parallel work via an associative prefix scan.  Wall-clock time per sample is therefore sublinear in chain length on multi-core CPUs and GPUs.
 
 ```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag, damping=0.5,
+sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
                               backend=AutoEnzyme())
 
 chain = sample(model, sampler, 500;
@@ -91,9 +91,11 @@ sampler = ParallelMALASampler(0.1; T=128, jacobian=:stoch_diag, probes=2,
                               backend=AutoEnzyme())
 ```
 
-### Damping
+### Damping and clipping
 
-Setting `damping < 1` blends the Newton update with the previous iterate, which improves convergence on poorly conditioned targets.  The default is `0.5`; values in `[0.3, 0.7]` are typical.
+`jacobian_clip` (default `1`) clips the diagonal Jacobian estimate to `[-jacobian_clip, jacobian_clip]`, and `jacobian_damping` (default `1`) scales it before clipping.
+If DEER needs many iterations or its iterates blow up, try `jacobian_damping=0.5`.
+See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
 
 ### GPU execution
 

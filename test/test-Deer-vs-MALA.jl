@@ -90,7 +90,6 @@ end
         rec,
         x0;
         jacobian=:diag,
-        damping=0.5,
         tol_abs=1e-10,
         tol_rel=1e-8,
         maxiter=200,
@@ -184,7 +183,6 @@ end
         jacobian=:stoch_diag,
         probes=2,
         rng=MersenneTwister(42),
-        damping=0.5,
         tol_abs=1e-9,
         tol_rel=1e-7,
         maxiter=400,

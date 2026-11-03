@@ -87,7 +87,6 @@ else
             maxiter=200,
             tol_abs=1.0f-3,
             tol_rel=1.0f-2,
-            damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )
 
@@ -143,7 +142,6 @@ else
     #         maxiter=200,
     #         tol_abs=1.0f-3,
     #         tol_rel=1.0f-2,
-    #         damping=0.5f0,
     #         backend=ADTypes.AutoEnzyme(),
     #     )
 
@@ -195,7 +193,6 @@ else
             maxiter=200,
             tol_abs=1.0f-3,
             tol_rel=1.0f-2,
-            damping=0.5f0,
             backend=ADTypes.AutoMooncake(; config=nothing),
         )
 
@@ -246,7 +243,6 @@ else
             maxiter=200,
             tol_abs=1.0f-3,
             tol_rel=1.0f-2,
-            damping=0.5f0,
             backend=ADTypes.AutoZygote(),
         )
 

@@ -86,7 +86,6 @@ end
             maxiter=50,
             tol_abs=1e-4,
             tol_rel=1e-3,
-            damping=0.5,
             backend=ADTypes.AutoEnzyme(),
         ),
         800;
@@ -154,7 +153,6 @@ else
             rec,
             x0_gpu;
             jacobian=:diag,
-            damping=0.5,
             tol_abs=1e-5,
             tol_rel=1e-4,
             maxiter=200,
@@ -179,7 +177,6 @@ else
             maxiter=200,
             tol_abs=1.0f-4,
             tol_rel=1.0f-3,
-            damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )
 

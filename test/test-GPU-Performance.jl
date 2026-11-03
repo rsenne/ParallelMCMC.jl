@@ -169,7 +169,6 @@ else
             maxiter=maxiter,
             tol_abs=1.0f-3,
             tol_rel=1.0f-2,
-            damping=0.5f0,
             backend=ADTypes.AutoEnzyme(),
         )
         x0_gpu = CUDA.CuArray(x0_cpu)

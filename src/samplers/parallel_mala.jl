@@ -11,12 +11,21 @@ struct MALATapeElement{FP<:AbstractFloat,V<:AbstractVector{FP}}
 end
 
 """
-    ParallelMALASampler(epsilon; T, maxiter, tol_abs, tol_rel, jacobian, damping, probes, cholM, backend)
+    ParallelMALASampler(epsilon; T, maxiter, tol_abs, tol_rel, jacobian, damping, probes, jacobian_damping, jacobian_clip, cholM, backend)
 
 DEER-parallelized MALA sampler.
 
 Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
 estimator) and `:diag` (exact diagonal via `D` JVPs).
+
+`jacobian_damping` and `jacobian_clip` change the Jacobian estimate to
+`clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)`, which stabilises
+DEER for multimodal targets or large step sizes; see [`DEER.solve`](@ref). They
+change how the solver reaches the samples, not the samples. The defaults (`1` and
+`1`) match the `ParallelMALA` sampler in the reference implementation: no scaling,
+and diagonal entries clipped to `[-1, 1]`.
+
+`damping` is deprecated; see [`DEER.solve`](@ref).
 
 `backend` supplies Hessian-vector products when the `DensityModel` brings no
 `hvp` / `hvp_batch` of its own. It does not supply gradients. Leave it out when
@@ -38,6 +47,8 @@ struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSamp
     jacobian::Symbol
     damping::FP
     probes::Int
+    jacobian_damping::FP
+    jacobian_clip::FP
     cholM::CM
     backend::AD
 end
@@ -49,14 +60,18 @@ function ParallelMALASampler(
     tol_abs::Real=1e-6,
     tol_rel::Real=1e-5,
     jacobian::Symbol=:stoch_diag,
-    damping::Real=0.5,
+    damping::Real=1,
     probes::Int=1,
+    jacobian_damping::Real=1,
+    jacobian_clip::Real=1,
     cholM=nothing,
     backend=nothing,
 )
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
     (jacobian === :stoch_diag || jacobian === :diag) ||
         throw(ArgumentError("jacobian must be :stoch_diag or :diag"))
+    DEER._check_jacobian_modifiers(jacobian_damping, jacobian_clip)
+    DEER._depwarn_damping(damping, :ParallelMALASampler)
     eps_f = float(epsilon)
     FP = typeof(eps_f)
     return ParallelMALASampler{FP,typeof(cholM),typeof(backend)}(
@@ -68,6 +83,8 @@ function ParallelMALASampler(
         jacobian,
         FP(damping),
         probes,
+        FP(jacobian_damping),
+        FP(jacobian_clip),
         cholM,
         backend,
     )
@@ -267,6 +284,8 @@ function _deer_solve_new_tape(
         jacobian=sampler.jacobian,
         damping=sampler.damping,
         probes=sampler.probes,
+        jacobian_damping=sampler.jacobian_damping,
+        jacobian_clip=sampler.jacobian_clip,
         rng=rng,
         workspace=ws,
         copy_result=false,

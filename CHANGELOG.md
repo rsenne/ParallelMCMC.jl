@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AutoReactant()` on both AD passes of an HVP (#37, #52).
 - The `DensityModel` constructor in `LogDensityProblemsExt` now accepts `hvp`
   and the batched derivative slots.
+- `jacobian_damping` and `jacobian_clip` on `ParallelMALASampler` and
+  `DEER.solve` scale and clip the diagonal Jacobian estimate before each DEER
+  step, as in Zoltowski et al. (2025, App. B). They stabilise DEER for
+  multimodal targets and large step sizes (#19).
 
 ### Fixed
 
@@ -63,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and copies results device-to-device when the XLA client is on the GPU (#73).
   The device-to-device path is covered by a GPU-gated testset that selects a
   CUDA XLA client; it skips where no GPU client exists (#73).
+- `ParallelMALASampler` now clips the diagonal Jacobian estimate to `[-1, 1]`
+  by default (`jacobian_clip=1`) and no longer relaxes the iterate by default
+  (`damping=1`, was `0.5`). This matches the reference implementation. The
+  samples are the same; the number of DEER iterations per block can change
+  (#19).
+
+### Deprecated
+
+- The `damping` keyword of `ParallelMALASampler`, `DEER.solve` and
+  `DEER.deer_update`. Use `jacobian_damping` and `jacobian_clip` instead (#19).
 
 ### Removed
 

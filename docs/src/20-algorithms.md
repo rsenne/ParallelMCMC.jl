@@ -101,6 +101,30 @@ In practice $K=1$ or $K=2$ probes works well; controlled by the `probes` argumen
 
 ---
 
+## Damping and clipping the Jacobian
+
+When many diagonal entries of $J_t$ exceed 1 in magnitude, the linear recursion amplifies errors along the trajectory, and DEER's iterates can wander far from the solution before settling or overflow outright. Zoltowski et al. (2025) [^1] list this as a limitation for multimodal targets and large step sizes, and handle it in their experiments (Appendix B) by modifying the Jacobian estimate before the scan:
+
+```math
+\hat{J}_t = \mathrm{clip}\bigl(k \, \mathrm{diag}(J_t),\, -c,\, c\bigr),
+\qquad u_t = f_t(s^{(i)}_{t-1}) - \hat{J}_t \, s^{(i)}_{t-1}.
+```
+
+Scaling by $k \in (0, 1]$ is the scale-ELK variant of Gonzalez et al. (2024) [^2], which the MCMC paper calls quasi-ELK. Clipping at $c = 1$ keeps every scan coefficient inside $[-1, 1]$. The offset is built from the modified $\hat{J}_t$, so the fixed point is still the true trajectory. The update is also still exact on the first $t$ steps after $t$ iterations, as for any choice of $\hat{J}_t$, so the solve finishes in at most $T$ iterations in exact arithmetic. Relaxing the iterate with `damping < 1` gives no such guarantee.
+
+Both are set through `jacobian_damping` ($k$) and `jacobian_clip` ($c$) on [`ParallelMALASampler`](@ref) and `DEER.solve`.
+The sampler defaults to $k = 1$ and $c = 1$, as the `ParallelMALA` sampler in the reference implementation does; `DEER.solve` defaults to $c = \infty$, which leaves the Jacobian untouched.
+
+```julia
+sampler = ParallelMALASampler(1.5; T=1024, jacobian_damping=0.5)
+```
+
+Neither costs anything extra per iteration. Clipping changes nothing when all entries are already inside $[-c, c]$. Damping by $k < 1$ slows convergence on targets where plain DEER is already stable, so use it only when DEER struggles.
+
+The older `damping` keyword, which relaxes the iterate as $S \leftarrow (1 - d) S_{\mathrm{old}} + d S_{\mathrm{new}}$, is deprecated.
+
+---
+
 ## Applying DEER to MALA
 
 One step of MALA with pre-drawn noise $(\xi_t, u_t)$ is
@@ -145,3 +169,5 @@ For low-level callers using `DEER.solve(...; workspace=ws)`, the returned trajec
 ## References
 
 [^1]: Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS 2025. [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
+
+[^2]: Gonzalez, X., Warrington, A., Smith, J. T. H., & Linderman, S. W. (2024). *Towards Scalable and Stable Parallelization of Nonlinear RNNs*. NeurIPS 2024. [arXiv:2407.19115](https://arxiv.org/abs/2407.19115)
