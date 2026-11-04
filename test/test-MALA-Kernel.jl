@@ -195,7 +195,7 @@ end
 
         @test isfinite(logα_impl)
         @test isfinite(logα_ref)
-        @test logα_impl ≈ logα_ref atol=1e-10 rtol=1e-10
+        @test logα_impl ≈ logα_ref atol = 1e-10 rtol = 1e-10
     end
 
     @testset "mass-matrix scalar and batched paths match columnwise references" begin
@@ -213,11 +213,11 @@ end
         y_ref =
             x .+ ϵ .* (cholM.L * (adjoint(cholM.L) * gradlogp_stdnormal_kernel(x))) .+
             sqrt(2ϵ) .* (cholM.L * ξ)
-        @test y ≈ y_ref atol=1e-12 rtol=1e-12
+        @test y ≈ y_ref atol = 1e-12 rtol = 1e-12
 
         logq_impl = MALA.logq_mala(y, x, gradlogp_stdnormal_kernel(x), ϵ; cholM=cholM)
         logq_ref = logq_mala_mass_ref(y, x, gradlogp_stdnormal_kernel(x), ϵ, cholM)
-        @test logq_impl ≈ logq_ref atol=1e-12 rtol=1e-12
+        @test logq_impl ≈ logq_ref atol = 1e-12 rtol = 1e-12
 
         X = randn(rng, D, N)
         Ξ = randn(rng, D, N)
@@ -240,7 +240,7 @@ end
                 cholM=cholM,
             )
             @test accepted[j] == a_ref
-            @test view(X_next, :, j) ≈ x_ref atol=1e-12 rtol=1e-12
+            @test view(X_next, :, j) ≈ x_ref atol = 1e-12 rtol = 1e-12
         end
 
         Y = randn(rng, D, N)
@@ -255,7 +255,7 @@ end
                 cholM=cholM,
             ) for j in 1:N
         ]
-        @test logq_batch ≈ logq_cols atol=1e-12 rtol=1e-12
+        @test logq_batch ≈ logq_cols atol = 1e-12 rtol = 1e-12
     end
 
     @testset "standalone surrogate sigmoid matches explicit relaxed blend" begin
@@ -274,7 +274,7 @@ end
             logp_stdnormal_kernel, gradlogp_stdnormal_kernel, x, ϵ, ξ, u
         )
 
-        @test actual ≈ expected atol=1e-12 rtol=1e-12
+        @test actual ≈ expected atol = 1e-12 rtol = 1e-12
         @test all(
             xi -> min(xi[1], xi[2]) - 1e-12 ≤ xi[3] ≤ max(xi[1], xi[2]) + 1e-12,
             zip(x, y, actual),

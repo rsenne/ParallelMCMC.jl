@@ -19,15 +19,15 @@ function make_problem(X::AbstractMatrix, y::AbstractVector; σ::Real=1.0, τ::Re
 
     # log posterior up to constant
     function logpost(β::AbstractVector)
-        r = y .- X*β
-        ll = -0.5/σ2 * dot(r, r)
-        lp = -0.5/τ2 * dot(β, β)
+        r = y .- X * β
+        ll = -0.5 / σ2 * dot(r, r)
+        lp = -0.5 / τ2 * dot(β, β)
         return ll + lp
     end
 
     # gradient of log posterior
     function gradlogpost(β::AbstractVector)
-        r = y .- X*β
+        r = y .- X * β
         # ∇β ll = (1/σ²) Xᵀ (y - Xβ)
         g = (X' * r) ./ σ2
         # ∇β lp = -(1/τ²) β

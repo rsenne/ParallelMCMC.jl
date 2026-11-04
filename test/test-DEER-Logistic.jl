@@ -81,12 +81,7 @@ end
         MersenneTwister(42),
         model,
         ParallelMALASampler(
-            0.1;
-            T=16,
-            maxiter=50,
-            tol_abs=1e-4,
-            tol_rel=1e-3,
-            backend=ADTypes.AutoEnzyme(),
+            0.1; T=16, maxiter=50, tol_abs=1e-4, tol_rel=1e-3, backend=ADTypes.AutoEnzyme()
         ),
         800;
         chain_type=SymChain,
@@ -164,7 +159,7 @@ else
         @test size(S_gpu) == (_LR_D, T)
         @test all(isfinite, Array(S_gpu))
         S_ref = reduce(hcat, xs_seq[2:end])
-        @test Array(S_gpu) ≈ S_ref rtol=1e-3 atol=1e-4
+        @test Array(S_gpu) ≈ S_ref rtol = 1e-3 atol = 1e-4
     end
 
     @testset "ParallelMALASampler GPU logistic: posterior mean matches CPU" begin

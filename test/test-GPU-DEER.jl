@@ -60,7 +60,7 @@ else
 
         @test S_gpu isa CUDA.CuMatrix
         @test size(S_gpu) == (D, T)
-        @test Array(S_gpu) ≈ S_cpu atol=1e-5
+        @test Array(S_gpu) ≈ S_cpu atol = 1e-5
     end
 
     #=
@@ -117,7 +117,7 @@ else
         @test all(isfinite, Array(S_gpu))
 
         S_ref = reduce(hcat, xs_seq[2:end])
-        @test Array(S_gpu) ≈ S_ref rtol=1e-3 atol=1e-4
+        @test Array(S_gpu) ≈ S_ref rtol = 1e-3 atol = 1e-4
     end
 
     @testset "ParallelMALASampler initial step on GPU" begin
@@ -172,7 +172,7 @@ else
             initial_params=CUDA.CuArray(x0_cpu),
         )
         @test state_gpu.trajectory isa CUDA.CuMatrix
-        @test Array(state_gpu.trajectory) ≈ state_cpu.trajectory rtol=1e-3 atol=1e-4
+        @test Array(state_gpu.trajectory) ≈ state_cpu.trajectory rtol = 1e-3 atol = 1e-4
     end
 
     @testset "ParallelMALASampler sequential steps advance trajectory index on GPU" begin
@@ -228,12 +228,7 @@ else
         model = DensityModel(_logp, _gradlogp, D)
         # stoch_diag: one JVP per probe — cheaper and GPU-friendly
         sampler = ParallelMALASampler(
-            0.1f0;
-            T=32,
-            maxiter=100,
-            jacobian=:stoch_diag,
-            probes=1,
-            backend=_gpu_backend,
+            0.1f0; T=32, maxiter=100, jacobian=:stoch_diag, probes=1, backend=_gpu_backend
         )
 
         rng = MersenneTwister(2025)

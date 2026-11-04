@@ -15,7 +15,7 @@ X = randn(rng, n, p)
 
 β_true = randn(rng, p)
 σ = 1.0
-y = X*β_true .+ σ .* randn(rng, n)
+y = X * β_true .+ σ .* randn(rng, n)
 
 logpost, gradlogpost, μ_post, Σ_post = BayesLinReg.make_problem(X, y; σ=σ, τ=10.0)
 

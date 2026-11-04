@@ -93,8 +93,8 @@ end
         logp_quartic_deer, gradlogp_quartic_deer, x, ε, te.ξ, te.u, v, hvp_quartic_deer
     )
 
-    @test f_ad ≈ f_ref atol=1e-10 rtol=1e-10
-    @test jvp_ad ≈ jvp_ref atol=1e-10 rtol=1e-10
+    @test f_ad ≈ f_ref atol = 1e-10 rtol = 1e-10
+    @test jvp_ad ≈ jvp_ref atol = 1e-10 rtol = 1e-10
 end
 
 @testset "batched DEER path can AD the batched gradient when hvp_batch is omitted" begin
@@ -126,8 +126,8 @@ end
         logp_batch_deer, gradlogp_batch_deer, hvp_batch_ref, X, ε, Ξ, U, Z
     )
 
-    @test FT_ad ≈ FT_ref atol=1e-10 rtol=1e-10
-    @test Jt_ad ≈ Jt_ref atol=1e-10 rtol=1e-10
+    @test FT_ad ≈ FT_ref atol = 1e-10 rtol = 1e-10
+    @test Jt_ad ≈ Jt_ref atol = 1e-10 rtol = 1e-10
 end
 
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin

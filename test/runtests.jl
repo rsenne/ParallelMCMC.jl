@@ -9,7 +9,7 @@ the AutoReactant validation logic run unconditionally
 const _RUN_REACTANT_TESTS =
     lowercase(get(ENV, "PARALLELMCMC_TEST_REACTANT", "false")) in ("1", "true", "yes")
 
-@testset verbose=true "ParallelMCMC" begin
+@testset verbose = true "ParallelMCMC" begin
     #=
     Don't add your tests to runtests.jl. Instead, create files named
 
@@ -27,7 +27,7 @@ const _RUN_REACTANT_TESTS =
                 continue
             end
             title = titlecase(replace(splitext(file[6:end])[1], "-" => " "))
-            @testset verbose=true "$title" begin
+            @testset verbose = true "$title" begin
                 include(joinpath(root, file))  # robust if walkdir recurses
             end
         end

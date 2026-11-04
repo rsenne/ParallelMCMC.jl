@@ -87,13 +87,7 @@ end
     rec = _make_rec(tape, ϵ)
 
     S_deer, info = DEER.solve(
-        rec,
-        x0;
-        jacobian=:diag,
-        tol_abs=1e-10,
-        tol_rel=1e-8,
-        maxiter=200,
-        return_info=true,
+        rec, x0; jacobian=:diag, tol_abs=1e-10, tol_rel=1e-8, maxiter=200, return_info=true
     )
 
     @test info.converged

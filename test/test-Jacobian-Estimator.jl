@@ -67,7 +67,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         for t in 1:T
             d = DEER.jac_diag_via_jvps(rec, x, t)
             @test size(d) == (D,)
-            @test d ≈ diag(A) atol=1e-12 rtol=1e-12
+            @test d ≈ diag(A) atol = 1e-12 rtol = 1e-12
         end
     end
 
@@ -90,7 +90,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         function mse_for_probes(K::Int; nrep::Int=25)
             mses = zeros(Float64, nrep)
             for r in 1:nrep
-                rrng = MersenneTwister(10_000 + 97*r)
+                rrng = MersenneTwister(10_000 + 97 * r)
                 dest = DEER.jac_diag_stoch(rec, x, t; probes=K, rng=rrng)
                 mses[r] = mean((dest .- dtrue) .^ 2)
             end
@@ -181,7 +181,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         )
 
         S_ref = DEER.solve_affine_seq(Atrue, Btrue, s0)
-        @test S_out ≈ S_ref atol=1e-12 rtol=1e-12
+        @test S_out ≈ S_ref atol = 1e-12 rtol = 1e-12
     end
 
     @testset "DEER solution satisfies recursion defects (MALA taped, :diag)" begin

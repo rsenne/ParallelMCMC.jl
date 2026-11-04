@@ -79,7 +79,7 @@ function run_taped_mala_with_accepts(
     T = length(us)
     @assert length(ξs) == T
 
-    xs = Vector{Vector{Float64}}(undef, T+1)
+    xs = Vector{Vector{Float64}}(undef, T + 1)
     accepts = Vector{Float64}(undef, T)
 
     xs[1] = copy(x0)
