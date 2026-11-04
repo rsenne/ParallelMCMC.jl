@@ -156,7 +156,7 @@ b_tape = @benchmark begin
     tape_local = make_tape(MersenneTwister(42), $x0_gpu, $D, $T)
     CUDA.synchronize()
     tape_local
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_tape)
 println("\n")
 
@@ -164,28 +164,28 @@ b_build = @benchmark begin
     rec_local = build_rec($model_gpu, $x0_gpu, $tape)
     CUDA.synchronize()
     rec_local
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_build)
 println("\n")
 
 b_solve = @benchmark begin
     S = solve_prebuilt($rec, $x0_gpu, $ws)
     S
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_solve)
 println("\n")
 
 b_logps = @benchmark begin
     lp = cache_logps($model_gpu, $S_info)
     lp
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_logps)
 println("\n")
 
 b_materialize = @benchmark begin
     ts = materialize_transitions($S_info, $logps)
     ts
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_materialize)
 println("\n")
 
@@ -200,7 +200,7 @@ b_sample = @benchmark begin
     )
     CUDA.synchronize()
     xs
-end samples=reps evals=1
+end samples = reps evals = 1
 show(stdout, MIME("text/plain"), b_sample)
 println("\n")
 

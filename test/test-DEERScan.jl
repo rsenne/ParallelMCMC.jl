@@ -46,11 +46,11 @@ end
         out = DEERScan.solve_affine_scan_diag!(S, A, B, s0, ws)
 
         @test out === S
-        @test S ≈ S_ref atol=1e-12 rtol=1e-12
+        @test S ≈ S_ref atol = 1e-12 rtol = 1e-12
 
         fill!(S, NaN)
         DEERScan.solve_affine_scan_diag!(S, A, B, s0, ws)
-        @test S ≈ S_ref atol=1e-12 rtol=1e-12
+        @test S ≈ S_ref atol = 1e-12 rtol = 1e-12
     end
 end
 
@@ -79,8 +79,8 @@ end
     @test chk.max_rel_err ≤ 1
     @test chk.residual_seq ≤ 1e-12
     @test chk.residual_scan ≤ 1e-12
-    @test chk.S_seq ≈ S_seq atol=0 rtol=0
-    @test chk.S_scan ≈ S_scan atol=0 rtol=0
+    @test chk.S_seq ≈ S_seq atol = 0 rtol = 0
+    @test chk.S_scan ≈ S_scan atol = 0 rtol = 0
 
     A0 = zeros(Float64, D, 0)
     B0 = similar(A0)
@@ -131,7 +131,7 @@ end
 
                 @test S_gpu isa CUDA.CuMatrix
                 @test size(S_gpu) == (D, T)
-                @test Array(S_gpu) ≈ S_ref atol=1.0f-5 rtol=1.0f-5
+                @test Array(S_gpu) ≈ S_ref atol = 1.0f-5 rtol = 1.0f-5
             end
         end
 
@@ -151,7 +151,7 @@ end
 
             @test out === S_gpu
             @test S_gpu isa CUDA.CuMatrix
-            @test Array(S_gpu) ≈ S_ref atol=1.0f-5 rtol=1.0f-5
+            @test Array(S_gpu) ≈ S_ref atol = 1.0f-5 rtol = 1.0f-5
         end
 
         @testset "GPU scan satisfies the recurrence residual" begin
@@ -186,7 +186,7 @@ end
                     CUDA.CuArray(A_cpu), CUDA.CuArray(B_cpu), CUDA.CuArray(s0_cpu)
                 )
 
-                @test Array(S_gpu) ≈ S_ref atol=1.0f-6 rtol=1.0f-6
+                @test Array(S_gpu) ≈ S_ref atol = 1.0f-6 rtol = 1.0f-6
             end
 
             # zero multiplicative term => S[:,t] = B[:,t]
@@ -201,8 +201,8 @@ end
                     CUDA.CuArray(A_cpu), CUDA.CuArray(B_cpu), CUDA.CuArray(s0_cpu)
                 )
 
-                @test Array(S_gpu) ≈ S_ref atol=1.0f-6 rtol=1.0f-6
-                @test Array(S_gpu) ≈ B_cpu atol=1.0f-6 rtol=1.0f-6
+                @test Array(S_gpu) ≈ S_ref atol = 1.0f-6 rtol = 1.0f-6
+                @test Array(S_gpu) ≈ B_cpu atol = 1.0f-6 rtol = 1.0f-6
             end
 
             # T = 1
@@ -218,7 +218,7 @@ end
                 )
 
                 @test size(S_gpu) == (D, 1)
-                @test Array(S_gpu) ≈ S_ref atol=1.0f-6 rtol=1.0f-6
+                @test Array(S_gpu) ≈ S_ref atol = 1.0f-6 rtol = 1.0f-6
             end
         end
 

@@ -92,7 +92,7 @@ else
             logp_batch, gradlogp_batch, X_gpu, 0.1f0, Ξ_gpu, u_gpu
         )
 
-        @test Array(X_next_gpu) ≈ X_next_cpu atol=1.0f-5
+        @test Array(X_next_gpu) ≈ X_next_cpu atol = 1.0f-5
         @test Array(acc_gpu) == acc_cpu
     end
 
@@ -117,7 +117,7 @@ else
             logp_batch, gradlogp_batch, X_gpu, 0.1f0, Ξ_gpu, u_gpu
         )
 
-        @test Array(vec(X_next_gpu)) ≈ x_scalar atol=1.0f-5
+        @test Array(vec(X_next_gpu)) ≈ x_scalar atol = 1.0f-5
         @test Bool(Array(acc_gpu)[1]) == acc_scalar
     end
 
@@ -229,7 +229,7 @@ else
 
         lq_gpu = MALA.logq_mala_batched(Y_gpu, X_gpu, G_gpu, 0.1f0)
 
-        @test Array(lq_gpu) ≈ lq_cpu atol=1.0f-4
+        @test Array(lq_gpu) ≈ lq_cpu atol = 1.0f-4
     end
 
     @testset "GPU large-scale (D=128, N=1024)" begin

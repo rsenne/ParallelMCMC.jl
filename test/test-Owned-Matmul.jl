@@ -53,7 +53,7 @@ end
     prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),))
     dY = first(DI.pushforward(f1, prep, _AD_FWD, (A, B), ((dA, dB),)))
 
-    @test dY ≈ dY_expected rtol=1e-12 atol=1e-12
+    @test dY ≈ dY_expected rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme forward JVP on pmcmc_matmul: matrix-vector" begin
@@ -70,7 +70,7 @@ end
     prep = DI.prepare_pushforward(f1, _AD_FWD, (A, b), ((dA, db),))
     dy = first(DI.pushforward(f1, prep, _AD_FWD, (A, b), ((dA, db),)))
 
-    @test dy ≈ dy_expected rtol=1e-12 atol=1e-12
+    @test dy ≈ dy_expected rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme reverse pullback on pmcmc_matmul (via grad of dot)" begin
@@ -87,8 +87,8 @@ end
 
     dA_expected = w * b'
     db_expected = A' * w
-    @test g[1] ≈ dA_expected rtol=1e-12 atol=1e-12
-    @test g[2] ≈ db_expected rtol=1e-12 atol=1e-12
+    @test g[1] ≈ dA_expected rtol = 1e-12 atol = 1e-12
+    @test g[2] ≈ db_expected rtol = 1e-12 atol = 1e-12
 end
 
 # ============================================================
@@ -112,8 +112,8 @@ end
     prep = DI.prepare_gradient(f, _AD_REV, (a, b))
     g = DI.gradient(f, prep, _AD_REV, (a, b))
 
-    @test g[1] ≈ b rtol=1e-12 atol=1e-12
-    @test g[2] ≈ a rtol=1e-12 atol=1e-12
+    @test g[1] ≈ b rtol = 1e-12 atol = 1e-12
+    @test g[2] ≈ a rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme forward JVP on pmcmc_dot matches analytical" begin
@@ -130,7 +130,7 @@ end
     prep = DI.prepare_pushforward(f1, _AD_FWD, (a, b), ((da, db),))
     dval = first(DI.pushforward(f1, prep, _AD_FWD, (a, b), ((da, db),)))
 
-    @test dval ≈ dval_expected rtol=1e-12 atol=1e-12
+    @test dval ≈ dval_expected rtol = 1e-12 atol = 1e-12
 end
 
 # ============================================================
@@ -154,8 +154,8 @@ end
     prep = DI.prepare_gradient(f, _AD_REV, (A, B))
     g = DI.gradient(f, prep, _AD_REV, (A, B))
 
-    @test g[1] ≈ B rtol=1e-12 atol=1e-12
-    @test g[2] ≈ A rtol=1e-12 atol=1e-12
+    @test g[1] ≈ B rtol = 1e-12 atol = 1e-12
+    @test g[2] ≈ A rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme forward JVP on pmcmc_dotsum matches analytical" begin
@@ -172,7 +172,7 @@ end
     prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),))
     dval = first(DI.pushforward(f1, prep, _AD_FWD, (A, B), ((dA, dB),)))
 
-    @test dval ≈ dval_expected rtol=1e-12 atol=1e-12
+    @test dval ≈ dval_expected rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_matmul" begin
@@ -191,7 +191,7 @@ end
         Enzyme.Const(A),
         Enzyme.Duplicated(B, dB),
     )
-    @test dY1 ≈ A * dB rtol=1e-12 atol=1e-12
+    @test dY1 ≈ A * dB rtol = 1e-12 atol = 1e-12
 
     # Duplicated(A), Const(B): dY = dA * B
     (dY2,) = Enzyme.autodiff(
@@ -201,7 +201,7 @@ end
         Enzyme.Duplicated(A, dA),
         Enzyme.Const(B),
     )
-    @test dY2 ≈ dA * B rtol=1e-12 atol=1e-12
+    @test dY2 ≈ dA * B rtol = 1e-12 atol = 1e-12
 
     # Const(A), Const(B): tangent is zero
     (dY0,) = Enzyme.autodiff(
@@ -228,7 +228,7 @@ end
         Enzyme.Duplicated(b, db_buf),
         Enzyme.Const(w),
     )
-    @test db_buf ≈ A' * w rtol=1e-12 atol=1e-12
+    @test db_buf ≈ A' * w rtol = 1e-12 atol = 1e-12
 
     # Const(b): only A accumulates; expect dA = w * b'
     dA_buf = zero(A)
@@ -240,7 +240,7 @@ end
         Enzyme.Const(b),
         Enzyme.Const(w),
     )
-    @test dA_buf ≈ w * b' rtol=1e-12 atol=1e-12
+    @test dA_buf ≈ w * b' rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_dot" begin
@@ -257,7 +257,7 @@ end
         Enzyme.Const(a),
         Enzyme.Duplicated(b, db),
     )
-    @test dv1 ≈ dot(a, db) rtol=1e-12 atol=1e-12
+    @test dv1 ≈ dot(a, db) rtol = 1e-12 atol = 1e-12
 
     (dv2,) = Enzyme.autodiff(
         Enzyme.Forward,
@@ -266,7 +266,7 @@ end
         Enzyme.Duplicated(a, da),
         Enzyme.Const(b),
     )
-    @test dv2 ≈ dot(da, b) rtol=1e-12 atol=1e-12
+    @test dv2 ≈ dot(da, b) rtol = 1e-12 atol = 1e-12
 
     (dv0,) = Enzyme.autodiff(
         Enzyme.Forward, pmcmc_dot, Enzyme.Duplicated, Enzyme.Const(a), Enzyme.Const(b)
@@ -287,7 +287,7 @@ end
         Enzyme.Duplicated(a, da_buf),
         Enzyme.Const(b),
     )
-    @test da_buf ≈ b rtol=1e-12 atol=1e-12
+    @test da_buf ≈ b rtol = 1e-12 atol = 1e-12
 
     db_buf = zero(b)
     Enzyme.autodiff(
@@ -297,7 +297,7 @@ end
         Enzyme.Const(a),
         Enzyme.Duplicated(b, db_buf),
     )
-    @test db_buf ≈ a rtol=1e-12 atol=1e-12
+    @test db_buf ≈ a rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_dotsum" begin
@@ -314,7 +314,7 @@ end
         Enzyme.Const(A),
         Enzyme.Duplicated(B, dB),
     )
-    @test dv1 ≈ sum(A .* dB) rtol=1e-12 atol=1e-12
+    @test dv1 ≈ sum(A .* dB) rtol = 1e-12 atol = 1e-12
 
     (dv2,) = Enzyme.autodiff(
         Enzyme.Forward,
@@ -323,7 +323,7 @@ end
         Enzyme.Duplicated(A, dA),
         Enzyme.Const(B),
     )
-    @test dv2 ≈ sum(dA .* B) rtol=1e-12 atol=1e-12
+    @test dv2 ≈ sum(dA .* B) rtol = 1e-12 atol = 1e-12
 
     (dv0,) = Enzyme.autodiff(
         Enzyme.Forward, pmcmc_dotsum, Enzyme.Duplicated, Enzyme.Const(A), Enzyme.Const(B)
@@ -344,7 +344,7 @@ end
         Enzyme.Duplicated(A, dA_buf),
         Enzyme.Const(B),
     )
-    @test dA_buf ≈ B rtol=1e-12 atol=1e-12
+    @test dA_buf ≈ B rtol = 1e-12 atol = 1e-12
 
     dB_buf = zero(B)
     Enzyme.autodiff(
@@ -354,5 +354,5 @@ end
         Enzyme.Const(A),
         Enzyme.Duplicated(B, dB_buf),
     )
-    @test dB_buf ≈ A rtol=1e-12 atol=1e-12
+    @test dB_buf ≈ A rtol = 1e-12 atol = 1e-12
 end

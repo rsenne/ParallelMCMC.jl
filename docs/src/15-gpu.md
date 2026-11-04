@@ -138,7 +138,7 @@ model   = DensityModel(logp, gradlogp, D;
                        logdensity_batch=logp_batch,
                        grad_logdensity_batch=gradlogp_batch)
 sampler = ParallelMALASampler(0.005f0;
-                              T=16, damping=0.5f0,
+                              T=16,
                               backend=ADTypes.AutoMooncake(; config=nothing))
 
 chain = sample(model, sampler, 1_600;
@@ -209,7 +209,7 @@ model   = DensityModel(logp, gradlogp, D;
                        logdensity_batch=logp_batch,
                        grad_logdensity_batch=gradlogp_batch)
 sampler = ParallelMALASampler(0.005f0;
-                              T=16, damping=0.5f0,
+                              T=16,
                               backend=ADTypes.AutoEnzyme())
 
 chain = sample(model, sampler, 1_600;
@@ -300,7 +300,7 @@ model = DensityModel(logp, gradlogp, D;
                      grad_logdensity_batch=gradlogp_batch,
                      hvp=hvp, hvp_batch=hvp_batch)
 
-sampler = ParallelMALASampler(0.005f0; T=16, damping=0.5f0)
+sampler = ParallelMALASampler(0.005f0; T=16)
 ```
 
 This recovers the same posterior as the fallback version — the only difference is that HVPs come from a plain matmul instead of a reverse-mode pass over `gradlogp`.

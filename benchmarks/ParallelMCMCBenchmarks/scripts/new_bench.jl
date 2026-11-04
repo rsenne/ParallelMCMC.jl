@@ -178,7 +178,7 @@ function bench_raw_deer_build(model, x0; T, reps)
         )
         CUDA.synchronize()
         rec
-    end samples=reps evals=1
+    end samples = reps evals = 1
 
     show(stdout, MIME("text/plain"), b)
     println()
@@ -232,7 +232,7 @@ function bench_raw_deer_solve_only(model, x0; T, reps)
         )
         CUDA.synchronize()
         S
-    end samples=reps evals=1
+    end samples = reps evals = 1
 
     show(stdout, MIME("text/plain"), b)
     println()
@@ -257,7 +257,7 @@ function bench_seq_mala_cpu(logp, gradlogp, x0; T, reps)
             MersenneTwister(42), $logp, $gradlogp, $x0; epsilon=($epsilon), T=($T)
         )
         xs
-    end samples=reps evals=1
+    end samples = reps evals = 1
 
     show(stdout, MIME("text/plain"), b)
     println()
@@ -295,7 +295,7 @@ function bench_block_logdensity(model, rec, x0, ws; T, reps)
         lp = $model.logdensity_batch($S)
         CUDA.synchronize()
         lp
-    end samples=reps evals=1
+    end samples = reps evals = 1
 
     show(stdout, MIME("text/plain"), b)
     println()

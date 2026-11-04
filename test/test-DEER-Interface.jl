@@ -28,10 +28,14 @@ hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
     @test s.jacobian === :stoch_diag
 
     # keyword overrides
-    s2 = ParallelMALASampler(0.1; T=32, jacobian=:stoch_diag, damping=0.8, backend=_AD)
+    s2 = ParallelMALASampler(0.1; T=32, jacobian=:stoch_diag, backend=_AD)
     @test s2.T == 32
     @test s2.jacobian === :stoch_diag
-    @test s2.damping == 0.8
+    @test s2.damping == 1
+    @test s2.jacobian_damping == 1
+    @test s2.jacobian_clip == 1
+    s3 = @test_deprecated ParallelMALASampler(0.1; damping=0.8, backend=_AD)
+    @test s3.damping == 0.8
     @test_throws ArgumentError ParallelMALASampler(0.1; jacobian=:full, backend=_AD)
 end
 
@@ -89,8 +93,8 @@ end
         logp_quartic_deer, gradlogp_quartic_deer, x, ε, te.ξ, te.u, v, hvp_quartic_deer
     )
 
-    @test f_ad ≈ f_ref atol=1e-10 rtol=1e-10
-    @test jvp_ad ≈ jvp_ref atol=1e-10 rtol=1e-10
+    @test f_ad ≈ f_ref atol = 1e-10 rtol = 1e-10
+    @test jvp_ad ≈ jvp_ref atol = 1e-10 rtol = 1e-10
 end
 
 @testset "batched DEER path can AD the batched gradient when hvp_batch is omitted" begin
@@ -122,8 +126,8 @@ end
         logp_batch_deer, gradlogp_batch_deer, hvp_batch_ref, X, ε, Ξ, U, Z
     )
 
-    @test FT_ad ≈ FT_ref atol=1e-10 rtol=1e-10
-    @test Jt_ad ≈ Jt_ref atol=1e-10 rtol=1e-10
+    @test FT_ad ≈ FT_ref atol = 1e-10 rtol = 1e-10
+    @test Jt_ad ≈ Jt_ref atol = 1e-10 rtol = 1e-10
 end
 
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin
@@ -368,7 +372,7 @@ end
 @testset "ParallelMALASampler stationary distribution" begin
     D = 3
     model = DensityModel(logp_deer, gradlogp_deer, D)
-    sampler = ParallelMALASampler(0.1; T=32, damping=0.5, backend=_AD)
+    sampler = ParallelMALASampler(0.1; T=32, backend=_AD)
 
     chain = sample(
         MersenneTwister(2025), model, sampler, 5_000; chain_type=SymChain, progress=false
