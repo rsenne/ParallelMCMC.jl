@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gradlogp` once, at the proposal, instead of three and two times. The chain
   is unchanged. A state passed to a different model now also takes that
   model's log-density instead of keeping the old one after a rejection.
+- `AutoReactant` derivatives are compiled with `HIGHEST` precision for matrix
+  products and convolutions. On the GPU, XLA's default ran Float32 products in
+  TF32, which left batched gradients and HVPs about 3e-4 off in relative terms
+  and kept `ParallelMALASampler` from converging (#83).
 
 ### Changed
 

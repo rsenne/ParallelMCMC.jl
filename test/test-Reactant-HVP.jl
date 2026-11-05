@@ -53,6 +53,43 @@ function _release_compiled!(inputs, out)
     return nothing
 end
 
+#= Float32 logistic regression whose derivatives are all matrix products. TF32
+products put the batched derivatives about 3e-4 off the Float64 reference (#83);
+full Float32 is near 1e-6. =#
+function _test_matmul_precision()
+    rng = MersenneTwister(83)
+    N, D, T = 512, 16, 64
+    A = randn(rng, Float32, N, D) ./ sqrt(Float32(D))
+    y = Float32.(rand(rng, N) .< 0.5)
+    softplus(z) = max(z, zero(z)) + log1p(exp(-abs(z)))
+    logp(b) = sum(y .* (A * b) .- softplus.(A * b)) - 0.5f0 * sum(abs2, b)
+    function logp_batch(B)
+        Z = A * B
+        return vec(sum(y .* Z .- softplus.(Z); dims=1)) .-
+               0.5f0 .* vec(sum(abs2, B; dims=1))
+    end
+
+    B = 0.3f0 .* randn(rng, Float32, D, T)
+    V = randn(rng, Float32, D, T)
+    Ad, yd, Bd, Vd = Float64.(A), Float64.(y), Float64.(B), Float64.(V)
+    P = inv.(1 .+ exp.(-(Ad * Bd)))
+    G_ref = Ad' * (yd .- P) .- Bd
+    Hv_ref = -(Ad' * (P .* (1 .- P) .* (Ad * Vd))) .- Vd
+
+    model = DensityModel(
+        logp,
+        AutoReactant(),
+        D;
+        logdensity_batch=logp_batch,
+        grad_logdensity_batch=AutoReactant(),
+        hvp_batch=AutoReactant(),
+    )
+    m_p = ParallelMCMC._prepare_model(model, B[:, 1], T, nothing)
+    relerr(a, b) = maximum(abs, a .- b) / maximum(abs, b)
+    @test relerr(m_p.grad_logdensity_batch(B), G_ref) < 1e-5
+    @test relerr(m_p.hvp_batch(B, V), Hv_ref) < 1e-5
+end
+
 @testset "Reactant HVP" begin
     @testset "extension is loaded" begin
         @test Base.get_extension(ParallelMCMC, :ReactantExt) !== nothing
@@ -184,6 +221,10 @@ end
             Hv = m_p.hvp(x32, v32)
             @test eltype(Hv) === Float32
             @test Hv ≈ hvp_r(x32, v32)
+        end
+
+        @testset "Float32 matrix products at full precision" begin
+            _test_matmul_precision()
         end
     end
 
@@ -504,6 +545,11 @@ end
                         @test size(Hvb) == (D_R, T)
                         @test Array(Hvb) ≈
                             reduce(hcat, [hvp_r(X_h[:, t], V_h[:, t]) for t in 1:T])
+                    end
+
+                    # The GPU client is where XLA would otherwise pick TF32.
+                    @testset "Float32 matrix products at full precision" begin
+                        _test_matmul_precision()
                     end
 
                     @testset "results outlive the buffers they came from" begin

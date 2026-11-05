@@ -131,10 +131,20 @@ function (c::ReactantCall)(args::AbstractArray...)
     end
 end
 
+#= XLA's DEFAULT precision lets the GPU run Float32 matrix products in TF32,
+which puts a relative error of about 3e-4 into batched derivatives and stalls DEER
+convergence (#83). The precision is read while tracing, so it covers the
+products Enzyme adds for the derivative too. =#
 function _compiled(core, templates::AbstractArray...)
     _warn_reactant_host_roundtrip(templates[1])
     stages = map(_in_stage, templates)
-    compiled = @compile core(map(_upload, templates, stages)...)
+    inputs = map(_upload, templates, stages)
+    compiled = Reactant.with_config(;
+        dot_general_precision=Reactant.PrecisionConfig.HIGHEST,
+        convolution_precision=Reactant.PrecisionConfig.HIGHEST,
+    ) do
+        @compile core(inputs...)
+    end
     return ReactantCall(compiled, stages, templates[1], _reactant_client_platform())
 end
 
