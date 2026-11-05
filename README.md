@@ -37,16 +37,17 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 
 We repeat the Bayesian logistic regression of Zoltowski et al. (2025, Section 5.2) on the German Credit data, with whitened covariates, an intercept, and a $\mathcal{N}(0, I)$ prior, so the posterior has 25 dimensions.
 Each method draws one chain of $L$ samples with step size $\varepsilon = 0.0015$, which accepts about 85% of proposals.
-`ParallelMALASampler` solves the whole chain as one block and reproduces the sequential chain to within its tolerance of $5 \times 10^{-4}$.
+`ParallelMALASampler` solves the whole chain as one block, and its samples match the sequential chain step for step up to the solver tolerance of $5 \times 10^{-4}$.
+The exception is an accept decision that falls within that tolerance of the threshold: in one 16 000-step run a single such decision flipped, and the two chains rejoined 43 steps later.
 
 <p align="center">
   <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
 </p>
 
-At $L = 64\,000$ the parallel sampler is 9 times faster than sequential MALA on the CPU and 140 times faster than sequential MALA on the GPU.
-These timings come from one RTX 5090 and a 12-thread CPU under Windows, where sequential CPU MALA runs slower than under Linux.
-Sequential MALA on a GPU pays for kernel launches at every step, so it trails the CPU at this size.
-The paper compiles its sequential baseline with JAX, which narrows that gap, and reports parallel speedups of 20 to 30 times.
+At $L = 64\,000$ the parallel sampler is 3.4 times faster than sequential MALA on the CPU and 69 times faster than sequential MALA on the GPU.
+These timings come from one RTX 5090 and a 12-thread CPU under Windows.
+Sequential MALA on a GPU waits for the device several times per step to make each accept decision on the host, so it trails the CPU at this size.
+The paper compiles its sequential baseline with JAX, which keeps the whole loop on the device, and reports parallel speedups of 20 to 30 times.
 The script is [`benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl).
 
 ### Samplers
