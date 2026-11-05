@@ -44,8 +44,12 @@ Reusable buffers for allocation-light DEER updates and solves.
 All buffers are created with the same array type / device placement as `S_template`
 (or `s0_template` for vector buffers), so the workspace is GPU-compatible when
 constructed from device-array templates.
+
+`probe_rng` is a random number generator on the device of `S_template`, or
+`nothing`. If it is set, the batched Hutchinson probes are drawn on the device,
+seeded from the caller's `rng`; otherwise they are drawn on the host.
 """
-struct DEERWorkspace{M,V,SW,HZ,H}
+struct DEERWorkspace{M,V,SW,HZ,H,R}
     A::M
     B::M
     Xbar::M
@@ -53,12 +57,47 @@ struct DEERWorkspace{M,V,SW,HZ,H}
     Zhost::HZ
     S_work::M
     S_tmp::M
-    diff_buf::M
     zbuf::V
     zhost::H
     jt_buf::V
     xbar_buf::V
     scan::SW
+    probe_rng::R
+end
+
+"""
+    _device_probe_rng(Z) -> rng or nothing
+
+A random number generator on the device of `Z`, so Hutchinson probes need no
+copy from the host. Package extensions define it for their array types; the
+default `nothing` keeps the probes on the host.
+"""
+_device_probe_rng(::AbstractArray) = nothing
+
+# Fill `Z` with Rademacher probes, on the device when the workspace has a device RNG.
+function _probe_matrix!(Z::AbstractMatrix, rng::AbstractRNG, ws)
+    return _probe_matrix!(Z, rng, ws.Zhost, ws.probe_rng)
+end
+function _probe_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host, ::Nothing)
+    return _rademacher_matrix!(Z, rng, host)
+end
+
+"""
+    _max_abs_change(S_new, S) -> (maximum(abs.(S_new .- S)), maximum(abs.(S_new)))
+
+Both maxima of the convergence test in one pass, so a device method needs only one
+reduction and one copy to the host.
+"""
+function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
+    size(S_new) == size(S) ||
+        throw(DimensionMismatch("S_new and S must have the same size"))
+    return mapreduce(
+        (a, b) -> (abs(a - b), abs(a)),
+        (x, y) -> (max(x[1], y[1]), max(x[2], y[2])),
+        S_new,
+        S;
+        init=(zero(real(T)), zero(real(T))),
+    )
 end
 
 function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
@@ -66,10 +105,14 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     B = similar(S_template)
     Xbar = similar(S_template)
     Z = similar(S_template)
-    Zhost = needs_host_staging(Z) ? Matrix{eltype(S_template)}(undef, size(Z)...) : nothing
+    probe_rng = _device_probe_rng(Z)
+    Zhost = if probe_rng === nothing && needs_host_staging(Z)
+        Matrix{eltype(S_template)}(undef, size(Z)...)
+    else
+        nothing
+    end
     S_work = similar(S_template)
     S_tmp = similar(S_template)
-    diff_buf = similar(S_template)
     zbuf = similar(s0_template)
     zhost = if needs_host_staging(zbuf)
         Vector{eltype(s0_template)}(undef, length(s0_template))
@@ -80,7 +123,7 @@ function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
     xbar_buf = similar(s0_template)
     scan = DEERScan.AffineScanWorkspace(S_template)
     return DEERWorkspace(
-        A, B, Xbar, Z, Zhost, S_work, S_tmp, diff_buf, zbuf, zhost, jt_buf, xbar_buf, scan
+        A, B, Xbar, Z, Zhost, S_work, S_tmp, zbuf, zhost, jt_buf, xbar_buf, scan, probe_rng
     )
 end
 
@@ -485,12 +528,12 @@ function deer_update!(
             copyto!(Xbar, D + 1, S_in, 1, D * (T - 1))
         end
 
-        _rademacher_matrix!(Z, rng, ws.Zhost)
+        _probe_matrix!(Z, rng, ws)
 
         FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
         @. A = Z * Jt
         for _ in 2:probes
-            _rademacher_matrix!(Z, rng, ws.Zhost)
+            _probe_matrix!(Z, rng, ws)
             _, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
             @. A += Z * Jt
         end
@@ -686,11 +729,8 @@ function solve(
             jacobian_clip=jacobian_clip,
         )
 
-        @. ws.diff_buf = abs(S_new - S)
-        Δ_max = maximum(ws.diff_buf)
-        @. ws.diff_buf = abs(S_new)
-        S_scale = tol_abs + tol_rel * maximum(ws.diff_buf)
-        metric = Δ_max / S_scale
+        Δ_max, S_max = _max_abs_change(S_new, S)
+        metric = Δ_max / (tol_abs + tol_rel * S_max)
 
         last_metric = metric
         if metric ≤ 1

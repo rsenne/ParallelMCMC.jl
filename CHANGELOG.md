@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `chain_type=Any` for the raw transition vector, or `chain_type=SymChain`
   for `Symbol` keys.
 - CUDA compat widened to `5.11, 6`.
+- On `CuArray`s, each DEER iteration launches far fewer kernels. The affine scan
+  is a three-kernel chunked scan instead of about four kernels per doubling
+  level, the convergence test is one reduction, and the Hutchinson probes are
+  drawn on the device. On a cheap 25-dimensional target with `T = 64 000` this
+  takes `ParallelMALASampler` from 0.40 s to 0.14 s. Device probes are seeded
+  from the caller's `rng`, so a GPU solve is still reproducible, but it no longer
+  draws the same probes as the CPU path.
 - CUDA is now a weak dependency behind the `CUDAExt` extension; `using CUDA`
   loads it (#59). The `CuArray` checks in the random fills are replaced by the
   `needs_host_staging` trait.
