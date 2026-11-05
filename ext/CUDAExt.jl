@@ -23,6 +23,8 @@ function _chunk_summary_kernel!(Asum, Bsum, A, B, C::Int, T::Int)
     i > D * size(Asum, 2) && return nothing
     d = (i - 1) % D + 1
     k = (i - 1) ÷ D + 1
+    # (a, b) is the map s ↦ a * s + b of the steps so far; step t turns it into
+    # s ↦ A[d, t] * (a * s + b) + B[d, t].
     a = one(eltype(A))
     b = zero(eltype(B))
     @inbounds for t in ((k - 1) * C + 1):min(k * C, T)
@@ -38,6 +40,7 @@ end
 function _chunk_carry_kernel!(Sin, Asum, Bsum, s0)
     d = (CUDA.blockIdx().x - 1) * CUDA.blockDim().x + CUDA.threadIdx().x
     d > length(s0) && return nothing
+    # Sin[d, k] is the state entering chunk k.
     @inbounds s = s0[d]
     @inbounds for k in axes(Sin, 2)
         Sin[d, k] = s
@@ -69,13 +72,12 @@ function DEERScan.solve_affine_scan_diag!(
     check_shapes::Bool=true,
 ) where {T}
     D, Tn = size(A)
-    #= The kernels index with `@inbounds`, so the sizes are checked even when
-    `check_shapes=false`; with mismatched sizes they would read and write out of
-    bounds instead of throwing. =#
+    #= Always check sizes, even with `check_shapes=false`: the kernels use
+    `@inbounds`, so a mismatch would corrupt memory instead of throwing. =#
     DEERScan._check_scan_shapes(S, A, B, s0, ws)
     (Tn == 0 || D == 0) && return S
-    #= C ≈ √T balances the sequential work in the carry kernel (K steps) against
-    that in the other two (C steps each). =#
+    #= Each thread of the carry kernel walks K = T / C steps, and each thread of
+    the other two walks C steps; C ≈ √T keeps both short. =#
     C = max(32, isqrt(Tn))
     K = cld(Tn, C)
     Asum = view(ws.alpha, :, 1:K)
@@ -91,11 +93,11 @@ function DEERScan.solve_affine_scan_diag!(
     return S
 end
 
-#= Both maxima of the DEER convergence test in one kernel and one 2-element copy
-to the host. Each warp reduces its values with shuffles and its first lane
-updates the result with an atomic max on the bit patterns, which order the same
-way as the values for non-negative floats. A NaN has larger bits than any
-finite value or Inf, so it propagates as it does with `maximum`. =#
+#= Both maxima of the convergence test in one kernel. Each warp reduces with
+shuffles, then its first lane takes an atomic max of the result. CUDA has no
+atomic max for floats, so it runs on the bit patterns: for non-negative floats
+they sort like the values, and NaN sorts above Inf, so a NaN propagates as it
+does with `maximum`. =#
 _bits(::Type{Float32}) = UInt32
 _bits(::Type{Float64}) = UInt64
 
@@ -139,9 +141,9 @@ function DEER._max_abs_change(
     return reinterpret(T, h[1]), reinterpret(T, h[2])
 end
 
-#= Probes on the device. The seed comes from the caller's `rng`, so a solve is
-reproducible, but the probes differ from those of the host path. That changes
-only how DEER reaches the trajectory, not the trajectory it converges to. =#
+#= Draw the probes on the device, seeded from the caller's `rng`. A solve stays
+reproducible, but its probes differ from the host path's, so DEER takes a
+different route to the same trajectory. =#
 DEER._device_probe_rng(::CuArray) = CUDA.RNG()
 
 function DEER._probe_matrix!(

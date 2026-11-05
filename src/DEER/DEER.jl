@@ -46,8 +46,8 @@ All buffers are created with the same array type / device placement as `S_templa
 constructed from device-array templates.
 
 `probe_rng` is a random number generator on the device of `S_template`, or
-`nothing`. When it is set, the batched Hutchinson probes are drawn on the device
-from a seed taken from the caller's `rng`, instead of on the host.
+`nothing`. If it is set, the batched Hutchinson probes are drawn on the device,
+seeded from the caller's `rng`; otherwise they are drawn on the host.
 """
 struct DEERWorkspace{M,V,SW,HZ,H,R}
     A::M
@@ -68,9 +68,9 @@ end
 """
     _device_probe_rng(Z) -> rng or nothing
 
-A random number generator on the device of `Z`, used to draw Hutchinson probes
-without a round trip through the host. Array packages opt in through an
-extension; the default `nothing` keeps the host path.
+A random number generator on the device of `Z`, so Hutchinson probes need no
+copy from the host. Package extensions define it for their array types; the
+default `nothing` keeps the probes on the host.
 """
 _device_probe_rng(::AbstractArray) = nothing
 
@@ -85,8 +85,8 @@ end
 """
     _max_abs_change(S_new, S) -> (maximum(abs.(S_new .- S)), maximum(abs.(S_new)))
 
-Both maxima of the convergence test in one pass. Array packages can override it
-with a single reduction kernel.
+Both maxima of the convergence test in one pass, so a device method needs only one
+reduction and one copy to the host.
 """
 function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
     size(S_new) == size(S) ||
