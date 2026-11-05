@@ -99,11 +99,11 @@ The other keywords control the solve:
 
 - `jacobian=:stoch_diag`, the default, estimates the diagonal of each transition's Jacobian with `probes` random vectors. Each extra probe makes the estimate less noisy and costs one more Jacobian-vector product per transition.
 - `jacobian=:diag` computes the diagonal exactly with one Jacobian-vector product per parameter. Use it to check results on small models.
-- `damping`, which defaults to `0.5`, is the fraction of each DEER update that is applied. Lower it if the solve does not converge.
+- `jacobian_damping` and `jacobian_clip` scale and clip the Jacobian diagonal before each scan. The defaults suit most targets; try `jacobian_damping=0.5` if the solve needs many iterations or its iterates blow up. See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
 - `maxiter`, `tol_abs`, and `tol_rel` decide when the solve stops. See [`ParallelMALASampler`](@ref) for the exact rule.
 
-If a block reaches `maxiter` before it meets the tolerances, the sampler still returns its states as samples, without a warning.
-[Troubleshooting](16-troubleshooting.md) explains how to recognize this.
+If a block reaches `maxiter` before it meets the tolerances, the sampler still returns its states as samples and logs one warning for the run.
+[Troubleshooting](16-troubleshooting.md) explains what to try.
 
 ## Use the returned chain
 

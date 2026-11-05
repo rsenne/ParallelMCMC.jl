@@ -14,7 +14,7 @@ For each block of `T` transitions, the sampler:
 2. Evaluates each taped transition at the current trajectory guess.
 3. Estimates or computes each transition's Jacobian diagonal.
 4. Solves the resulting affine recursion with a parallel scan.
-5. Applies damping and tests convergence, repeating from step 2 if needed.
+5. Tests convergence, repeating from step 2 if needed.
 6. Returns the solved states as samples and continues from the last one.
 
 The sections below explain each step.
@@ -63,16 +63,26 @@ s^{(i+1)}_t = J_t s^{(i+1)}_{t-1} + u_t,
 All $J_t$ and $u_t$ values depend only on the old guess, so they can be evaluated together.
 The remaining affine recursion can be solved by an associative scan rather than a serial loop.
 
-With damping, the package replaces the raw update with
+### Damping and clipping the Jacobian
+
+When many diagonal entries of $J_t$ exceed 1 in magnitude, the affine recursion amplifies errors along the trajectory, and the iterates can wander far from the solution or overflow.
+Zoltowski et al. (2025) [^1] handle this by changing the Jacobian estimate before the scan:
 
 ```math
-S^{(i+1)} \leftarrow
-(1 - \lambda) S^{(i)} + \lambda S^{(i+1)},
-\qquad 0 < \lambda \leq 1.
+\hat{J}_t = \operatorname{clip}\bigl(k \operatorname{diag}(J_t),\, -c,\, c\bigr),
+\qquad u_t = f_t\!\left(s^{(i)}_{t-1}\right) - \hat{J}_t s^{(i)}_{t-1}.
 ```
 
-This is the `damping` keyword.
-Smaller values often make difficult solves more stable, at the cost of more iterations.
+Scaling by $k \in (0, 1]$ is the scale-ELK method of Gonzalez et al. (2024) [^2].
+Because $u_t$ uses the same $\hat{J}_t$, the fixed point is still the sequential trajectory, and after $t$ iterations the first $t$ states are exact.
+In exact arithmetic the solve therefore finishes in at most $T$ iterations for any $k$ and $c$.
+
+These are the `jacobian_damping` ($k$) and `jacobian_clip` ($c$) keywords.
+[`ParallelMALASampler`](@ref) defaults to $k = 1$ and $c = 1$, like the reference implementation, while `DEER.solve` defaults to $c = \infty$.
+Clipping changes nothing when every entry is already inside $[-c, c]$, but $k < 1$ slows solves that were already stable.
+
+The older `damping` keyword relaxes the iterate instead, as $S^{(i+1)} \leftarrow (1 - \lambda) S^{(i)} + \lambda S^{(i+1)}$.
+That loses the $T$-iteration bound, so `damping` is deprecated.
 
 ## Why the diagonal approximation matters
 
@@ -152,7 +162,8 @@ After each update, DEER compares the largest elementwise change with a mixed abs
 ```
 
 The solve stops when this condition holds or after `maxiter` iterations.
-In both cases the block's `T` columns become samples, so a block that stops at `maxiter` is returned without a warning.
+In both cases the block's `T` columns become samples.
+A block that stops at `maxiter` is not an exact MALA trajectory, so `sample` logs a warning with the number of such blocks, and `DEER.solve` warns unless `warn=false`.
 If you ask for more than `T` samples, the sampler starts the next block from the last state with a new tape.
 The last block is trimmed so that the chain has the requested length.
 
@@ -167,3 +178,7 @@ Parallel hardware hides this cost only when there is enough of it to keep the de
 [^1]: Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman,
     S. W. (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS
     2025. [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
+
+[^2]: Gonzalez, X., Warrington, A., Smith, J. T. H., & Linderman, S. W.
+    (2024). *Towards Scalable and Stable Parallelization of Nonlinear RNNs*.
+    NeurIPS 2024. [arXiv:2407.19115](https://arxiv.org/abs/2407.19115)

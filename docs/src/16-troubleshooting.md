@@ -10,11 +10,14 @@ See [Defining models](12-models.md) for how each choice computes the HVP.
 ## The DEER solve does not converge
 
 The sampler does not report how many iterations each block needed.
-A block that reaches `maxiter` is returned as samples without a warning.
-Suspect the solve if sampling is much slower than you expect, or if the samples disagree with [`MALASampler`](@ref) on the same model.
+A block that reaches `maxiter` is still returned as samples, and the sampler logs a warning with the number of such blocks.
+Those samples are not exact MALA draws.
+Also suspect the solve if sampling is much slower than you expect, or if the samples disagree with [`MALASampler`](@ref) on the same model.
 
 First reduce `epsilon` or `T`.
-If the model otherwise behaves well, lower `damping` from `0.5` toward `0.3`.
+If the model otherwise behaves well, set `jacobian_damping=0.5` or raise `maxiter`.
+Strongly correlated parameters make the diagonal Jacobian a poor approximation, and the solve can then need close to `T` iterations.
+Reparametrizing so the posterior is closer to uncorrelated helps more than any solver setting.
 Do not loosen the tolerances until you have ruled out a derivative error.
 
 ## Parallel MALA is slower than sequential MALA
