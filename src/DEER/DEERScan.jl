@@ -72,6 +72,19 @@ function solve_affine_seq(A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVect
     return solve_affine_seq!(S, A, B, s0)
 end
 
+function _check_scan_shapes(S, A, B, s0, ws::AffineScanWorkspace)
+    D, T = size(A)
+    size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
+    size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
+    length(s0) == D || throw(DimensionMismatch("length(s0) must equal size(A,1)"))
+    for buf in (ws.alpha, ws.beta, ws.alpha_new, ws.beta_new)
+        size(buf) == (D, T) || throw(DimensionMismatch("workspace has wrong matrix size"))
+    end
+    Base.mightalias(S, A) && throw(ArgumentError("S must not alias A"))
+    Base.mightalias(S, B) && throw(ArgumentError("S must not alias B"))
+    return nothing
+end
+
 """
     solve_affine_scan_diag!(S, A, B, s0, ws; check_shapes=true)
 
@@ -92,10 +105,10 @@ CPU arrays and GPU arrays alike, as long as broadcasted assignment and
 slicing/views are supported by the array type.
 
 Notes:
-- This is a clean, backend-agnostic implementation, not a backend-specialized
-  scan kernel.
-- It performs O(log T) sweep levels, each level consisting of whole-array
-  broadcast operations.
+- This is the backend-agnostic implementation. It performs O(log T) sweep
+  levels, each made of whole-array broadcasts, so it launches about four kernels
+  per level on a GPU. The CUDA extension replaces it for `CuArray`s with a
+  chunked scan that launches three.
 - `S` may alias neither `A` nor `B`.
 - `ws` allows the scan to run without warm-path allocations.
 """
@@ -108,23 +121,7 @@ function solve_affine_scan_diag!(
     check_shapes::Bool=true,
 )
     D, T = size(A)
-
-    if check_shapes
-        size(B) == (D, T) || throw(DimensionMismatch("B must have the same size as A"))
-        size(S) == (D, T) || throw(DimensionMismatch("S must have size (D, T)"))
-        length(s0) == D || throw(DimensionMismatch("length(s0) must equal size(A,1)"))
-        size(ws.alpha) == (D, T) ||
-            throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.beta) == (D, T) ||
-            throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.alpha_new) == (D, T) ||
-            throw(DimensionMismatch("workspace has wrong matrix size"))
-        size(ws.beta_new) == (D, T) ||
-            throw(DimensionMismatch("workspace has wrong matrix size"))
-        Base.mightalias(S, A) && throw(ArgumentError("S must not alias A"))
-        Base.mightalias(S, B) && throw(ArgumentError("S must not alias B"))
-    end
-
+    check_shapes && _check_scan_shapes(S, A, B, s0, ws)
     T == 0 && return S
 
     alpha = ws.alpha
