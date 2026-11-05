@@ -129,10 +129,13 @@ else
         )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
-        trans, state = ParallelMCMC.AbstractMCMC.step(
+        trans0, state0 = ParallelMCMC.AbstractMCMC.step(
             rng, model, sampler; initial_params=x0_gpu
         )
+        @test trans0.x isa CUDA.CuVector
+        @test Array(trans0.x) == Array(x0_gpu)
 
+        trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state0)
         @test trans isa ParallelMALATransition
         @test state isa ParallelMALAState
         @test trans.x isa CUDA.CuVector
@@ -159,13 +162,13 @@ else
         )
         x0_cpu = randn(MersenneTwister(5), Float32, D)
 
-        _, state_cpu = ParallelMCMC.AbstractMCMC.step(
+        _, state_cpu = step_into_first_block(
             MersenneTwister(7),
             model,
             ParallelMALASampler(1.0f0; backend=ADTypes.AutoForwardDiff(), kw...);
             initial_params=x0_cpu,
         )
-        _, state_gpu = ParallelMCMC.AbstractMCMC.step(
+        _, state_gpu = step_into_first_block(
             MersenneTwister(7),
             model,
             ParallelMALASampler(1.0f0; backend=_gpu_backend, kw...);
@@ -184,9 +187,7 @@ else
         )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
-        trans, state = ParallelMCMC.AbstractMCMC.step(
-            rng, model, sampler; initial_params=x0_gpu
-        )
+        trans, state = step_into_first_block(rng, model, sampler; initial_params=x0_gpu)
         @test state.t == 1
 
         trans2, state2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
@@ -207,9 +208,7 @@ else
         )
         x0_gpu = CUDA.CuArray(randn(rng, Float32, D))
 
-        _, state = ParallelMCMC.AbstractMCMC.step(
-            rng, model, sampler; initial_params=x0_gpu
-        )
+        _, state = step_into_first_block(rng, model, sampler; initial_params=x0_gpu)
         for _ in 1:(T - 1)
             _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
         end

@@ -8,6 +8,8 @@ using ADTypes
 using Enzyme: Enzyme
 using ForwardDiff: ForwardDiff
 using Mooncake: Mooncake
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 
 logp_slots(x) = -0.5 * dot(x, x)
 gradlogp_slots(x) = -x
@@ -483,7 +485,7 @@ end
 
     @testset "ParallelMALASampler" begin
         spl = ParallelMALASampler(0.05; T=8, backend=AutoForwardDiff())
-        _, s_a = ParallelMCMC.AbstractMCMC.step(MersenneTwister(76), model_a, spl)
+        _, s_a = step_into_first_block(MersenneTwister(76), model_a, spl)
         @test s_a.t == 1
         # Snapshot before re-solving, which reuses the workspace.
         x_replayed = copy(s_a.trajectory[:, 2])
@@ -494,7 +496,7 @@ end
         @test s_b.t == 1
         @test !(s_b.x ≈ x_replayed)
 
-        _, s_fresh = ParallelMCMC.AbstractMCMC.step(
+        _, s_fresh = step_into_first_block(
             MersenneTwister(77), model_b, spl; initial_params=x_resume
         )
         @test s_b.x ≈ s_fresh.x

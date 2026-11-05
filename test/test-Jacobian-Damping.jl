@@ -206,17 +206,18 @@ end
     x0 = [0.5, -1.0, 2.0]
 
     # The tape is drawn before the solve, so the first block shares it.
-    _, state_deer = ParallelMCMC.AbstractMCMC.step(
+    _, state_deer = step_into_first_block(
         MersenneTwister(9),
         model,
         ParallelMALASampler(0.3; jacobian_clip=Inf, kw...);
         initial_params=x0,
     )
-    _, state_jd = ParallelMCMC.AbstractMCMC.step(
+    _, state_jd = step_into_first_block(
         MersenneTwister(9),
         model,
         ParallelMALASampler(0.3; jacobian_damping=0.5, jacobian_clip=1.0, kw...);
         initial_params=x0,
     )
+    @test size(state_deer.trajectory, 2) == 32
     @test state_jd.trajectory ≈ state_deer.trajectory rtol = 1e-6 atol = 1e-8
 end
