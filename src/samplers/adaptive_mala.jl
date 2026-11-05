@@ -39,10 +39,17 @@ State for an `AdaptiveMALASampler` chain, including dual-averaging adaptation
 statistics. Holds the prepped model so AD preparation happens once per chain.
 """
 struct AdaptiveMALAState{
-    V<:AbstractVector,FP<:AbstractFloat,W,NV<:AbstractVector,H,DM<:PreppedDensityModel
+    V<:AbstractVector,
+    FP<:AbstractFloat,
+    G<:AbstractVector,
+    W,
+    NV<:AbstractVector,
+    H,
+    DM<:PreppedDensityModel,
 }
     x::V
     logp::FP
+    grad::G
     epsilon::FP
     epsilon_bar::FP
     H_bar::FP
@@ -103,12 +110,14 @@ function AbstractMCMC.step(
     end
     model = _prepare_model(model, x)
     logp_val = FP(model.logdensity(x))
+    grad = copy(model.grad_logdensity(x))
     ws = MALA.MALAWorkspace(x)
     noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     trans = AdaptiveMALATransition(x, logp_val, true, sampler.epsilon_init, true)
     state = AdaptiveMALAState(
         x,
         logp_val,
+        grad,
         sampler.epsilon_init,
         sampler.epsilon_init,
         zero(FP),
@@ -128,10 +137,11 @@ function AbstractMCMC.step(
     state::AdaptiveMALAState;
     kwargs...,
 ) where {FP}
-    model = if _prepped_for(state.model, user_model)
-        state.model
+    model, logp_x, grad_x = if _prepped_for(state.model, user_model)
+        state.model, state.logp, state.grad
     else
-        _prepare_model(user_model, state.x)
+        m = _prepare_model(user_model, state.x)
+        m, FP(m.logdensity(state.x)), copy(m.grad_logdensity(state.x))
     end
     D = model.dim
     in_warmup = state.step < sampler.n_warmup
@@ -141,19 +151,20 @@ function AbstractMCMC.step(
     u = rand(rng)
 
     x_next = similar(state.x)
-    x_next, accepted, logα = MALA.mala_step_with_logα!(
+    x_next, accepted, logα, logp_next, grad_next = MALA.mala_step_cached!(
         x_next,
         state.workspace,
         model.logdensity,
         model.grad_logdensity,
         state.x,
+        logp_x,
+        grad_x,
         ε,
         ξ,
         u;
         cholM=sampler.cholM,
     )
-
-    logp_next = accepted ? FP(model.logdensity(x_next)) : state.logp
+    logp_next = FP(logp_next)
 
     m_new = state.step + 1
     ε_new, ε_bar_new, H_bar_new = if in_warmup
@@ -173,6 +184,7 @@ function AbstractMCMC.step(
     new_state = AdaptiveMALAState(
         x_next,
         logp_next,
+        grad_next,
         ε_new,
         ε_bar_new,
         H_bar_new,
