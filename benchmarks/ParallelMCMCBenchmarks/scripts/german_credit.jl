@@ -90,15 +90,56 @@ function logistic_model(X, y)
         return -(X' * (p .* (1 .- p) .* (X * v))) .- v
     end
 
-    function logp_batch(B)
-        XB = X * B
-        return vec(sum(y .* XB .- softplus.(XB); dims=1)) .-
-               half .* vec(sum(abs2, B; dims=1))
+    #= The batched functions work in place on buffers sized for the number of columns
+    they last saw. Each DEER iteration makes six of these calls on `N × T` arrays,
+    and on a GPU allocating those arrays costs far more than the arithmetic. The
+    sampler copies every result before the next call, so returning a buffer is safe. =#
+    N = size(X, 1)
+    buffers = Ref{Any}(nothing)
+    function buffers_for(M)
+        b = buffers[]
+        if b === nothing || size(b.Z, 2) != M
+            b = (;
+                Z=similar(X, N, M),
+                P=similar(X, N, M),
+                Q=similar(X, N, M),
+                DM=similar(X, D, M),
+                row_a=similar(X, 1, M),
+                row_b=similar(X, 1, M),
+                out=similar(X, M),
+            )
+            buffers[] = b
+        end
+        return b
     end
-    grad_batch(B) = X' * (y .- sigmoid.(X * B)) .- B
+
+    function logp_batch(B)
+        b = buffers_for(size(B, 2))
+        mul!(b.Z, X, B)
+        @. b.P = y * b.Z - softplus(b.Z)
+        sum!(b.row_a, b.P)
+        @. b.DM = B^2
+        sum!(b.row_b, b.DM)
+        b.out .= vec(b.row_a) .- half .* vec(b.row_b)
+        return b.out
+    end
+    function grad_batch(B)
+        b = buffers_for(size(B, 2))
+        mul!(b.Z, X, B)
+        @. b.P = y - sigmoid(b.Z)
+        mul!(b.DM, transpose(X), b.P)
+        b.DM .-= B
+        return b.DM
+    end
     function hvp_batch(B, V)
-        P = sigmoid.(X * B)
-        return -(X' * (P .* (1 .- P) .* (X * V))) .- V
+        b = buffers_for(size(B, 2))
+        mul!(b.Z, X, B)
+        mul!(b.Q, X, V)
+        @. b.P = sigmoid(b.Z)
+        @. b.Q = b.P * (1 - b.P) * b.Q
+        mul!(b.DM, transpose(X), b.Q)
+        @. b.DM = -b.DM - V
+        return b.DM
     end
 
     sequential = DensityModel(logp, grad, D; hvp=hvp)

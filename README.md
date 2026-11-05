@@ -44,7 +44,7 @@ The exception is an accept decision that falls within that tolerance of the thre
   <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
 </p>
 
-At $L = 64\,000$ the parallel sampler is 3.4 times faster than sequential MALA on the CPU and 69 times faster than sequential MALA on the GPU.
+At $L = 64\,000$ the parallel sampler is 3.2 times faster than sequential MALA on the CPU and 62 times faster than sequential MALA on the GPU.
 These timings come from one RTX 5090 and a 12-thread CPU under Windows.
 Sequential MALA on a GPU waits for the device several times per step to make each accept decision on the host, so it trails the CPU at this size.
 The paper compiles its sequential baseline with JAX, which keeps the whole loop on the device, and reports parallel speedups of 20 to 30 times.
