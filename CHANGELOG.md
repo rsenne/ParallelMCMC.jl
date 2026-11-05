@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ParallelMALASampler` now returns the initial point as its first sample, as
+  `MALASampler` and `AdaptiveMALASampler` do. Before, it started at the first
+  transition, so its chain was the sequential chain shifted by one step (#85).
 - FlexiChains compat is now `0.7`. FlexiChains 0.7 takes its `VarName` from
   VarNames.jl, so `VNChain` is a `FlexiChain{VarNames.VarName}`. The
   `@varname` macro is no longer exported there; use `@vn`.
