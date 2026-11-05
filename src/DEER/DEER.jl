@@ -503,7 +503,7 @@ function deer_update!(
     probes::Int=1,
     rng::AbstractRNG=Random.default_rng(),
     jacobian_damping::Real=1,
-    jacobian_clip::Real=Inf,
+    jacobian_clip::Real=1,
 )
     s0 = vec(s0_in)
     D, T = size(S_in)
@@ -610,7 +610,7 @@ function deer_update(
     probes::Int=1,
     rng::AbstractRNG=Random.default_rng(),
     jacobian_damping::Real=1,
-    jacobian_clip::Real=Inf,
+    jacobian_clip::Real=1,
 )
     _depwarn_damping(damping, :deer_update)
     ws = DEERWorkspace(S, vec(s0_in))
@@ -649,8 +649,12 @@ al. 2025, App. B). Each diagonal Jacobian estimate `J` is replaced with
 `clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)` before the scan.
 Damping by `k < 1` is the scale-ELK of Gonzalez et al. (2024). Both only change
 the linearization, so the fixed point is the same and the solve still finishes
-in at most `T` iterations. The defaults (`1` and `Inf`) leave the Jacobian
-untouched.
+in at most `T` iterations. The defaults (`1` and `1`) match
+[`ParallelMALASampler`](@ref): no scaling, and entries clipped to `[-1, 1]`.
+Without clipping, one-probe `:stoch_diag` estimates on correlated targets often
+exceed 1 in magnitude, and rounding error can then grow along the scan until the
+solve runs far past `T` iterations. Pass `jacobian_clip=Inf` to use the
+estimate as is.
 
 `damping` is deprecated. It relaxes the iterate, `S ← (1 - damping) S_old +
 damping S_new`, which loses the `T`-iteration bound; use the Jacobian options
@@ -676,7 +680,7 @@ function solve(
     workspace::Union{Nothing,DEERWorkspace}=nothing,
     copy_result::Union{Nothing,Bool}=nothing,
     jacobian_damping::Real=1,
-    jacobian_clip::Real=Inf,
+    jacobian_clip::Real=1,
     warn::Bool=true,
 )
     s0 = vec(s0_in)

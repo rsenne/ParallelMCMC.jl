@@ -113,7 +113,9 @@ When many diagonal entries of $J_t$ exceed 1 in magnitude, the linear recursion 
 Scaling by $k \in (0, 1]$ is the scale-ELK variant of Gonzalez et al. (2024) [^2], which the MCMC paper calls quasi-ELK. Clipping at $c = 1$ keeps every scan coefficient inside $[-1, 1]$. The offset is built from the modified $\hat{J}_t$, so the fixed point is still the true trajectory. The update is also still exact on the first $t$ steps after $t$ iterations, as for any choice of $\hat{J}_t$, so the solve finishes in at most $T$ iterations in exact arithmetic. Relaxing the iterate with `damping < 1` gives no such guarantee.
 
 Both are set through `jacobian_damping` ($k$) and `jacobian_clip` ($c$) on [`ParallelMALASampler`](@ref) and `DEER.solve`.
-The sampler defaults to $k = 1$ and $c = 1$, as the `ParallelMALA` sampler in the reference implementation does; `DEER.solve` defaults to $c = \infty$, which leaves the Jacobian untouched.
+Both default to $k = 1$ and $c = 1$, as the `ParallelMALA` sampler in the reference implementation does.
+Pass `jacobian_clip=Inf` to leave the Jacobian untouched.
+Without clipping, one-probe `:stoch_diag` estimates on correlated targets often exceed 1 in magnitude, and rounding error can then grow along the scan until the solve runs far past $T$ iterations.
 
 ```julia
 sampler = ParallelMALASampler(1.5; T=1024, jacobian_damping=0.5)
