@@ -612,6 +612,11 @@ untouched.
 `damping` is deprecated. It relaxes the iterate, `S ← (1 - damping) S_old +
 damping S_new`, which loses the `T`-iteration bound; use the Jacobian options
 instead.
+
+If the solve uses all `maxiter` iterations without meeting the tolerance, it logs a
+warning and returns the last iterate, which is not an exact sequential trajectory.
+Pass `warn=false` to silence the warning, and `return_info=true` to check
+`info.converged` yourself.
 """
 function solve(
     rec::TapedRecursion,
@@ -629,6 +634,7 @@ function solve(
     copy_result::Union{Nothing,Bool}=nothing,
     jacobian_damping::Real=1,
     jacobian_clip::Real=Inf,
+    warn::Bool=true,
 )
     s0 = vec(s0_in)
     D = length(s0)
@@ -694,6 +700,13 @@ function solve(
         end
 
         S, S_new = S_new, S
+    end
+
+    if warn && !converged
+        @warn "DEER did not converge in `maxiter = $maxiter` iterations " *
+            "(final metric $last_metric, needs ≤ 1). The returned trajectory is not " *
+            "an exact sequential trajectory. Raise `maxiter`, or set " *
+            "`jacobian_damping` or `jacobian_clip` to stabilise the solve."
     end
 
     S_result = copy_result ? copy(S) : S

@@ -256,6 +256,7 @@ function _deer_solve_new_tape(
     sampler::ParallelMALASampler,
     x0::AbstractVector;
     workspace=nothing,
+    warn::Bool=true,
 )
     D = model.dim
     T = sampler.T
@@ -275,7 +276,7 @@ function _deer_solve_new_tape(
 
     ws = workspace === nothing ? DEER.DEERWorkspace(x0, T) : workspace
 
-    S = DEER.solve(
+    S, info = DEER.solve(
         rec,
         x0;
         tol_abs=sampler.tol_abs,
@@ -289,8 +290,10 @@ function _deer_solve_new_tape(
         rng=rng,
         workspace=ws,
         copy_result=false,
+        warn=warn,
+        return_info=true,
     )
-    return S, tape, ws
+    return S, tape, ws, info.converged
 end
 
 function _trajectory_logps(model::PreppedDensityModel, S::AbstractMatrix)
@@ -382,12 +385,18 @@ function _parallel_mala_run!(
     next_update = Ntotal / AbstractMCMC.get_n_updates(progress)
     threshold = next_update
     last = nothing
+    nblocks = 0
+    nfailed = 0
 
     AbstractMCMC.@maybewithricherlogger begin
         AbstractMCMC.init_progress!(progress)
         try
             while nsteps < Ntotal
-                S, tape, ws = _deer_solve_new_tape(rng, prepped, sampler, x0; workspace=ws)
+                S, tape, ws, converged = _deer_solve_new_tape(
+                    rng, prepped, sampler, x0; workspace=ws, warn=false
+                )
+                nblocks += 1
+                nfailed += !converged
                 logps = _trajectory_logps(prepped, S)
                 nconsume = min(sampler.T, Ntotal - nsteps)
                 cols, first_row = _kept_columns(sched, nsteps, nconsume)
@@ -405,6 +414,14 @@ function _parallel_mala_run!(
         finally
             AbstractMCMC.finish_progress!(progress)
         end
+    end
+    #= One warning per run rather than one per block: a sampler that fails to
+    converge usually fails on most blocks. =#
+    if nfailed > 0
+        @warn "DEER did not converge in `maxiter = $(sampler.maxiter)` iterations " *
+            "for $nfailed of $nblocks trajectory blocks. Samples from those blocks " *
+            "are not exact MALA draws. Raise `maxiter`, or set `jacobian_damping` " *
+            "or `jacobian_clip` to stabilise the solve."
     end
     return last
 end
@@ -602,7 +619,7 @@ function AbstractMCMC.step(
     end
     model = _prepare_model(model, x0, sampler.T, sampler.backend)
 
-    S, tape, ws = _deer_solve_new_tape(rng, model, sampler, x0)
+    S, tape, ws, _ = _deer_solve_new_tape(rng, model, sampler, x0)
     logps = _trajectory_logps(model, S)
     x1 = S[:, 1]
     logp1 = logps[1]
@@ -647,7 +664,7 @@ function AbstractMCMC.step(
         return trans, new_state
     else
         x0 = reuse ? state.trajectory[:, T] : copy(state.x)
-        S_new, tape, ws = _deer_solve_new_tape(
+        S_new, tape, ws, _ = _deer_solve_new_tape(
             rng, model, sampler, x0; workspace=state.workspace
         )
         logps = _trajectory_logps(model, S_new)

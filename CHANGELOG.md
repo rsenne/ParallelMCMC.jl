@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEER.solve` scale and clip the diagonal Jacobian estimate before each DEER
   step, as in Zoltowski et al. (2025, App. B). They stabilise DEER for
   multimodal targets and large step sizes (#19).
+- `DEER.solve` warns when it reaches `maxiter` without converging; pass
+  `warn=false` to silence it. `ParallelMALASampler` warns once per run with the
+  number of blocks that did not converge (#78).
 
 ### Fixed
 

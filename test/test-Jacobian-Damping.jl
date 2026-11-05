@@ -136,8 +136,11 @@ end
     x0, rec, S_ref = jd_mala_problem(1, 4, 1024, 1.5)
     kw = (jacobian=:diag, tol_abs=1e-10, tol_rel=1e-8, maxiter=200, return_info=true)
 
-    _, info = DEER.solve(rec, x0; kw...)
+    _, info = @test_logs (:warn, r"did not converge in `maxiter = 200`") DEER.solve(
+        rec, x0; kw...
+    )
     @test !info.converged
+    @test_logs DEER.solve(rec, x0; kw..., warn=false)
 
     for opts in (
         (jacobian_damping=0.5,),
@@ -148,6 +151,24 @@ end
         @test info.converged
         @test S ≈ S_ref rtol = 1e-6 atol = 1e-6
     end
+end
+
+@testset "ParallelMALASampler warns once when DEER blocks do not converge" begin
+    model = DensityModel(logp_jd, gradlogp_jd, 3; hvp=hvp_jd)
+    x0 = [0.5, -1.0, 2.0]
+    run(sampler) = sample(
+        MersenneTwister(9),
+        model,
+        sampler,
+        40;
+        initial_params=x0,
+        progress=false,
+        chain_type=Any,
+    )
+    # 40 samples with T = 16 take three solves, and one iteration converges none of them.
+    sampler = ParallelMALASampler(0.3; T=16, maxiter=1, tol_abs=1e-12, tol_rel=1e-10)
+    @test_logs (:warn, r"for 3 of 3 trajectory blocks") run(sampler)
+    @test_logs run(ParallelMALASampler(0.3; T=16, maxiter=200))
 end
 
 @testset "ParallelMALASampler with Jacobian damping samples the same chain" begin
