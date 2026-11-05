@@ -9,19 +9,14 @@ const DEERScan = DEER.DEERScan
 
 ParallelMCMC.needs_host_staging(::CuArray) = true
 
-#=
-DEER on a GPU launches many small kernels per iteration, and on some platforms
-(notably Windows) each launch costs far more than the work it does. The methods
-below replace the three busiest pieces of a DEER iteration with fewer launches:
-the affine scan, the convergence test, and the Hutchinson probes.
-=#
+#= On some platforms, notably Windows, a kernel launch costs more than a small
+kernel's work. These methods cut the launches in the affine scan, the
+convergence test, and the Hutchinson probes. =#
 
-#= Chunked scan of s_t = A[:, t] .* s_{t-1} .+ B[:, t]. The T steps are split
-into K chunks of length C. Thread (d, k) composes the affine maps of chunk k for
-parameter d; one thread per d then carries the state across chunks; thread
-(d, k) finally replays its chunk from the state entering it. Three launches
-instead of about four per doubling level, and each state comes from the same
-sequential recursion as `solve_affine_seq!`. =#
+#= Chunked scan of s_t = A[:, t] .* s_{t-1} .+ B[:, t] in three launches. Thread
+(d, k) composes the maps of chunk k for parameter d, one thread per d carries the
+state across chunks, and thread (d, k) replays its chunk from that state. Each
+state comes from the same sequential recursion as `solve_affine_seq!`. =#
 function _chunk_summary_kernel!(Asum, Bsum, A, B, C::Int, T::Int)
     D = size(A, 1)
     i = (CUDA.blockIdx().x - 1) * CUDA.blockDim().x + CUDA.threadIdx().x
