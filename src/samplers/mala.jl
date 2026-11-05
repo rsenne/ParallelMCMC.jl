@@ -20,11 +20,21 @@ end
 
 """
 State for a `MALASampler` chain. Holds the prepped model so AD preparation
-happens once per chain.
+happens once per chain, and the log-density and gradient at `x` so each step
+evaluates them only at the proposal.
 """
-struct MALAState{V<:AbstractVector,L<:Real,W,NV<:AbstractVector,H,DM<:PreppedDensityModel}
+struct MALAState{
+    V<:AbstractVector,
+    L<:Real,
+    G<:AbstractVector,
+    W,
+    NV<:AbstractVector,
+    H,
+    DM<:PreppedDensityModel,
+}
     x::V
     logp::L
+    grad::G
     workspace::W
     noise::NV
     noise_host::H
@@ -75,10 +85,11 @@ function AbstractMCMC.step(
     end
     model = _prepare_model(model, x)
     logp_val = model.logdensity(x)
+    grad = copy(model.grad_logdensity(x))
     ws = MALA.MALAWorkspace(x)
     noise, noise_host = _make_noise_buffer(x, FP, model.dim)
     t = MALATransition(x, logp_val, true)
-    s = MALAState(x, logp_val, ws, noise, noise_host, model)
+    s = MALAState(x, logp_val, grad, ws, noise, noise_host, model)
     return t, s
 end
 
@@ -89,15 +100,16 @@ function AbstractMCMC.step(
     state::MALAState;
     kwargs...,
 )
-    #= Reuse the state's preparation, unless the state came from a different
-    model (via `initial_state`), in which case the model we were handed is the
-    one to sample. =#
-    model = if _prepped_for(state.model, user_model)
-        state.model
-    else
-        _prepare_model(user_model, state.x)
-    end
+    #= Reuse the state's preparation and cached log-density and gradient, unless
+    the state came from a different model (via `initial_state`), in which case
+    the model we were handed is the one to sample. =#
     x = state.x
+    model, logp_x, grad_x = if _prepped_for(state.model, user_model)
+        state.model, state.logp, state.grad
+    else
+        m = _prepare_model(user_model, x)
+        m, m.logdensity(x), copy(m.grad_logdensity(x))
+    end
     ϵ = sampler.epsilon
     D = model.dim
 
@@ -105,21 +117,24 @@ function AbstractMCMC.step(
     u = rand(rng)
 
     x_next = similar(x)
-    x_next, accepted, _ = MALA.mala_step_with_logα!(
+    x_next, accepted, _, logp_val, grad_next = MALA.mala_step_cached!(
         x_next,
         state.workspace,
         model.logdensity,
         model.grad_logdensity,
         x,
+        logp_x,
+        grad_x,
         ϵ,
         ξ,
         u;
         cholM=sampler.cholM,
     )
 
-    logp_val = accepted ? model.logdensity(x_next) : state.logp
     t = MALATransition(x_next, logp_val, accepted)
-    s = MALAState(x_next, logp_val, state.workspace, state.noise, state.noise_host, model)
+    s = MALAState(
+        x_next, logp_val, grad_next, state.workspace, state.noise, state.noise_host, model
+    )
     return t, s
 end
 

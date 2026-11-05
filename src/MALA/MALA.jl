@@ -213,12 +213,24 @@ function mala_proposal!(
 )
     length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
     copyto!(ws.g_x, gradlogp(x))
-    sqrt2ϵ = sqrt(2 * ϵ)
+    return _mala_proposal_from_grad!(y, ws, x, ws.g_x, ϵ, ξ; cholM=cholM)
+end
 
+# The proposal for a known gradient `g` at `x`.
+function _mala_proposal_from_grad!(
+    y::AbstractVector,
+    ws::MALAWorkspace,
+    x::AbstractVector,
+    g::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector;
+    cholM=nothing,
+)
+    sqrt2ϵ = sqrt(2 * ϵ)
     if cholM === nothing
-        @. y = x + ϵ * ws.g_x + sqrt2ϵ * ξ
+        @. y = x + ϵ * g + sqrt2ϵ * ξ
     else
-        _apply_M!(ws.μ, ws.g_x, cholM, ws.solve_buf)
+        _apply_M!(ws.μ, g, cholM, ws.solve_buf)
         _apply_L!(ws.r, ξ, cholM)
         @. y = x + ϵ * ws.μ + sqrt2ϵ * ws.r
     end
@@ -352,6 +364,57 @@ function mala_step_with_logα!(
         copyto!(x_next, x)
     end
     return x_next, accepted, logα
+end
+
+"""
+    mala_step_cached!(x_next, ws, logp, gradlogp, x, logp_x, grad_x, ε, ξ, u; cholM=nothing)
+        -> (x_next, accepted, logα, logp_next, grad_next)
+
+Same step as [`mala_step_with_logα!`](@ref), but `logp(x)` and `gradlogp(x)` are passed in
+as `logp_x` and `grad_x`, so the step evaluates `logp` and `gradlogp` once each, at the
+proposal. It returns the log-density and gradient at `x_next` for the next step.
+
+`grad_next` is a new array when the proposal is accepted and `grad_x` otherwise. Neither
+aliases `ws`, so a later step cannot overwrite it.
+"""
+function mala_step_cached!(
+    x_next::AbstractVector,
+    ws::MALAWorkspace,
+    logp,
+    gradlogp,
+    x::AbstractVector,
+    logp_x::Real,
+    grad_x::AbstractVector,
+    ϵ::Real,
+    ξ::AbstractVector,
+    u::Real;
+    cholM=nothing,
+)
+    length(x) == length(ξ) || throw(DimensionMismatch("x and ξ must have the same length"))
+    length(x_next) == length(x) ||
+        throw(DimensionMismatch("x_next must have the same length as x"))
+    length(grad_x) == length(x) ||
+        throw(DimensionMismatch("grad_x must have the same length as x"))
+    length(ws.y) == length(x) ||
+        throw(DimensionMismatch("workspace must match length of x"))
+    0.0 < u < 1.0 || throw(ArgumentError("u must be in (0, 1)"))
+
+    _mala_proposal_from_grad!(ws.y, ws, x, grad_x, ϵ, ξ; cholM=cholM)
+    logp_y = logp(ws.y)
+    copyto!(ws.g_y, gradlogp(ws.y))
+
+    logq_yx = logq_mala!(ws, ws.y, x, grad_x, ϵ; cholM=cholM)
+    logq_xy = logq_mala!(ws, x, ws.y, ws.g_y, ϵ; cholM=cholM)
+    logα = (logp_y + logq_xy) - (logp_x + logq_yx)
+
+    accepted = log(u) < logα
+    if accepted
+        copyto!(x_next, ws.y)
+        return x_next, true, logα, logp_y, copy(ws.g_y)
+    else
+        copyto!(x_next, x)
+        return x_next, false, logα, logp_x, grad_x
+    end
 end
 
 """

@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behalf (#62). `AutoEnzyme()` keeps its unset mode. Pass
   `AutoEnzyme(; mode=Enzyme.Forward)` to request forward mode explicitly.
 - Invalid `AutoReactant` backend combinations are rejected before compilation.
+- `MALASampler` and `AdaptiveMALASampler` keep the log-density and gradient of
+  the current point in their state, so each step evaluates `logp` and
+  `gradlogp` once, at the proposal, instead of three and two times. The chain
+  is unchanged. A state passed to a different model now also takes that
+  model's log-density instead of keeping the old one after a rejection.
 
 ### Changed
 
