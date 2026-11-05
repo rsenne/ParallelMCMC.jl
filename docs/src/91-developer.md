@@ -200,11 +200,15 @@ The CI workflow builds docs from the `docs/` project after developing the curren
      doctest(ParallelMCMC)'
    ```
 
-If you update the landing-page animation, regenerate it with:
+The README animation and the German Credit figure are built by the scripts in `docs/figures`, which have their own environment:
 
 ```bash
-julia docs/src/assets/make_julia_deer_gif.jl
+julia --project=docs/figures docs/figures/deer_iterations.jl
+julia --project=docs/figures docs/figures/german_credit.jl
 ```
+
+The second script reads `docs/figures/german_credit_timings.csv`.
+Run `benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl` with `PMCMC_OUT` set to that path to refresh the timings.
 
 ## Making a new release
 
