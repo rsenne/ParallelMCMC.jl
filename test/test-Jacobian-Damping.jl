@@ -79,7 +79,7 @@ end
     @test_throws ArgumentError ParallelMALASampler(0.1; jacobian_clip=-1)
 end
 
-@testset "default Jacobian options leave DEER unchanged" begin
+@testset "DEER.solve and ParallelMALASampler share Jacobian defaults" begin
     x0, rec, _ = jd_mala_problem(5, 3, 32, 0.35)
     for jacobian in (:diag, :stoch_diag)
         S_a = DEER.solve(rec, x0; jacobian=jacobian, rng=MersenneTwister(2))
@@ -89,7 +89,7 @@ end
             jacobian=jacobian,
             rng=MersenneTwister(2),
             jacobian_damping=1,
-            jacobian_clip=Inf,
+            jacobian_clip=1,
         )
         @test S_a == S_b
     end
@@ -104,7 +104,7 @@ end
 
 @testset "fixed point is the sequential MALA trajectory" begin
     options = (
-        (jacobian_damping=0.5,),
+        (jacobian_damping=0.5, jacobian_clip=Inf),
         (jacobian_clip=1.0,),
         (jacobian_damping=0.4, jacobian_clip=1.0),
     )
@@ -137,19 +137,64 @@ end
     kw = (jacobian=:diag, tol_abs=1e-10, tol_rel=1e-8, maxiter=200, return_info=true)
 
     _, info = @test_logs (:warn, r"did not converge in `maxiter = 200`") DEER.solve(
-        rec, x0; kw...
+        rec, x0; kw..., jacobian_clip=Inf
     )
     @test !info.converged
-    @test_logs DEER.solve(rec, x0; kw..., warn=false)
+    @test_logs DEER.solve(rec, x0; kw..., jacobian_clip=Inf, warn=false)
 
     for opts in (
-        (jacobian_damping=0.5,),
+        (jacobian_damping=0.5, jacobian_clip=Inf),
         (jacobian_clip=1.0,),
         (jacobian_damping=0.5, jacobian_clip=1.0),
     )
         S, info = DEER.solve(rec, x0; kw..., opts...)
         @test info.converged
         @test S ≈ S_ref rtol = 1e-6 atol = 1e-6
+    end
+end
+
+@testset "default clipping lets :stoch_diag converge on a correlated target (#84)" begin
+    #=
+    Gaussian with unit variances and correlation 0.9 in 3 dimensions, ε = 0.4.
+    One-probe estimates of the diagonal often exceed 1 in magnitude here, and the
+    unclipped solve has not converged after 4T iterations. With the default
+    `jacobian_clip = 1` it takes about 25.
+    =#
+    D, T, ε = 3, 128, 0.4
+    Σ = fill(0.9, D, D) + 0.1I
+    P = inv(Σ)
+    logp = x -> -0.5 * dot(x, P * x)
+    gradlogp = x -> -(P * x)
+    hvp = (x, v) -> -(P * v)
+
+    rng = MersenneTwister(1)
+    x0 = cholesky(Σ).L * randn(rng, D)
+    ξs = [randn(rng, D) for _ in 1:T]
+    us = rand(rng, T)
+    S_ref = reduce(hcat, run_mala_sequential_taped(logp, gradlogp, x0, ε, ξs, us)[2:end])
+    tape = [(ξ=ξs[t], u=us[t]) for t in 1:T]
+    step_fwd = (x, tt) -> MALA.mala_step_taped(logp, gradlogp, x, ε, tt.ξ, tt.u)
+    jvp =
+        (x, tt, v) ->
+            MALA.mala_step_surrogate_sigmoid_jvp(logp, gradlogp, x, ε, tt.ξ, tt.u, v, hvp)
+    rec = DEER.TapedRecursion(step_fwd, jvp, tape)
+
+    kw = (
+        jacobian=:stoch_diag,
+        tol_abs=1e-10,
+        tol_rel=1e-8,
+        maxiter=4T,
+        return_info=true,
+        warn=false,
+    )
+    for seed in 1:3
+        _, info = DEER.solve(rec, x0; kw..., jacobian_clip=Inf, rng=MersenneTwister(seed))
+        @test !info.converged
+
+        S, info = DEER.solve(rec, x0; kw..., rng=MersenneTwister(seed))
+        @test info.converged
+        @test info.iters < T
+        @test S ≈ S_ref rtol = 1e-6 atol = 1e-8
     end
 end
 

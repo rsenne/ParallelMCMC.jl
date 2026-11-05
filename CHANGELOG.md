@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`damping=1`, was `0.5`). This matches the reference implementation. The
   samples are the same; the number of DEER iterations per block can change
   (#19).
+- `DEER.solve`, `DEER.deer_update!` and `DEER.deer_update` also default to
+  `jacobian_clip=1`, was `Inf`. With one-probe `:stoch_diag` estimates on
+  correlated targets, the unclipped solve could run far past `T` iterations
+  without converging. Pass `jacobian_clip=Inf` for the old behaviour (#84).
 
 ### Deprecated
 
