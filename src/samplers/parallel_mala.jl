@@ -11,32 +11,48 @@ struct MALATapeElement{FP<:AbstractFloat,V<:AbstractVector{FP}}
 end
 
 """
-    ParallelMALASampler(epsilon; T, maxiter, tol_abs, tol_rel, jacobian, damping, probes, jacobian_damping, jacobian_clip, cholM, backend)
+    ParallelMALASampler(epsilon; T=64, maxiter=200,
+                        tol_abs=1e-6, tol_rel=1e-5,
+                        jacobian=:stoch_diag, probes=1,
+                        jacobian_damping=1, jacobian_clip=1,
+                        cholM=nothing, backend=nothing)
 
-DEER-parallelized MALA sampler.
+Create a MALA sampler that solves blocks of transitions with DEER.
 
-Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
-estimator) and `:diag` (exact diagonal via `D` JVPs).
+`epsilon` is the positive MALA step size. `T` is the number of transitions in
+each DEER block; it does not determine how many samples `sample` returns.
 
-`jacobian_damping` and `jacobian_clip` change the Jacobian estimate to
-`clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)`, which stabilises
-DEER for multimodal targets or large step sizes; see [`DEER.solve`](@ref). They
-change how the solver reaches the samples, not the samples. The defaults (`1` and
-`1`) match the `ParallelMALA` sampler in the reference implementation: no scaling,
-and diagonal entries clipped to `[-1, 1]`.
+The nonlinear solve stops after `maxiter` updates, or when its largest
+elementwise change is at most `tol_abs + tol_rel * maximum(abs, trajectory)`. A
+block that reaches `maxiter` is still returned as samples, and `sample` logs one
+warning for the run.
 
-`damping` is deprecated; see [`DEER.solve`](@ref).
+`jacobian_damping` and `jacobian_clip` replace each diagonal Jacobian estimate
+`J` with `clamp(jacobian_damping * J, -jacobian_clip, jacobian_clip)`. This
+stabilises DEER for multimodal targets and large step sizes without changing
+the samples; see [`DEER.solve`](@ref). The defaults (`1` and `1`) match the
+`ParallelMALA` sampler of the reference implementation. `damping` is
+deprecated.
 
-`backend` supplies Hessian-vector products when the `DensityModel` brings no
-`hvp` / `hvp_batch` of its own. It does not supply gradients. Leave it out when
-the model carries its own HVPs. When it is left out and `grad_logdensity` is an
-AD backend, the HVP runs the forward-mode counterpart of that backend over the
-gradient (`DifferentiationInterface.forward_counterpart`).
+`jacobian=:stoch_diag` estimates each transition Jacobian's diagonal with
+`probes` Hutchinson vectors. `jacobian=:diag` computes the exact diagonal with
+one Jacobian-vector product per parameter dimension.
 
-With `backend=ADTypes.AutoReactant()`, `grad_logdensity` must be `AutoReactant()`
-or a callable.
+`backend` is the AD backend for Hessian-vector products that the model does
+not provide; it is never used for the gradient. It is not needed when the
+[`DensityModel`](@ref) has a function `hvp` (and a function `hvp_batch`, if it
+has batched functions), and a backend given as the model's `hvp` takes
+precedence over it. If `backend` is `nothing` and `grad_logdensity` is an AD
+backend, the HVP is built from that backend as described in
+[`DensityModel`](@ref). With `backend=ADTypes.AutoReactant()`, the model's
+`grad_logdensity` must be `AutoReactant()` or a function. `cholM` has the same
+preconditioning meaning as in [`MALASampler`](@ref).
 
-`callback` and `initial_state` route through the generic step-wise loop instead.
+`sample` normally runs whole DEER blocks. Passing `callback` or `initial_state`
+switches it to the generic step-wise AbstractMCMC loop.
+
+See [Getting started](@ref) for tuning advice and [GPU execution](@ref) for
+backend-specific device constraints.
 """
 struct ParallelMALASampler{FP<:AbstractFloat,CM,AD} <: AbstractMCMC.AbstractSampler
     epsilon::FP

@@ -1,213 +1,145 @@
-# Getting Started
+# Getting started
 
-ParallelMCMC.jl is built around **parallel-across-the-sequence** MCMC.  The core algorithm is [`ParallelMALASampler`](@ref), which solves an entire trajectory of correlated steps simultaneously.  [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) are sequential MALA baselines, included mainly for correctness testing and step-size exploration before running DEER.
+This guide samples a two-dimensional banana-shaped density with parallel MALA.
+We tune the step size with sequential MALA first, then reuse it in the parallel sampler.
+The target is
 
-## Defining a model
+```math
+\log p(x) = -\frac{1}{2}\left(\frac{x_1^2}{100} + \left(x_2 + 0.1\, x_1^2 - 1\right)^2\right).
+```
 
-All samplers take a [`DensityModel`](@ref) as their first argument.  A `DensityModel` wraps:
+Its Hessian changes with $x$, so it tests the Hessian-vector products in a way that a Gaussian target would not.
 
-- `logdensity(x) -> Real` — log-density of the target (up to a constant)
-- `grad_logdensity(x) -> AbstractVector` — its gradient
-- optional `hvp`, `logdensity_batch`, `grad_logdensity_batch`, and `hvp_batch` helpers for faster DEER Jacobian updates
-- `dim::Int` — dimension of the parameter space
+## Installation
 
-```julia
-using ParallelMCMC, FlexiChains
-using ADTypes, Enzyme
+Parallel MALA is the main algorithm in ParallelMCMC.
+It needs Hessian-vector products of the log-density, which you can write yourself or get from an automatic differentiation (AD) backend.
+ParallelMCMC does not depend on any AD package, so you load the one you want.
+This guide uses ForwardDiff.
 
-# Banana-shaped target in 2-D
-function logp(x)
-    -0.5 * (x[1]^2 / 100 + (x[2] + 0.1*x[1]^2 - 1)^2)
+```julia-repl
+pkg> add ParallelMCMC ADTypes ForwardDiff FlexiChains AbstractMCMC
+```
+
+ADTypes provides `AutoForwardDiff()`, FlexiChains provides `ess` and `rhat`, and AbstractMCMC provides `MCMCThreads()`.
+
+```@example gs
+using ParallelMCMC
+using ADTypes, FlexiChains, ForwardDiff, Random
+using AbstractMCMC: MCMCThreads
+```
+
+## Define the target
+
+A [`DensityModel`](@ref) needs a log-density, a gradient, and the number of unconstrained parameters.
+The log-density may omit its normalizing constant.
+
+```@example gs
+function banana_logdensity(x)
+    a = x[2] + 0.1 * x[1]^2 - 1
+    return -(x[1]^2 / 100 + a^2) / 2
 end
 
-function grad_logp(x)
-    dx1 = -x[1]/100 - 0.2*x[1]*(x[2] + 0.1*x[1]^2 - 1)
-    dx2 = -(x[2] + 0.1*x[1]^2 - 1)
-    [dx1, dx2]
+function banana_gradient(x)
+    a = x[2] + 0.1 * x[1]^2 - 1
+    return [-x[1] / 100 - 0.2 * x[1] * a, -a]
 end
 
-model = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
+model = DensityModel(banana_logdensity, banana_gradient, 2; param_names=[:x1, :x2])
+nothing # hide
 ```
 
-### AD backends in derivative slots
+The gradient here is written by hand, but it does not have to be.
+[Defining models](12-models.md) shows how to get it from an AD backend instead.
 
-Derivative slots (`grad_logdensity`, `hvp`, `grad_logdensity_batch`, and `hvp_batch`) accept callables or `ADTypes.AbstractADType` backends. This is enough to build a model from only its log-density:
+## Tune the step size
 
-```julia
-model = DensityModel(logp, AutoEnzyme(), 2; param_names=[:x1, :x2])
+MALA is sensitive to its step size.
+If the step size is too large, most proposals are rejected; if it is too small, the chain moves slowly and successive samples are highly correlated.
+[`AdaptiveMALASampler`](@ref) tunes the step size during warmup, so we run it first and reuse the result.
+
+```@example gs
+tuning = sample(
+    MersenneTwister(42),
+    model,
+    AdaptiveMALASampler(0.1; n_warmup=500),
+    750;
+    initial_params=zeros(2),
+    discard_warmup=true,
+)
+
+epsilon = last(vec(tuning[:step_size]))
 ```
 
-Hand-written and AD-derived slots can be mixed.
+The 750 transitions include the 500 warmup transitions, and `discard_warmup=true` removes those from the returned chain.
+After warmup the step size is fixed, so we take the last value of `:step_size`, which the chain stores next to the parameters.
 
-### What a backend in `hvp` differentiates
+!!! tip "Check the tuned step size"
+    A tuned step size that collapses toward zero usually means that the gradient is wrong or that the parameters have very different scales.
+    Adaptation cannot fix either problem.
 
-| `grad_logdensity` | `hvp` | what runs |
-|---|---|---|
-| callable | backend | one AD pass over your gradient |
-| backend | backend | `SecondOrder(hvp, grad_logdensity)` on `logdensity` |
-| either | `SecondOrder(...)` | that pair on `logdensity`, gradient slot unused |
+## Run parallel MALA
 
-An explicit `SecondOrder` bypasses the gradient slot. Use it when the gradient can't be differentiated.
+Pass the tuned step size to [`ParallelMALASampler`](@ref).
+The model has no hand-written Hessian-vector product, so `backend=AutoForwardDiff()` tells the sampler to compute one by differentiating `banana_gradient`.
 
-See [GPU Execution](15-gpu.md) for backend compatibility.
-
-The batched pair differentiates `sum(logdensity_batch(X))`, so each output must depend only on the corresponding column of `X`. When `grad_logdensity` is a backend, omitting `grad_logdensity_batch` derives it automatically. Both batched derivative slots require `logdensity_batch`.
-
-[`ParallelMALASampler`](@ref)'s `backend` supplies missing HVPs. Omit it when the model supplies them.
-
----
-
-## ParallelMALASampler
-
-[`ParallelMALASampler`](@ref) reformulates a trajectory of `T` MALA steps as a fixed-point problem and solves it via Newton iterations, each of which costs $O(\log T)$ parallel work via an associative prefix scan.  Wall-clock time per sample is therefore sublinear in chain length on multi-core CPUs and GPUs.
-
-```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
-                              backend=AutoEnzyme())
-
-chain = sample(model, sampler, 500;
-               chain_type=VNChain, progress=true)
+```@example gs
+sampler = ParallelMALASampler(epsilon; T=64, backend=AutoForwardDiff())
+chain = sample(MersenneTwister(43), model, sampler, 2_000; initial_params=zeros(2))
 ```
 
-`sample` requests 500 total samples.  Internally, DEER solves trajectories of length `T=64` and returns each column of the solved trajectory as a separate sample.  When the trajectory is exhausted a new noise tape is drawn and DEER re-solves from the last state.
+`T=64` sets how many transitions DEER solves together; `sample` still returns 2,000 samples.
 
-### Trajectory length `T`
+## Choose `T` and the DEER controls
 
-A larger `T` means more samples per DEER solve and better parallelism.  On GPU or with many CPU threads the cost per sample decreases roughly as $1/T$ (up to the $O(\log T)$ scan overhead).  A typical starting point is `T=64`; increase to `T=128` or `T=256` for long sampling runs on parallel hardware.
+Start with the default `T=64`, and change it only after the model samples correctly.
+Larger blocks give parallel hardware more work per iteration, but they use more memory and the nonlinear solve may need more iterations.
 
-### Jacobian modes
+The other keywords control the solve:
 
-The `jacobian` keyword controls how the per-step Jacobian is approximated during each Newton iteration:
+- `jacobian=:stoch_diag`, the default, estimates the diagonal of each transition's Jacobian with `probes` random vectors. Each extra probe makes the estimate less noisy and costs one more Jacobian-vector product per transition.
+- `jacobian=:diag` computes the diagonal exactly with one Jacobian-vector product per parameter. Use it to check results on small models.
+- `jacobian_damping` and `jacobian_clip` scale and clip the Jacobian diagonal before each scan. The defaults suit most targets; try `jacobian_damping=0.5` if the solve needs many iterations or its iterates blow up. See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
+- `maxiter`, `tol_abs`, and `tol_rel` decide when the solve stops. See [`ParallelMALASampler`](@ref) for the exact rule.
 
-| Mode | Cost per step | Notes |
-|---|---|---|
-| `:stoch_diag` (default) | `probes` JVPs | Hutchinson estimator; scalable default for high dimensions |
-| `:diag` | `D` JVPs | Exact diagonal; useful for low-dimensional checks |
+If a block reaches `maxiter` before it meets the tolerances, the sampler still returns its states as samples and logs one warning for the run.
+[Troubleshooting](16-troubleshooting.md) explains what to try.
 
-For high-dimensional targets, `:stoch_diag` with a small number of `probes` is a good trade-off:
+## Use the returned chain
 
-```julia
-sampler = ParallelMALASampler(0.1; T=128, jacobian=:stoch_diag, probes=2,
-                              backend=AutoEnzyme())
+`sample` returns a [FlexiChains](https://pysm.dev/FlexiChains.jl/) chain.
+Index it with the parameter names from the model, as in `chain[:x1]`, and use `chain[:logp]` to get the log-density of each sample.
+
+## Run several chains
+
+To check convergence, run several chains and compare them with $\hat{R}$.
+
+!!! warning "Multiple chains are experimental"
+    Parallel MALA and multiple chains both get their speed from the same hardware.
+    DEER does more total work than sequential MALA and only wins when that work runs in parallel on hardware that would otherwise sit idle.
+    With many chains the hardware is already busy, so the extra work is no longer free, and plain sequential chains can end up faster.
+    [Zoltowski et al. (2025)](https://arxiv.org/abs/2508.18413) observed this on a GPU: with 32 chains, sequential MALA was slightly faster than parallel MALA.
+    How best to split resources between more chains and longer chains is still an open question.
+    Run a few chains to compute diagnostics such as $\hat{R}$, not to sample faster.
+
+Start Julia with several threads, for example `julia -t 4`, so that `MCMCThreads()` can run the chains at the same time:
+
+```@example gs
+chains = sample(
+    model,
+    sampler,
+    MCMCThreads(),
+    2_000,
+    4;
+    initial_params=fill(zeros(2), 4),
+)
+
+ess(chains)
 ```
 
-### Damping and clipping
-
-`jacobian_clip` (default `1`) clips the diagonal Jacobian estimate to `[-jacobian_clip, jacobian_clip]`, and `jacobian_damping` (default `1`) scales it before clipping.
-If DEER needs many iterations or its iterates blow up, try `jacobian_damping=0.5`.
-See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
-
-### GPU execution
-
-The prefix-scan kernel runs as pure array broadcasts and is array-type-agnostic.  To run DEER on GPU:
-
-1. Implement `logdensity` and `grad_logdensity` using GPU-compatible operations.
-2. Pass for example, `backend = ADTypes.AutoEnzyme()` to `ParallelMALASampler`.
-3. Pass a `CuVector` as `initial_params` to `sample`.
-
-GPU execution has its own caveats (`AutoEnzyme()` currently needs the `pmcmc_matmul` / `pmcmc_dot` / `pmcmc_dotsum` wrappers, gradients should avoid scalar indexing).  See [GPU Execution](15-gpu.md) for the worked example and the full set of limitations.
-
----
-
-## LogDensityProblems models
-
-With `LogDensityProblems` loaded, `DensityModel` accepts any object that implements the [LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface with gradients:
-
-```julia
-using LogDensityProblems, ParallelMCMC, FlexiChains
-
-# μ ~ Normal(0, 1), y ~ Normal(μ, 0.5)
-struct NormalPosterior
-    y::Float64
-end
-LogDensityProblems.capabilities(::Type{NormalPosterior}) =
-    LogDensityProblems.LogDensityOrder{1}()
-LogDensityProblems.dimension(::NormalPosterior) = 1
-LogDensityProblems.logdensity(ld::NormalPosterior, x) = -0.5 * x[1]^2 - 2 * (ld.y - x[1])^2
-function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
-    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
-end
-
-model = DensityModel(NormalPosterior(1.5); param_names=[:μ])
-chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
-               chain_type=VNChain, discard_warmup=true)
+```@example gs
+rhat(chains)
 ```
 
-The object must implement `capabilities` (at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`. `hvp` and the batched slots are forwarded to `DensityModel`.
-
-A backend in `hvp` differentiates `logdensity_and_gradient`, so that function must be differentiable by the backend. If it is not (for example, it calls AD internally), pass an explicit `SecondOrder`, which differentiates `logdensity` twice instead. `AutoReactant()` is not supported for these models.
-
----
-
-## Parallel chains
-
-All samplers support `MCMCThreads()`.  Start Julia with multiple threads (e.g. `julia -t 4`):
-
-```julia
-chain = sample(model, ParallelMALASampler(0.1; T=64, backend=AutoEnzyme()),
-               MCMCThreads(), 500, 4;
-               chain_type=VNChain)
-```
-
-`FlexiChains` computes R-hat and ESS across chains automatically:
-
-```julia
-ess(chain)
-```
-
-To calculate intra-chain metrics, you can pass `dims=:iter` [as described in the FlexiChains docs](https://pysm.dev/FlexiChains.jl/stable/summarising/#Individual-statistics):
-
-```julia
-ess(chain; dims=:iter)
-```
-
----
-
-## [Specifying parameter names](@id parameter-names)
-
-For manually constructed `DensityModel`s, you can optionally specify parameter names with the `param_names` keyword.
-The resulting `FlexiChain` object will then have named entries for each parameter.
-
-If you do not specify `param_names`, the chain will store a single vector-valued parameter called `x` of length `D`.
-
-You can specify parameter names as a collection of either:
-
-- `Symbol`s (e.g. `[:x1, :x2]`);
-- `VarName`s (e.g. `[@vn(x[1]), @vn(x[2])]`) if `chain_type=VNChain`; or
-- A tuple of the above, *plus* a size. In this case, a total of `prod(size)` entries will be allocated to the named parameter, and the results in the chain will be reshaped to that size.
-
-The above can be mixed and matched as desired, as long as the total number of parameters matches the dimension of the model.
-For example:
-
-```julia
-# Three scalar parameters, called `x1` through `x3`
-model = DensityModel(...; param_names=[:x1, :x2, :x3])
-
-# One scalar parameter called `x`, and a 1x2 matrix parameter called `y`
-model = DensityModel(...; param_names=[:x, (:y, (1, 2))])
-```
-
----
-
-## Sequential MALA baselines
-
-[`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) are standard sequential MALA implementations.  They are useful for:
-
-- Verifying that a model and step size are set up correctly before running DEER
-- Obtaining a reference chain to compare against
-- Step-size exploration (run `AdaptiveMALASampler` first, read off the frozen `ε̄`, pass it to `ParallelMALASampler`)
-
-```julia
-# Step 1: find a good step size with adaptive MALA
-baseline = sample(model, AdaptiveMALASampler(0.1; n_warmup=500), 600;
-                  chain_type=VNChain, discard_warmup=true)
-
-# Read off the frozen step size from the last internal value
-eps_tuned = baseline[end, :step_size, 1]
-
-# Step 2: run DEER with the tuned step size
-chain = sample(model, ParallelMALASampler(eps_tuned; T=64, backend=AutoEnzyme()), 2_000;
-               chain_type=VNChain)
-```
-
-See the [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) reference pages for the full keyword listing.
+`initial_params` now holds one starting point per chain.
+Each chain runs on its own thread and still solves blocks of `T` transitions with DEER.

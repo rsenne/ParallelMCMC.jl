@@ -10,112 +10,80 @@ CurrentModule = ParallelMCMC
 </p>
 ```
 
-**ParallelMCMC.jl** is a Julia package for **parallel-across-the-sequence** MCMC — algorithms that solve an entire trajectory of $T$ correlated steps *simultaneously* rather than one at a time.
+ParallelMCMC.jl parallelizes Markov chain Monte Carlo (MCMC) *within* a single chain.
+Its main sampler, [`ParallelMALASampler`](@ref), draws the random numbers for a block of MALA transitions in advance.
+It then solves for all states in the block at once with DEER, a Newton method whose linear solves are parallel scans.
+Running several chains at once also works, but it is experimental (see [Run several chains](10-getting-started.md#Run-several-chains)).
+
+Parallel MALA does more total work than sequential MALA, so it finishes sooner only when the hardware can run that work in parallel.
+In practice that means a GPU.
+On the CPU, the DEER solve runs on a single thread, so expect speedups there only if a batched log density hands most of the work to multithreaded BLAS.
+The speedup depends on the target, the block length `T`, the AD backend, and the hardware.
 
 ```@raw html
 <p align="center">
   <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
 </p>
-
 <p align="center">
   <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
 </p>
 ```
 
-The flagship algorithm is **DEER** (Deterministic Equivalent-Expectation Recursion), which reformulates a chain of $T$ MALA steps as a fixed-point problem and solves it via Newton iterations, each costing $O(\log T)$ parallel work via an associative prefix scan.  The result is that wall-clock time per sample is *sublinear* in chain length on multi-core CPUs and GPUs.
+## Which sampler to use
 
-The algorithm is described in:
-
-> Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025).
-> **Parallelizing MCMC Across the Sequence Length.**
-> *NeurIPS 2025.* [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
-
-The included [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref) are sequential MALA baselines — useful for correctness checks and step-size tuning, but not the primary focus of the package.
-
-## Samplers
-
-| Sampler | Role |
+| If you want to... | Start with... |
 |---|---|
-| [`ParallelMALASampler`](@ref) | **Primary** — parallel-across-sequence MALA via DEER; O(log T) per solve |
-| [`MALASampler`](@ref) | Baseline — sequential MALA with a fixed step size |
-| [`AdaptiveMALASampler`](@ref) | Baseline — sequential MALA with dual-averaging step-size adaptation |
+| Try the parallel-across-sequence algorithm | [`ParallelMALASampler`](@ref) |
+| Tune a step size automatically | [`AdaptiveMALASampler`](@ref) |
+| Check a model against ordinary sequential MALA | [`MALASampler`](@ref) |
+| Run a large, batch-friendly target on a GPU | [GPU execution](15-gpu.md) |
 
-All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects.
+## Install
 
-## Installation
-
-To install the package into your current environment:
+ParallelMCMC supports Julia 1.10 and later.
 
 ```julia-repl
 pkg> add ParallelMCMC
 ```
 
-## Quick start
+ParallelMCMC does not depend on any AD or GPU package, so you load the ones your model needs.
+The example below writes its derivatives by hand and needs only ParallelMCMC.
 
-### Define a model
+## A complete first run
 
-The simplest entry point is [`DensityModel`](@ref), which wraps a log-density and its gradient:
+The target is a two-dimensional standard normal, $\log p(x) = -\tfrac{1}{2}\|x\|^2$.
+Its gradient is $-x$ and its Hessian-vector product is $-v$.
 
-```julia
-using ParallelMCMC, FlexiChains
-using ADTypes, Enzyme
+```@example index
+using ParallelMCMC, Random
 
-# Example: 2-D standard normal
-logp(x)      = -0.5 * sum(abs2, x)
-grad_logp(x) = -x
+logdensity(x) = -sum(abs2, x) / 2
+gradient(x) = -x
+hvp(x, v) = -v
 
-model = DensityModel(logp, grad_logp, 2;
-                     param_names=[:x1, :x2])
+model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
+sampler = ParallelMALASampler(0.1; T=64)
+chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
 
-### DEER — parallel-across-sequence (primary algorithm)
+`T=64` makes DEER solve 64 transitions at a time.
+It does not change the length of the chain: `sample` still returns 1,000 samples.
 
-```julia
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
-                              backend=AutoEnzyme())
+## Where to go next
 
-chain = sample(model, sampler, 500;
-               chain_type=VNChain)
-```
+- [Getting started](10-getting-started.md) walks through step-size tuning, running parallel MALA, and reading the result.
+- [Defining models](12-models.md) covers hand-written derivatives, automatic differentiation, batched functions, parameter names, and LogDensityProblems models.
+- [GPU execution](15-gpu.md) explains when a GPU is worthwhile and shows a complete logistic-regression example.
+- [Troubleshooting](16-troubleshooting.md) covers common errors and failure modes.
+- [How the algorithm works](20-algorithms.md) develops the DEER update and the diagonal parallel scan.
+- [API reference](95-reference.md) lists constructors and low-level building blocks.
 
-Each call to `sample` draws 500 samples by solving DEER trajectories of length `T=64` in parallel, re-solving from the last state when each trajectory is exhausted.
+## Citation
 
-`sample` returns a `VNChain`, a `FlexiChain` keyed by `VarName`, so the `chain_type=VNChain` above is the default and can be left out.
-`SymChain` (keyed by `Symbol`) and `Any` (the raw transition vector) are still accepted but not recommended.
-See [the FlexiChains.jl docs](https://pysm.dev/FlexiChains.jl/) for more information about how to analyze and visualize chains.
+The parallel-across-sequence method is described in:
 
-### Sequential MALA baseline
+> Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W.
+> (2025). *Parallelizing MCMC Across the Sequence Length*. NeurIPS 2025.
+> [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
 
-```julia
-sampler = AdaptiveMALASampler(0.1; n_warmup=500)
-
-chain = sample(model, sampler, 2_000;
-               chain_type=VNChain,
-               discard_warmup=true,
-               progress=true)
-```
-
-See [Getting Started](10-getting-started.md) for worked examples and guidance on choosing samplers, and [Algorithm Details](20-algorithms.md) for the mathematics behind DEER.
-
-## Contributors
-
-```@raw html
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/rsenne"><img src="https://avatars.githubusercontent.com/u/50930199?v=4?s=100" width="100px;" alt="Ryan Senne"/><br /><sub><b>Ryan Senne</b></sub></a><br /><a href="#code-rsenne" title="Code">💻</a> <a href="#maintenance-rsenne" title="Maintenance">🚧</a> <a href="#test-rsenne" title="Tests">⚠️</a> <a href="#ideas-rsenne" title="Ideas, Planning, & Feedback">🤔</a> <a href="#review-rsenne" title="Reviewed Pull Requests">👀</a> <a href="#doc-rsenne" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/penelopeysm"><img src="https://avatars.githubusercontent.com/u/122629585?v=4?s=100" width="100px;" alt="Penelope Yong"/><br /><sub><b>Penelope Yong</b></sub></a><br /><a href="#code-penelopeysm" title="Code">💻</a> <a href="#test-penelopeysm" title="Tests">⚠️</a> <a href="#ideas-penelopeysm" title="Ideas, Planning, & Feedback">🤔</a> <a href="#review-penelopeysm" title="Reviewed Pull Requests">👀</a> <a href="#doc-penelopeysm" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://gdalle.github.io/"><img src="https://avatars.githubusercontent.com/u/22795598?v=4?s=100" width="100px;" alt="Guillaume Dalle"/><br /><sub><b>Guillaume Dalle</b></sub></a><br /><a href="#review-gdalle" title="Reviewed Pull Requests">👀</a> <a href="#ideas-gdalle" title="Ideas, Planning, & Feedback">🤔</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://wsmoses.com"><img src="https://avatars.githubusercontent.com/u/1260124?v=4?s=100" width="100px;" alt="William Moses"/><br /><sub><b>William Moses</b></sub></a><br /><a href="#review-wsmoses" title="Reviewed Pull Requests">👀</a></td>
-    </tr>
-  </tbody>
-</table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-```
+If you use ParallelMCMC.jl in published work, please use the package citation in [`CITATION.cff`](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CITATION.cff).

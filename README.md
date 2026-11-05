@@ -23,52 +23,50 @@
 
 ## What this package does
 
-**ParallelMCMC.jl** implements *parallel-across-the-sequence* MCMC in Julia: instead of generating samples one at a time, an entire trajectory of $T$ correlated steps is solved *simultaneously*. This makes wall-clock time per sample sublinear in chain length on multi-core CPUs and GPUs, where conventional sequential MCMC scales linearly.
+ParallelMCMC.jl parallelizes Markov chain Monte Carlo *within* a single chain.
+Its main sampler draws the random numbers for a block of MALA transitions in advance, then solves for every state in the block at once with DEER.
+This pays off when evaluating the target and its derivatives is expensive enough to keep parallel hardware busy.
+For small targets on a CPU, ordinary sequential MALA is usually faster.
 
-The flagship algorithm is **DEER** (Lim et al. 2024; Gonzalez et al. 2024), which reformulates a chain of $T$ MALA steps as a fixed-point problem and solves it with Newton iterations. Each iteration linearizes the per-step transition around the current trajectory guess and resolves the resulting linear recursion in $O(\log T)$ parallel work via an associative prefix scan. With shared input randomness, DEER converges to the exact sequential MALA trace up to a numerical tolerance — typically in tens of iterations even for chains of tens of thousands of samples.
-
-The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, damping, sliding windows) are described in:
+The method is described in:
 
 > Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025).
 > **Parallelizing MCMC Across the Sequence Length.** *NeurIPS 2025.*
 > [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
 
-### Samplers
+## Samplers
 
 | Sampler | Role |
 |---|---|
-| [`ParallelMALASampler`](src/samplers/parallel_mala.jl) | **Primary** — parallel-across-sequence MALA via DEER; $O(\log T)$ per solve |
-| [`MALASampler`](src/samplers/mala.jl) | Baseline — sequential MALA with a fixed step size |
-| [`AdaptiveMALASampler`](src/samplers/adaptive_mala.jl) | Baseline — sequential MALA with dual-averaging step-size adaptation |
+| [`ParallelMALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.ParallelMALASampler) | MALA parallelized within the chain with DEER |
+| [`AdaptiveMALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.AdaptiveMALASampler) | Sequential MALA with step-size adaptation |
+| [`MALASampler`](https://rsenne.github.io/ParallelMCMC.jl/dev/95-reference/#ParallelMCMC.MALASampler) | Sequential MALA with a fixed step size |
 
-All samplers implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [`FlexiChains`](https://pysm.dev/FlexiChains.jl) objects, so they slot into existing AbstractMCMC workflows.
+All three implement the [AbstractMCMC](https://github.com/TuringLang/AbstractMCMC.jl) interface and return [FlexiChains](https://pysm.dev/FlexiChains.jl) objects.
 
+## Quick start
 
-### Quick start
-
-ParallelMCMC can be installed via Julia's package manager. In the Julia REPL, press `]` to enter pkg mode, then run:
+Install ParallelMCMC from the Julia REPL by pressing `]` and running:
 
 ```julia-repl
 pkg> add ParallelMCMC
 ```
 
 ```julia
-using ParallelMCMC, FlexiChains
-using ADTypes, Enzyme
+using ParallelMCMC, Random
 
-logp(x)      = -0.5 * sum(abs2, x)            # 2-D standard normal
-grad_logp(x) = -x
+logdensity(x) = -sum(abs2, x) / 2
+gradient(x) = -x
+hvp(x, v) = -v
 
-model   = DensityModel(logp, grad_logp, 2; param_names=[:x1, :x2])
-sampler = ParallelMALASampler(0.1; T=64, jacobian=:stoch_diag,
-                              backend=AutoEnzyme())
-
-chain = sample(model, sampler, 500; chain_type=VNChain)
+model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
+sampler = ParallelMALASampler(0.1; T=64)
+chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
 
-See the [Getting Started guide](docs/src/10-getting-started.md) for worked examples, GPU usage, and step-size tuning.
+The [documentation](https://rsenne.github.io/ParallelMCMC.jl/dev/) covers step-size tuning, AD backends, GPU execution, and how DEER works.
 
-## How to Cite
+## How to cite
 
 If you use ParallelMCMC.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/rsenne/ParallelMCMC.jl/blob/main/CITATION.cff).
 
