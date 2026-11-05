@@ -14,11 +14,11 @@
 [![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
 
 <p align="center">
-  <img src="docs/src/assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
+  <img src="docs/src/assets/deer_iterations.gif" alt="DEER iterations converging to a sequential MALA chain on a three-mode posterior shaped like the Julia logo" width="100%">
 </p>
 
 <p align="center">
-  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+  <em>DEER on a 2 000-step MALA chain targeting a mixture of three Gaussians placed like the Julia logo. The grey sequential chain and the blue parallel iterate share the same random numbers, and the bottom panel shows the distance between them at every step.</em>
 </p>
 
 ## What this package does
@@ -32,6 +32,22 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 > Zoltowski, D. M., Wu, S., Gonzalez, X., Kozachkov, L., & Linderman, S. W. (2025).
 > **Parallelizing MCMC Across the Sequence Length.** *NeurIPS 2025.*
 > [arXiv:2508.18413](https://arxiv.org/abs/2508.18413)
+
+### Example: German Credit
+
+We repeat the Bayesian logistic regression of Zoltowski et al. (2025, Section 5.2) on the German Credit data, with whitened covariates, an intercept, and a $\mathcal{N}(0, I)$ prior, so the posterior has 25 dimensions.
+Each method draws one chain of $L$ samples with step size $\varepsilon = 0.0015$, which accepts about 85% of proposals.
+`ParallelMALASampler` solves the whole chain as one block and reproduces the sequential chain to within its tolerance of $5 \times 10^{-4}$.
+
+<p align="center">
+  <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
+</p>
+
+At $L = 64\,000$ the parallel sampler is 9 times faster than sequential MALA on the CPU and 140 times faster than sequential MALA on the GPU.
+These timings come from one RTX 5090 and a 12-thread CPU under Windows, where sequential CPU MALA runs slower than under Linux.
+Sequential MALA on a GPU pays for kernel launches at every step, so it trails the CPU at this size.
+The paper compiles its sequential baseline with JAX, which narrows that gap, and reports parallel speedups of 20 to 30 times.
+The script is [`benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl).
 
 ### Samplers
 

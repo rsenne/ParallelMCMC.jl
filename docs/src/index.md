@@ -14,11 +14,11 @@ CurrentModule = ParallelMCMC
 
 ```@raw html
 <p align="center">
-  <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
+  <img src="assets/deer_iterations.gif" alt="DEER iterations converging to a sequential MALA chain on a three-mode posterior shaped like the Julia logo" width="100%">
 </p>
 
 <p align="center">
-  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+  <em>DEER on a 2 000-step MALA chain targeting a mixture of three Gaussians placed like the Julia logo. The grey sequential chain and the blue parallel iterate share the same random numbers, and the bottom panel shows the distance between them at every step.</em>
 </p>
 ```
 
