@@ -89,6 +89,8 @@ Both maxima of the convergence test in one pass. Array packages can override it
 with a single reduction kernel.
 """
 function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
+    size(S_new) == size(S) ||
+        throw(DimensionMismatch("S_new and S must have the same size"))
     return mapreduce(
         (a, b) -> (abs(a - b), abs(a)),
         (x, y) -> (max(x[1], y[1]), max(x[2], y[2])),

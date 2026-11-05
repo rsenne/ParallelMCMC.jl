@@ -21,6 +21,7 @@ end
     S_new[2, 2] = NaN
     Δ, m = ParallelMCMC.DEER._max_abs_change(S_new, S)
     @test isnan(Δ) && isnan(m)
+    @test_throws DimensionMismatch ParallelMCMC.DEER._max_abs_change(S_new, S[:, 1:1])
 end
 
 isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array.jl"))
@@ -212,6 +213,30 @@ end
             S_new[4, 321] = FT(NaN)
             Δ, m = DEER._max_abs_change(CUDA.CuArray(S_new), CUDA.CuArray(S))
             @test isnan(Δ) && isnan(m)
+            @test_throws DimensionMismatch DEER._max_abs_change(
+                CUDA.CuArray(S_new), CUDA.CuArray(S[:, 1:10])
+            )
+        end
+
+        @testset "scan checks sizes even with check_shapes=false" begin
+            A = CUDA.rand(Float32, 4, 50)
+            ws = DEER.DEERScan.AffineScanWorkspace(A)
+            @test_throws DimensionMismatch DEER.DEERScan.solve_affine_scan_diag!(
+                similar(A),
+                A,
+                CUDA.rand(Float32, 4, 49),
+                CUDA.rand(Float32, 4),
+                ws;
+                check_shapes=false,
+            )
+            @test_throws DimensionMismatch DEER.DEERScan.solve_affine_scan_diag!(
+                similar(A),
+                A,
+                CUDA.rand(Float32, 4, 50),
+                CUDA.rand(Float32, 3),
+                ws;
+                check_shapes=false,
+            )
         end
 
         @testset "probes are drawn on the device" begin

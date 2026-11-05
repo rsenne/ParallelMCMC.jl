@@ -74,7 +74,10 @@ function DEERScan.solve_affine_scan_diag!(
     check_shapes::Bool=true,
 ) where {T}
     D, Tn = size(A)
-    check_shapes && DEERScan._check_scan_shapes(S, A, B, s0, ws)
+    #= The kernels index with `@inbounds`, so the sizes are checked even when
+    `check_shapes=false`; with mismatched sizes they would read and write out of
+    bounds instead of throwing. =#
+    DEERScan._check_scan_shapes(S, A, B, s0, ws)
     (Tn == 0 || D == 0) && return S
     #= C ≈ √T balances the sequential work in the carry kernel (K steps) against
     that in the other two (C steps each). =#
@@ -130,6 +133,9 @@ end
 function DEER._max_abs_change(
     S_new::CuArray{T}, S::CuArray{T}
 ) where {T<:Union{Float32,Float64}}
+    # The kernel reads `S[i]` with `@inbounds` for every index of `S_new`.
+    size(S_new) == size(S) ||
+        throw(DimensionMismatch("S_new and S must have the same size"))
     out = CUDA.zeros(_bits(T), 2)
     threads = 256
     blocks = min(cld(length(S_new), threads), 1024)
