@@ -15,8 +15,6 @@ end
 
 DEER-parallelized MALA sampler.
 
-As with `MALASampler`, the first sample is the initial point (`initial_params`
-if given); the DEER blocks supply the transitions after it.
 
 Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
 estimator) and `:diag` (exact diagonal via `D` JVPs).
@@ -366,11 +364,6 @@ function _kept_columns(sched::ParallelMALASchedule, offset::Int, ncols::Int)
     return first_col:(sched.thinning):ncols, k0 + 1
 end
 
-#= Global step 1 is the initial point, as in `MALASampler`; DEER blocks supply the
-rest until `sched.Ntotal` steps are consumed. Kept columns go to
-`sink!(S, logps, cols, first_row)`. Uses full-length blocks (`T`) to match the
-fallback's RNG stream. Returns the last block (`nothing` if none ran; its `S`
-aliases the workspace) and the initial point. =#
 function _parallel_mala_run!(
     sink!,
     rng::Random.AbstractRNG,
