@@ -15,6 +15,7 @@ end
 
 DEER-parallelized MALA sampler.
 
+
 Supported Jacobian modes are `:stoch_diag` (the default Hutchinson diagonal
 estimator) and `:diag` (exact diagonal via `D` JVPs).
 
@@ -363,9 +364,6 @@ function _kept_columns(sched::ParallelMALASchedule, offset::Int, ncols::Int)
     return first_col:(sched.thinning):ncols, k0 + 1
 end
 
-#= Runs DEER blocks until `sched.Ntotal` steps are consumed, passing kept columns
-to `sink!(S, logps, cols, first_row)`. Uses full-length blocks (`T`) to match the
-fallback's RNG stream. Returns the last block; `S` aliases the workspace. =#
 function _parallel_mala_run!(
     sink!,
     rng::Random.AbstractRNG,
@@ -379,8 +377,8 @@ function _parallel_mala_run!(
     progress = _parallel_mala_progress(progress, progressname)
     x0 = _parallel_mala_initial_x(rng, model, sampler, initial_params)
     prepped = _prepare_model(model, x0, sampler.T, sampler.backend)
+    start = (x=x0, logp=prepped.logdensity(x0), model=prepped)
     ws = nothing
-    nsteps = 0
     Ntotal = sched.Ntotal
     next_update = Ntotal / AbstractMCMC.get_n_updates(progress)
     threshold = next_update
@@ -391,6 +389,8 @@ function _parallel_mala_run!(
     AbstractMCMC.@maybewithricherlogger begin
         AbstractMCMC.init_progress!(progress)
         try
+            sink!(reshape(x0, :, 1), [start.logp], _kept_columns(sched, 0, 1)...)
+            nsteps = 1
             while nsteps < Ntotal
                 S, tape, ws, converged = _deer_solve_new_tape(
                     rng, prepped, sampler, x0; workspace=ws, warn=false
@@ -423,7 +423,7 @@ function _parallel_mala_run!(
             "are not exact MALA draws. Raise `maxiter`, or set `jacobian_damping` " *
             "or `jacobian_clip` to stabilise the solve."
     end
-    return last
+    return last, start
 end
 
 function _copy_trajectory_rows!(
@@ -456,6 +456,7 @@ function _sample_parallel_mala_chain(
     _parallel_mala_run!(
         rng, model, sampler, sched; initial_params, progress, progressname
     ) do S, logps, cols, first_row
+        isempty(cols) && return nothing
         _copy_trajectory_rows!(vals, first_row, S, cols)
         logp[first_row:(first_row + length(cols) - 1)] .= view(logps, cols)
         return nothing
@@ -483,7 +484,7 @@ function _sample_parallel_mala_blocks(
     sizehint!(logp_blocks, nblocks)
     sizehint!(ends, nblocks)
 
-    last = _parallel_mala_run!(
+    last, start = _parallel_mala_run!(
         rng, model, sampler, sched; initial_params, progress, progressname
     ) do S, logps, cols, first_row
         isempty(cols) && return nothing
@@ -493,6 +494,8 @@ function _sample_parallel_mala_blocks(
         return nothing
     end
 
+    last === nothing && return ParallelMALABlockSamples(blocks, logp_blocks, ends, N),
+    _parallel_mala_start_state(start.x, start.logp, start.model, sampler)
     S = copy(last.S)
     final_state = ParallelMALAState(
         S[:, last.t],
@@ -618,14 +621,26 @@ function AbstractMCMC.step(
         randn(rng, FP, model.dim)
     end
     model = _prepare_model(model, x0, sampler.T, sampler.backend)
+    logp0 = model.logdensity(x0)
+    return ParallelMALATransition(x0, logp0),
+    _parallel_mala_start_state(x0, logp0, model, sampler)
+end
 
-    S, tape, ws, _ = _deer_solve_new_tape(rng, model, sampler, x0)
-    logps = _trajectory_logps(model, S)
-    x1 = S[:, 1]
-    logp1 = logps[1]
-    trans = ParallelMALATransition(x1, logp1)
-    state = ParallelMALAState(x1, logp1, S, logps, ws, tape, 1, model)
-    return trans, state
+#= The state at the initial point, before any DEER block. Its trajectory is empty
+and `t = T`, so the next step solves a block starting from `x`. =#
+function _parallel_mala_start_state(
+    x::AbstractVector, logp, model::PreppedDensityModel, sampler::ParallelMALASampler{FP}
+) where {FP}
+    return ParallelMALAState(
+        x,
+        logp,
+        similar(x, FP, length(x), 0),
+        FP[],
+        nothing,
+        MALATapeElement{FP,Vector{FP}}[],
+        sampler.T,
+        model,
+    )
 end
 
 function AbstractMCMC.step(
@@ -663,7 +678,8 @@ function AbstractMCMC.step(
         )
         return trans, new_state
     else
-        x0 = reuse ? state.trajectory[:, T] : copy(state.x)
+        # `state.x` is the last state of the previous block, or the initial point.
+        x0 = copy(state.x)
         S_new, tape, ws, _ = _deer_solve_new_tape(
             rng, model, sampler, x0; workspace=state.workspace
         )

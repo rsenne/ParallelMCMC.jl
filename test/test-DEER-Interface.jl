@@ -7,6 +7,8 @@ using FlexiChains
 using ParallelMCMC
 using ADTypes
 using Enzyme
+isdefined(@__MODULE__, :TestUtils) || include("utils.jl")
+using .TestUtils
 
 const _AD = ADTypes.AutoEnzyme()
 
@@ -46,16 +48,23 @@ end
 
     trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
 
+    # The initial step returns the initial point, as `MALASampler` does (#85).
     @test trans isa ParallelMALATransition
     @test state isa ParallelMALAState
     @test length(trans.x) == 3
-    @test isfinite(trans.logp)
+    @test trans.x == state.x
     @test trans.logp ≈ logp_deer(trans.x)
-    @test state.t == 1
-    @test size(state.trajectory) == (3, 16)
-    @test length(state.logps) == 16
-    @test state.workspace isa ParallelMCMC.DEER.DEERWorkspace
-    @test length(state.tape) == 16
+    @test state.t == 16
+    @test size(state.trajectory, 2) == 0
+
+    # The next step solves the first block.
+    trans1, state1 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
+    @test trans1.logp ≈ logp_deer(trans1.x)
+    @test state1.t == 1
+    @test size(state1.trajectory) == (3, 16)
+    @test length(state1.logps) == 16
+    @test state1.workspace isa ParallelMCMC.DEER.DEERWorkspace
+    @test length(state1.tape) == 16
 end
 
 @testset "ParallelMALASampler initial step respects initial_params" begin
@@ -69,9 +78,26 @@ end
 
     # initial_params not mutated
     @test x0 == x0_copy
-    # first sample should differ from x0 (DEER solves the trajectory)
-    @test length(trans.x) == 3
-    @test isfinite(trans.logp)
+    @test trans.x == x0
+    @test trans.logp ≈ logp_deer(x0)
+end
+
+@testset "ParallelMALASampler and MALASampler both start at initial_params" begin
+    model = DensityModel(logp_deer, gradlogp_deer, 2; hvp=(x, v) -> -v)
+    x0 = [0.5, -1.0]
+    function run(sampler)
+        return sample(
+            MersenneTwister(1),
+            model,
+            sampler,
+            10;
+            chain_type=Any,
+            progress=false,
+            initial_params=x0,
+        )
+    end
+    @test run(MALASampler(0.1))[1].x == x0
+    @test run(ParallelMALASampler(0.1; T=8))[1].x == x0
 end
 
 @testset "scalar DEER path can AD the logdensity HVP with Enzyme when hvp is omitted" begin
@@ -135,7 +161,7 @@ end
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
 
-    trans, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
+    trans, state = step_into_first_block(rng, model, sampler)
     @test state.t == 1
 
     trans2, state2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
@@ -170,7 +196,7 @@ end
     )
     sampler = ParallelMALASampler(0.05; T=8, backend=_AD)
 
-    _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler; initial_params=zeros(2))
+    _, state = step_into_first_block(rng, model, sampler; initial_params=zeros(2))
     @test batch_calls[] ≥ 1
 
     scalar_after_solve = scalar_calls[]
@@ -189,7 +215,7 @@ end
     T = 4
     sampler = ParallelMALASampler(0.05; T=T, backend=_AD)
 
-    _, state = ParallelMCMC.AbstractMCMC.step(rng, model, sampler)
+    _, state = step_into_first_block(rng, model, sampler)
 
     # advance to t == T
     for _ in 1:(T - 1)
@@ -339,16 +365,16 @@ end
     model = DensityModel(logp_deer, gradlogp_deer, 2)
     sampler = ParallelMALASampler(0.05; T=16, backend=_AD)
     rng = MersenneTwister(5)
-    N = 20  # the last block is consumed through column 4 of 16
+    N = 20  # sample 1 is the initial point; the last block ends at column 3 of 16
     samples, state = ParallelMCMC._sample_parallel_mala_blocks(
         rng, model, sampler, N, ParallelMCMC.ParallelMALASchedule(N); progress=false
     )
-    @test state.t == 4
+    @test state.t == 3
     @test size(state.trajectory, 2) == 16
     @test state.x == samples[N].x
     trans, state2 = ParallelMCMC.AbstractMCMC.step(rng, model, sampler, state)
-    @test trans.x == state.trajectory[:, 5]
-    @test state2.t == 5
+    @test trans.x == state.trajectory[:, 4]
+    @test state2.t == 4
 end
 
 @testset "ParallelMALASampler sample() with custom param_names" begin

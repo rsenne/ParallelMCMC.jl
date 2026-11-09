@@ -7,9 +7,21 @@ package itself never calls them. Include with
 =#
 module TestUtils
 
-using ParallelMCMC: MALA
+using ParallelMCMC: MALA, AbstractMCMC
 
 export run_mala_sequential_taped, mala_accept_indicator, mala_step_full
+export step_into_first_block
+
+"""
+    step_into_first_block(rng, model, sampler; kwargs...) -> (transition, state)
+
+The initial step of a `ParallelMALASampler` returns the initial point and solves
+nothing; the step after it solves the first DEER block. Returns that second step.
+"""
+function step_into_first_block(rng, model, sampler; kwargs...)
+    _, state = AbstractMCMC.step(rng, model, sampler; kwargs...)
+    return AbstractMCMC.step(rng, model, sampler, state)
+end
 
 """
 Run sequential taped MALA for T steps.
