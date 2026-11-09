@@ -256,14 +256,8 @@ for L in L_VALS
             gap
         )
     end
-    #= `MALASampler` returns the initial point as its first draw and
-    `ParallelMALASampler` starts at the first transition, hence the shift. =#
     S_deer = draws(run_chain(gpu_batch_model, deer(L), L, x0_gpu))
-    @printf(
-        "L = %6d  max |DEER - sequential| = %.1e\n",
-        L,
-        maximum(abs.(S_deer[:, 1:(end - 1)] .- S_seq[:, 2:end]))
-    )
+    @printf("L = %6d  max |DEER - sequential| = %.1e\n", L, maximum(abs.(S_deer .- S_seq)))
     println()
 end
 

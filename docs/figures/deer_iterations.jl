@@ -87,7 +87,7 @@ function deer_iterates(rec, x0; maxiter=1_000, atol=1e-8)
     ws = DEER.DEERWorkspace(x0, T)
     iterates = [copy(S)]
     for _ in 1:maxiter
-        DEER.deer_update!(ws, S_new, rec, x0, S; jacobian=:diag, jacobian_clip=1)
+        DEER.deer_update!(ws, S_new, rec, x0, S; jacobian=:diag)
         push!(iterates, copy(S_new))
         maximum(abs, S_new .- S) <= atol && break
         S, S_new = S_new, S
