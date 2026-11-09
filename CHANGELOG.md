@@ -62,9 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size, mass matrix or Jacobian options change. Before, each iteration made six
   separate model calls. On a German Credit-sized logistic regression
   (N = 1000, D = 25, T = 64 000) on GPU, a block solve's median time drops from
-  about 860 ms to about 200 ms. The probes now come from Reactant's random
+  about 270 ms to about 140 ms. The probes now come from Reactant's random
   number generator, so these chains differ from earlier releases after the
   first block (#86).
+- `DEER.TapedRecursion`'s last type parameter is now the tape's type instead of
+  its element type, so methods that dispatch on that parameter need updating
+  (#86).
 - `ParallelMALASampler` now returns the initial point as its first sample, as
   `MALASampler` and `AdaptiveMALASampler` do. Before, it started at the first
   transition, so its chain was the sequential chain shifted by one step (#85).

@@ -253,7 +253,7 @@ end
 
 struct DEERIteration{V,E,C,K}
     evaluator::V
-    ε::E
+    epsilon::E
     cholM::C
     T::Int
     probes::Int
@@ -281,20 +281,25 @@ function _host_cholesky(C::LinearAlgebra.Cholesky)
     return LinearAlgebra.Cholesky(Array(C.factors), C.uplo, C.info)
 end
 
-# Whether two iterations compile to the same executable; `cholM` compares by value.
-function _same_iteration(a::DEERIteration, b::DEERIteration)
-    a.evaluator === b.evaluator || return false
-    fields(it) = (it.ε, it.T, it.probes, it.jacobian_damping, it.jacobian_clip, it.damping)
-    isequal(fields(a), fields(b)) || return false
-    (a.cholM === nothing || b.cholM === nothing) && return a.cholM === b.cholM
-    return a.cholM.uplo == b.cholM.uplo && a.cholM.factors == b.cholM.factors
+# The fields a DEERIteration compiles in, read from it or from a sampler.
+function _settings(x)
+    return (x.epsilon, x.T, x.probes, x.jacobian_damping, x.jacobian_clip, x.damping)
+end
+
+#= A rebuilt sampler may carry an equal `cholM` in a new object; compare it by value then.
+Only the triangle `uplo` names is set: `cholesky` leaves the other one uninitialized. =#
+function _same_cholM(compiled, cholM)
+    (compiled === nothing || cholM === nothing) && return compiled === cholM
+    return compiled.U == _host_cholesky(cholM).U
 end
 
 # Returns `S_new` and `[Δ_max, S_max]`, one download for the convergence test.
 function (it::DEERIteration)(S, s0, Xi, U, seed)
     probe_rng = Reactant.ReactantRNG(seed)
     ws = DEER.DEERWorkspace(S, s0; probe_rng=probe_rng)
-    step = ParallelMCMC._mala_batched_fwd_and_jvp(S, it.evaluator, it.ε, Xi, U, it.cholM)
+    step = ParallelMCMC._mala_batched_fwd_and_jvp(
+        S, it.evaluator, it.epsilon, Xi, U, it.cholM
+    )
     rec = DEER.TapedRecursion(nothing, nothing, Base.OneTo(it.T); fwd_and_jvp_batch=step)
     S_new = similar(S)
     DEER.deer_update!(
@@ -315,8 +320,9 @@ function (it::DEERIteration)(S, s0, Xi, U, seed)
     return S_new, maxima, probe_rng.seed
 end
 
-struct ReactantDEERSolver{I,C,S,X}
+struct ReactantDEERSolver{I,M,C,S,X}
     iteration::I
+    cholM::M
     compiled::C
     stages::S
     template::X
@@ -330,14 +336,16 @@ function ParallelMCMC._mala_deer_workspace(
     sampler.jacobian === :stoch_diag ||
         return ParallelMCMC._mala_deer_workspace(nothing, model, sampler, x0, old)
     FP = typeof(sampler.epsilon)
-    iteration = DEERIteration(evaluator, sampler)
     template = similar(x0, FP, 0, 0)
     if old isa ReactantDEERSolver &&
-        _same_iteration(old.iteration, iteration) &&
+        old.iteration.evaluator === evaluator &&
+        isequal(_settings(old.iteration), _settings(sampler)) &&
         old.D == length(x0) &&
-        typeof(old.template) == typeof(template)
+        typeof(old.template) == typeof(template) &&
+        (old.cholM === sampler.cholM || _same_cholM(old.iteration.cholM, sampler.cholM))
         return old
     end
+    iteration = DEERIteration(evaluator, sampler)
 
     D, T = length(x0), sampler.T
     S0 = similar(x0, FP, D, T)
@@ -354,7 +362,7 @@ function ParallelMCMC._mala_deer_workspace(
         _free!(seed)
     end
     return ReactantDEERSolver(
-        iteration, compiled, stages, template, D, _reactant_client_platform()
+        iteration, sampler.cholM, compiled, stages, template, D, _reactant_client_platform()
     )
 end
 
@@ -377,13 +385,17 @@ function ParallelMCMC._solve_mala_block(
     s0 .= x0
     s0_r, Xi_r, U_r = map(_upload, (s0, Xi, U), ws.stages[2:4])
     S = _upload(S0, ws.stages[1])
+    S_last = Ref{Any}(S)  # newest trajectory, so the error path frees it too
     S_spare = nothing
     seed = Ref(Reactant.to_rarray(rand(rng, UInt64, 2)))
     try
         step = function (S_old, S_in)
             _free!(S_old)
             S_next, maxima, seed_next = ws.compiled(S_in, s0_r, Xi_r, U_r, seed[])
-            # The RNG updates its seed in place, so `seed_next` may share the old seed's buffer.
+            S_last[] = S_next
+            # The RNG updates its seed in place, so `seed_next` may wrap the old seed's buffer.
+            Reactant.get_buffer(seed_next) === Reactant.get_buffer(seed[]) ||
+                _free!(seed[])
             seed[] = seed_next
             Δ_max, S_max = Array(maxima)
             _free!(maxima)
@@ -395,7 +407,7 @@ function ParallelMCMC._solve_mala_block(
         warn && !converged && DEER._warn_not_converged(sampler.maxiter, metric)
         return _download(ws.template, S, ws.platform), converged
     finally
-        foreach(_free!, (s0_r, Xi_r, U_r, seed[], S, S_spare))
+        foreach(_free!, (s0_r, Xi_r, U_r, seed[], S_last[], S_spare))
     end
 end
 

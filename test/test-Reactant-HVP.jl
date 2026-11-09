@@ -386,7 +386,26 @@ end
                 _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s2, st)
             end
             @test st.workspace !== solver
-            @test st.workspace.iteration.ε == 0.03
+            @test st.workspace.iteration.epsilon == 0.03
+
+            # An equal mass matrix in a new object reuses; a different one rebuilds.
+            M = [2.0 0.3 0 0; 0.3 1.0 0 0; 0 0 1.5 0; 0 0 0 1.0]
+            s_M = ParallelMALASampler(0.03; T=8, cholM=cholesky(Symmetric(M)))
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s_M, st)
+            end
+            solver_M = st.workspace
+            @test solver_M !== solver
+            s_M2 = ParallelMALASampler(0.03; T=8, cholM=cholesky(Symmetric(copy(M))))
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s_M2, st)
+            end
+            @test st.workspace === solver_M
+            s_M3 = ParallelMALASampler(0.03; T=8, cholM=cholesky(Symmetric(2M)))
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s_M3, st)
+            end
+            @test st.workspace !== solver_M
         end
 
         @testset "Float32 initial point with a Float64 step size" begin
