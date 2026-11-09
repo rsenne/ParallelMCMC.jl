@@ -5,9 +5,12 @@ module ReactantExt
 
 using ParallelMCMC: ParallelMCMC
 using ParallelMCMC.DEER: DEER
+using ParallelMCMC.MALA: MALA
 using ADTypes: ADTypes, AutoReactant, AutoEnzyme
 using Reactant: Reactant, @compile
 using Enzyme: Enzyme
+using LinearAlgebra: LinearAlgebra
+using Random: Random
 
 _check_reactant_mode(::AutoReactant{AutoEnzyme{Nothing,Nothing}}) = nothing
 function _check_reactant_mode(backend::AutoReactant)
@@ -135,16 +138,20 @@ end
 which puts a relative error of about 3e-4 into batched derivatives and stalls DEER
 convergence (#83). The precision is read while tracing, so it covers the
 products Enzyme adds for the derivative too. =#
-function _compiled(core, templates::AbstractArray...)
-    _warn_reactant_host_roundtrip(templates[1])
-    stages = map(_in_stage, templates)
-    inputs = map(_upload, templates, stages)
-    compiled = Reactant.with_config(;
+function _compile_full_precision(core, inputs...)
+    return Reactant.with_config(;
         dot_general_precision=Reactant.PrecisionConfig.HIGHEST,
         convolution_precision=Reactant.PrecisionConfig.HIGHEST,
     ) do
         @compile core(inputs...)
     end
+end
+
+function _compiled(core, templates::AbstractArray...)
+    _warn_reactant_host_roundtrip(templates[1])
+    stages = map(_in_stage, templates)
+    inputs = map(_upload, templates, stages)
+    compiled = _compile_full_precision(core, inputs...)
     return ReactantCall(compiled, stages, templates[1], _reactant_client_platform())
 end
 
@@ -161,6 +168,18 @@ end
 (c::JVPWith)(x, v) = _jvp(c.g, x, v)
 
 _rev_gradient(f, x) = Enzyme.gradient(Enzyme.Reverse, Enzyme.Const(f), x)[1]
+
+# XLA shares `logdensity_batch`'s products with the gradient's forward pass.
+struct ValueGradHVPBatch{F}
+    logdensity_batch::F
+end
+function (c::ValueGradHVPBatch)(X, V)
+    g = Base.Fix1(_rev_gradient, ParallelMCMC._BatchLogdensitySum(c.logdensity_batch))
+    Hv, G = Enzyme.autodiff(
+        Enzyme.ForwardWithPrimal, Enzyme.Const(g), Enzyme.Duplicated(X, V)
+    )
+    return c.logdensity_batch(X), G, Hv
+end
 
 function ParallelMCMC._reactant_resolve_gradient(
     logdensity, backend::AutoReactant, x_template::AbstractVector
@@ -211,6 +230,173 @@ function DEER._make_hvp_batch_fn(
     _check_reactant_mode(backend)
     core = JVPWith(grad_batch)
     return _compiled(core, X_template, X_template)
+end
+
+function ParallelMCMC._reactant_resolve_value_grad_hvp_batch(
+    logdensity_batch, backend::AutoReactant, X_template::AbstractMatrix
+)
+    _check_reactant_mode(backend)
+    return ValueGradHVPBatch(logdensity_batch)
+end
+
+# One XLA executable per DEER iteration: `deer_update!` and the batched MALA step,
+# traced. The loop stays on the host (`DEER._deer_loop`) (#86).
+
+# Probes from the traced RNG seeded by the iteration's input.
+function DEER._probe_matrix!(
+    Z::Reactant.AnyTracedRArray{T,2}, ::Random.AbstractRNG, _, dev::Reactant.ReactantRNG
+) where {T}
+    Random.rand!(dev, Z)
+    Z .= ifelse.(Z .< T(0.5), -one(T), one(T))
+    return Z
+end
+
+struct DEERIteration{V,E,C,K}
+    evaluator::V
+    ε::E
+    cholM::C
+    T::Int
+    probes::Int
+    jacobian_damping::K
+    jacobian_clip::K
+    damping::K
+end
+
+function DEERIteration(evaluator::ValueGradHVPBatch, sampler)
+    return DEERIteration(
+        evaluator,
+        sampler.epsilon,
+        _host_cholesky(sampler.cholM),
+        sampler.T,
+        sampler.probes,
+        sampler.jacobian_damping,
+        sampler.jacobian_clip,
+        sampler.damping,
+    )
+end
+
+# Reactant captures arrays as host constants, so a mass matrix on the device moves to the host.
+_host_cholesky(::Nothing) = nothing
+function _host_cholesky(C::LinearAlgebra.Cholesky)
+    return LinearAlgebra.Cholesky(Array(C.factors), C.uplo, C.info)
+end
+
+# Whether two iterations compile to the same executable; `cholM` compares by value.
+function _same_iteration(a::DEERIteration, b::DEERIteration)
+    a.evaluator === b.evaluator || return false
+    fields(it) = (it.ε, it.T, it.probes, it.jacobian_damping, it.jacobian_clip, it.damping)
+    isequal(fields(a), fields(b)) || return false
+    (a.cholM === nothing || b.cholM === nothing) && return a.cholM === b.cholM
+    return a.cholM.uplo == b.cholM.uplo && a.cholM.factors == b.cholM.factors
+end
+
+# Returns `S_new` and `[Δ_max, S_max]`, one download for the convergence test.
+function (it::DEERIteration)(S, s0, Xi, U, seed)
+    probe_rng = Reactant.ReactantRNG(seed)
+    ws = DEER.DEERWorkspace(S, s0; probe_rng=probe_rng)
+    step = ParallelMCMC._mala_batched_fwd_and_jvp(S, it.evaluator, it.ε, Xi, U, it.cholM)
+    rec = DEER.TapedRecursion(nothing, nothing, Base.OneTo(it.T); fwd_and_jvp_batch=step)
+    S_new = similar(S)
+    DEER.deer_update!(
+        ws,
+        S_new,
+        rec,
+        s0,
+        S;
+        damping=it.damping,
+        probes=it.probes,
+        rng=probe_rng,
+        jacobian_damping=it.jacobian_damping,
+        jacobian_clip=it.jacobian_clip,
+    )
+    maxima = vcat(
+        vec(maximum(abs, S_new .- S; dims=(1, 2))), vec(maximum(abs, S_new; dims=(1, 2)))
+    )
+    return S_new, maxima, probe_rng.seed
+end
+
+struct ReactantDEERSolver{I,C,S,X}
+    iteration::I
+    compiled::C
+    stages::S
+    template::X
+    D::Int
+    platform::String
+end
+
+function ParallelMCMC._mala_deer_workspace(
+    evaluator::ValueGradHVPBatch, model, sampler::ParallelMCMC.ParallelMALASampler, x0, old
+)
+    sampler.jacobian === :stoch_diag ||
+        return ParallelMCMC._mala_deer_workspace(nothing, model, sampler, x0, old)
+    FP = typeof(sampler.epsilon)
+    iteration = DEERIteration(evaluator, sampler)
+    template = similar(x0, FP, 0, 0)
+    if old isa ReactantDEERSolver &&
+        _same_iteration(old.iteration, iteration) &&
+        old.D == length(x0) &&
+        typeof(old.template) == typeof(template)
+        return old
+    end
+
+    D, T = length(x0), sampler.T
+    S0 = similar(x0, FP, D, T)
+    s0 = similar(x0, FP)
+    templates = (S0, s0, similar(S0), similar(s0, T))
+    _warn_reactant_host_roundtrip(x0)
+    stages = map(_in_stage, templates)
+    inputs = map(_upload, templates, stages)
+    seed = Reactant.to_rarray(zeros(UInt64, 2))
+    compiled = try
+        _compile_full_precision(iteration, inputs..., seed)
+    finally
+        foreach(_free!, inputs)
+        _free!(seed)
+    end
+    return ReactantDEERSolver(
+        iteration, compiled, stages, template, D, _reactant_client_platform()
+    )
+end
+
+function ParallelMCMC._solve_mala_block(
+    ws::ReactantDEERSolver,
+    rng::Random.AbstractRNG,
+    model::ParallelMCMC.PreppedDensityModel,
+    sampler::ParallelMCMC.ParallelMALASampler,
+    x0::AbstractVector,
+    tape,
+    Xi,
+    U;
+    warn::Bool=true,
+)
+    # Later blocks start from the downloaded trajectory, whose eltype can differ from x0's.
+    FP = eltype(Xi)
+    S0 = similar(Xi)
+    S0 .= x0
+    s0 = similar(Xi, FP, length(x0))
+    s0 .= x0
+    s0_r, Xi_r, U_r = map(_upload, (s0, Xi, U), ws.stages[2:4])
+    S = _upload(S0, ws.stages[1])
+    S_spare = nothing
+    seed = Ref(Reactant.to_rarray(rand(rng, UInt64, 2)))
+    try
+        step = function (S_old, S_in)
+            _free!(S_old)
+            S_next, maxima, seed_next = ws.compiled(S_in, s0_r, Xi_r, U_r, seed[])
+            # The RNG updates its seed in place, so `seed_next` may share the old seed's buffer.
+            seed[] = seed_next
+            Δ_max, S_max = Array(maxima)
+            _free!(maxima)
+            return S_next, Δ_max, S_max
+        end
+        S, S_spare, converged, _, metric = DEER._deer_loop(
+            step, S, nothing, sampler.tol_abs, sampler.tol_rel, sampler.maxiter
+        )
+        warn && !converged && DEER._warn_not_converged(sampler.maxiter, metric)
+        return _download(ws.template, S, ws.platform), converged
+    finally
+        foreach(_free!, (s0_r, Xi_r, U_r, seed[], S, S_spare))
+    end
 end
 
 end # module

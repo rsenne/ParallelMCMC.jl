@@ -24,16 +24,16 @@ Deterministic recursion driven by a pre-generated tape.
 - `fwd_and_jvp(x, tape_t, v)`: optional fused function `-> (x_next, J·v)`.
 - `fwd_and_jvp_batch(Xbar, Z)`: optional batched function `-> (FT, Jt)`.
 """
-struct TapedRecursion{Ff,Fj,Ffj,Ffb,Tt}
+struct TapedRecursion{Ff,Fj,Ffj,Ffb,V<:AbstractVector}
     step_fwd::Ff
     jvp::Fj
     fwd_and_jvp::Ffj
     fwd_and_jvp_batch::Ffb
-    tape::Vector{Tt}
+    tape::V
 end
 
 function TapedRecursion(
-    step_fwd, jvp, tape::Vector; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing
+    step_fwd, jvp, tape::AbstractVector; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing
 )
     return TapedRecursion(step_fwd, jvp, fwd_and_jvp, fwd_and_jvp_batch, tape)
 end
@@ -100,12 +100,15 @@ function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
     )
 end
 
-function DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
+function DEERWorkspace(
+    S_template::AbstractMatrix,
+    s0_template::AbstractVector;
+    probe_rng=_device_probe_rng(S_template),
+)
     A = similar(S_template)
     B = similar(S_template)
     Xbar = similar(S_template)
     Z = similar(S_template)
-    probe_rng = _device_probe_rng(Z)
     Zhost = if probe_rng === nothing && needs_host_staging(Z)
         Matrix{eltype(S_template)}(undef, size(Z)...)
     else
@@ -631,6 +634,32 @@ function deer_update(
     return S_out
 end
 
+# `step(S_spare, S) -> (S_next, Δ_max, S_max)` may write into or free `S_spare`.
+function _deer_loop(step, S, S_spare, tol_abs, tol_rel, maxiter::Int)
+    converged = false
+    metric = Inf
+    iters = 0
+    for iter in 1:maxiter
+        iters = iter
+        S_next, Δ_max, S_max = step(S_spare, S)
+        metric = Δ_max / (tol_abs + tol_rel * S_max)
+        S_spare, S = S, S_next
+        if metric ≤ 1
+            converged = true
+            break
+        end
+    end
+    return S, S_spare, converged, iters, metric
+end
+
+function _warn_not_converged(maxiter, metric)
+    @warn "DEER did not converge in `maxiter = $maxiter` iterations " *
+        "(final metric $metric, needs ≤ 1). The returned trajectory is not " *
+        "an exact sequential trajectory. Raise `maxiter`, or set " *
+        "`jacobian_damping` or `jacobian_clip` to stabilise the solve."
+    return nothing
+end
+
 """
 Run DEER iterations until convergence.
 
@@ -711,20 +740,13 @@ function solve(
         copyto!(ws.S_work, init)
         ws.S_work
     end
-    S_new = ws.S_tmp
-
-    converged = false
-    last_metric = Inf
-    iters = 0
-
-    for iter in 1:maxiter
-        iters = iter
+    step = function (S_out, S_in)
         deer_update!(
             ws,
-            S_new,
+            S_out,
             rec,
             s0,
-            S;
+            S_in;
             jacobian=jacobian,
             damping=damping,
             probes=probes,
@@ -732,26 +754,13 @@ function solve(
             jacobian_damping=jacobian_damping,
             jacobian_clip=jacobian_clip,
         )
-
-        Δ_max, S_max = _max_abs_change(S_new, S)
-        metric = Δ_max / (tol_abs + tol_rel * S_max)
-
-        last_metric = metric
-        if metric ≤ 1
-            converged = true
-            S = S_new
-            break
-        end
-
-        S, S_new = S_new, S
+        return (S_out, _max_abs_change(S_out, S_in)...)
     end
+    S, _, converged, iters, last_metric = _deer_loop(
+        step, S, ws.S_tmp, tol_abs, tol_rel, maxiter
+    )
 
-    if warn && !converged
-        @warn "DEER did not converge in `maxiter = $maxiter` iterations " *
-            "(final metric $last_metric, needs ≤ 1). The returned trajectory is not " *
-            "an exact sequential trajectory. Raise `maxiter`, or set " *
-            "`jacobian_damping` or `jacobian_clip` to stabilise the solve."
-    end
+    warn && !converged && _warn_not_converged(maxiter, last_metric)
 
     S_result = copy_result ? copy(S) : S
 

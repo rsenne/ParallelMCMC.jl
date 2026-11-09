@@ -251,6 +251,10 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
 - Only the default `AutoReactant()` mode is supported.
 
+When the batched gradient is derived from `logdensity_batch` with `AutoReactant()`, [`ParallelMALASampler`](@ref) compiles each DEER iteration (probes, batched MALA step and JVP, scan, convergence test) into one XLA executable. The trajectory stays on the XLA device during a block. Each chain compiles once; for a German Credit-sized logistic regression this took about 25 s on a GPU. A hand-written `grad_logdensity_batch` or `hvp_batch`, or `jacobian=:diag`, keeps the uncompiled DEER loop.
+
+Probes come from Reactant's random number generator, seeded once per block from `rng`. The first block matches the uncompiled loop; later blocks differ.
+
 ### When the fallback is the right call
 
 - **Complex or composed models.**  Bayesian neural nets, hierarchical models with many transformations, mixtures, or anything where the Hessian has no convenient closed form.  Deriving and maintaining `hvp` by hand for these is error-prone; AD removes a whole class of bugs.

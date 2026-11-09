@@ -13,6 +13,7 @@ gradlogp_r(x) = -sum(abs2, x) .* x
 hvp_r(x, v) = -(sum(abs2, x) .* v .+ 2 .* dot(x, v) .* x)
 logp_batch_r(X) = vec(-0.25 .* sum(abs2, X; dims=1) .^ 2)
 gradlogp_batch_r(X) = -X .* sum(abs2, X; dims=1)
+hvp_batch_r(X, V) = -(sum(abs2, X; dims=1) .* V .+ 2 .* sum(X .* V; dims=1) .* X)
 logp_r32(x) = -0.25f0 * sum(abs2, x)^2
 logp_batch_r32(X) = vec(-0.25f0 .* sum(abs2, X; dims=1) .^ 2)
 
@@ -148,6 +149,53 @@ end
             @test m_p.hvp_batch(X, V) ≈ Hv_cols
         end
 
+        @testset "traceable value, gradient and HVP evaluator" begin
+            T = 8
+            X = randn(rng, D_R, T)
+            V = randn(rng, D_R, T)
+
+            model = DensityModel(
+                logp_r,
+                AutoReactant(),
+                D_R;
+                logdensity_batch=logp_batch_r,
+                hvp=AutoReactant(),
+            )
+            m_p = ParallelMCMC._prepare_model(model, X[:, 1], T, nothing)
+            vgh = m_p.value_grad_hvp_batch
+            @test vgh isa REACTANT_EXT.ValueGradHVPBatch
+            Xr, Vr = Reactant.to_rarray(X), Reactant.to_rarray(V)
+            lp, G, Hv = map(Array, Reactant.@compile(vgh(Xr, Vr))(Xr, Vr))
+            @test lp ≈ logp_batch_r(X)
+            @test G ≈ gradlogp_batch_r(X)
+            @test Hv ≈ hvp_batch_r(X, V)
+
+            # Without an AD-derived batched gradient, logdensity_batch is never
+            # traced, so it may not be traceable.
+            model_cb = DensityModel(
+                logp_r,
+                gradlogp_r,
+                D_R;
+                hvp=hvp_r,
+                logdensity_batch=logp_batch_r,
+                grad_logdensity_batch=gradlogp_batch_r,
+                hvp_batch=AutoReactant(),
+            )
+            m_cb = ParallelMCMC._prepare_model(model_cb, X[:, 1], T, nothing)
+            @test m_cb.value_grad_hvp_batch === nothing
+
+            model_hb = DensityModel(
+                logp_r,
+                AutoReactant(),
+                D_R;
+                hvp=AutoReactant(),
+                logdensity_batch=logp_batch_r,
+                hvp_batch=hvp_batch_r,
+            )
+            m_hb = ParallelMCMC._prepare_model(model_hb, X[:, 1], T, nothing)
+            @test m_hb.value_grad_hvp_batch === nothing
+        end
+
         @testset "forward over user batched gradient (hvp_batch=AutoReactant())" begin
             T = 8
             X = randn(rng, D_R, T)
@@ -274,6 +322,85 @@ end
                 MersenneTwister(99), model_an, s, 64; chain_type=CT_R, progress=false
             )
             @test c_r[:x] ≈ c_an[:x]
+        end
+
+        # Probes come from a Reactant RNG, so only the first block matches the host path.
+        model_rb = DensityModel(
+            logp_r, AutoReactant(), D_R; logdensity_batch=logp_batch_r, hvp=AutoReactant()
+        )
+        model_an = DensityModel(
+            logp_r,
+            gradlogp_r,
+            D_R;
+            hvp=hvp_r,
+            logdensity_batch=logp_batch_r,
+            grad_logdensity_batch=gradlogp_batch_r,
+            hvp_batch=hvp_batch_r,
+        )
+        x0_b = fill(0.5, D_R)
+        first_block(model, s) = sample(
+            MersenneTwister(86),
+            model,
+            s,
+            s.T + 1;
+            chain_type=CT_R,
+            progress=false,
+            initial_params=x0_b,
+        )[:x]
+
+        @testset "compiled DEER iterations match analytic derivatives on the same tape" begin
+            s = ParallelMALASampler(0.05; T=16)
+            @test all(
+                isapprox.(first_block(model_rb, s), first_block(model_an, s); atol=1e-4)
+            )
+
+            L = [1.0 0 0 0; 0.3 0.8 0 0; -0.2 0.1 1.2 0; 0 0.2 0 0.9]
+            s_M = ParallelMALASampler(0.05; T=16, cholM=cholesky(Symmetric(L * L')))
+            @test all(
+                isapprox.(first_block(model_rb, s_M), first_block(model_an, s_M); atol=1e-4)
+            )
+        end
+
+        @testset "the compiled solver is built once per chain and rebuilt when stale" begin
+            rng = MersenneTwister(87)
+            s = ParallelMALASampler(0.05; T=8)
+            _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s; initial_params=x0_b)
+            _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s, st)
+            solver = st.workspace
+            @test solver isa REACTANT_EXT.ReactantDEERSolver
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s, st)
+            end
+            @test st.t == 1  # a second block was solved
+            @test st.workspace === solver
+
+            # Tolerances are not compiled in.
+            s_tol = ParallelMALASampler(0.05; T=8, tol_abs=1e-8)
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s_tol, st)
+            end
+            @test st.workspace === solver
+
+            s2 = ParallelMALASampler(0.03; T=8)
+            for _ in 1:s.T
+                _, st = ParallelMCMC.AbstractMCMC.step(rng, model_rb, s2, st)
+            end
+            @test st.workspace !== solver
+            @test st.workspace.iteration.ε == 0.03
+        end
+
+        @testset "Float32 initial point with a Float64 step size" begin
+            s = ParallelMALASampler(0.05; T=8)
+            chain = sample(
+                MersenneTwister(88),
+                model_rb,
+                s,
+                3s.T;
+                chain_type=CT_R,
+                progress=false,
+                initial_params=Float32.(x0_b),
+            )
+            @test all(x -> all(isfinite, x), chain[:x])
         end
     end
 
