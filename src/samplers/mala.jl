@@ -1,11 +1,16 @@
 """
     MALASampler(epsilon; cholM=nothing)
 
-Metropolis-Adjusted Langevin Algorithm sampler with step size `epsilon`.
+Create a sequential Metropolis-adjusted Langevin (MALA) sampler with positive
+step size `epsilon`.
 
-Optionally pass `cholM = cholesky(M)` to use a mass matrix `M` as a
-preconditioner.  The proposal becomes `y = x + ε M ∇logp(x) + √(2ε) L ξ`
-where `L` is the Cholesky factor of `M`.
+This sampler is useful as a baseline for [`ParallelMALASampler`](@ref) and for
+checking a model with an ordinary sequential transition. Pass
+`cholM=cholesky(M)` to precondition proposals with a positive-definite mass
+matrix `M`. With `M = L * L'`, the proposal is
+`y = x + epsilon * M * gradient(x) + sqrt(2epsilon) * L * noise`.
+
+The chain stores `:logp` and `:accepted` as extra fields.
 """
 struct MALASampler{FP<:AbstractFloat,CM} <: AbstractMCMC.AbstractSampler
     epsilon::FP

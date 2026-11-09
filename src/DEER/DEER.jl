@@ -16,6 +16,8 @@ export TapedRecursion,
     DEERWorkspace, deer_update!, deer_update, solve, _prepare_hvp, _hvp_prepared, _hvp_nopre
 
 """
+    TapedRecursion(step_fwd, jvp, tape; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing)
+
 Deterministic recursion driven by a pre-generated tape.
 
 - `step_fwd(x, tape_t)`: exact forward transition (may include MH accept/reject).
@@ -39,15 +41,18 @@ function TapedRecursion(
 end
 
 """
-Reusable buffers for allocation-light DEER updates and solves.
+    DEERWorkspace(S_template::AbstractMatrix, s0_template::AbstractVector)
+    DEERWorkspace(s0_template::AbstractVector, T::Integer)
 
-All buffers are created with the same array type / device placement as `S_template`
-(or `s0_template` for vector buffers), so the workspace is GPU-compatible when
-constructed from device-array templates.
+Reusable buffers for DEER updates and solves.
+
+Matrix buffers use the array type and device of `S_template`; vector buffers
+use those of `s0_template`.
 
 `probe_rng` is a random number generator on the device of `S_template`, or
 `nothing`. If it is set, the batched Hutchinson probes are drawn on the device,
-seeded from the caller's `rng`; otherwise they are drawn on the host.
+seeded from the caller's `rng`. Otherwise they are drawn on the host, and device
+arrays that require host staging also get CPU buffers for them.
 """
 struct DEERWorkspace{M,V,SW,HZ,H,R}
     A::M
@@ -190,24 +195,11 @@ function _batch_hvp_from_grad_prepared(
     return res isa Tuple ? first(res) : res
 end
 
-#=
----------------------------------------------------------------------------
-Reverse-on-grad HVP. Computes Hv as the gradient of
-`x -> pmcmc_dot(gradlogp(x), v)`, with `v` carried as a DI Constant context
-so a single `prepare_gradient` covers all subsequent Newton steps. The
-batched variant uses `B -> pmcmc_dotsum(grad_batch(B), V)` and exploits the
-column-independence of the user's batched gradient — its gradient w.r.t. B
-is the columnwise HVP.
-
-The reductions go through `pmcmc_dot`/`pmcmc_dotsum` (rather than `dot`/`sum`)
-so that on GPU the EnzymeExt reverse rules intercept them — otherwise Enzyme
-reverse-mode hits the `cuMemcpyDtoHAsync_v2` gc-transition abort (see the
-Enzyme rules in `ext/EnzymeExt.jl`).
-
-We bundle the closure with the prep so `prepare_gradient` and `gradient`
-see the same function instance (DI keys preparations on function identity).
----------------------------------------------------------------------------
-=#
+# Compute H*v by differentiating dot(gradlogp(x), v). DI.Constant lets us
+# change v without preparing the gradient again. Batched gradients must treat
+# columns independently for this calculation to give columnwise HVPs.
+# Use pmcmc reductions so Enzyme's GPU rules avoid the gc-transition abort.
+# Keep the closure with its preparation: DI requires the same function instance.
 import ..ParallelMCMC: pmcmc_dot, pmcmc_dotsum, _REACTANT_LOAD_HINT
 
 struct _HvpReverseClosure{F}
@@ -220,27 +212,10 @@ struct _BatchHvpReverseClosure{F}
 end
 (c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
 
-#=
-Pick the AD-HVP fallback strategy from the user's backend. Both are one AD pass
-over a hand-written `gradlogp`; an AD-derived gradient goes to
-`_make_hvp_fn_second_order` instead.
-
-  ForwardOnGrad()   — `pushforward(gradlogp, x, v)`. Routes through the
-                      `pmcmc_matmul` frule.
-  ReverseOnGrad()   — `gradient(x -> pmcmc_dot(gradlogp(x), v))`. Routes
-                      through the matmul and dot/sum rrules.
-
-These are singleton types rather than symbols so the choice dispatches
-statically — `_make_hvp_fn(_hvp_strategy(backend), ...)` resolves to one
-concrete method (and one concrete return type) at compile time, without
-relying on constant propagation through `===`.
-
-The routing follows DI's `hvp_mode`: a forward outer pass
-(`DI.ForwardOverAnything`) takes `ForwardOnGrad`, anything else
-`ReverseOnGrad`. Only the outer direction matters since we differentiate
-the already-built `gradlogp`. The mode is whatever the user's backend carries;
-nothing here substitutes one (see `_normalized_backend`).
-=#
+# Differentiate a supplied gradient in the direction chosen by DI.hvp_mode:
+# forward mode computes J*v; reverse mode differentiates dot(gradlogp(x), v).
+# Strategy types let dispatch select a concrete closure type. AD-derived
+# gradients use _make_hvp_fn_second_order instead.
 abstract type HVPStrategy end
 struct ForwardOnGrad <: HVPStrategy end
 struct ReverseOnGrad <: HVPStrategy end
@@ -291,12 +266,7 @@ function _batch_hvp_via_grad_reverse_prepared(
     return DI.gradient(f, prep, eff_backend, X, DI.Constant(V))
 end
 
-#=
-Strategy-dispatched factories. Each method returns a closure with one
-concrete type, so the call site `_make_hvp_fn(_hvp_strategy(backend), ...)`
-is type-stable: dispatch on the singleton `HVPStrategy` picks the method
-at compile time, and the returned closure type is statically known.
-=#
+# Each strategy returns its own concrete closure type.
 function _make_hvp_fn(
     ::ForwardOnGrad, gradlogp, backend::AbstractADType, x_template::AbstractVector
 )
@@ -487,8 +457,8 @@ end
 """
 In-place DEER update.
 
-Writes the updated trajectory into `S_out` using `S_in` as the current iterate and
-workspace buffers for all internal temporaries that can be controlled here.
+Write one update of `S_in` into `S_out`, reusing buffers in `ws`.
+Both trajectories must have size `(length(s0_in), length(rec.tape))`.
 
 `jacobian_damping` and `jacobian_clip` modify the linearization; see [`solve`](@ref).
 """
@@ -632,16 +602,24 @@ function deer_update(
 end
 
 """
-Run DEER iterations until convergence.
+    solve(rec::TapedRecursion, s0; init=nothing, tol_abs=1e-4, tol_rel=1e-3,
+          maxiter=200, jacobian=:stoch_diag, damping=1.0, probes=1,
+          rng=Random.default_rng(), return_info=false, workspace=nothing,
+          copy_result=nothing)
 
-When no workspace is supplied, one is created automatically. Supplying a
-pre-allocated `DEERWorkspace` is the intended path for repeated GPU solves.
+Run DEER until the change between iterates meets the tolerances or `maxiter`
+is reached. These defaults differ from those of `ParallelMALASampler`.
 
-If `workspace` is supplied, `copy_result` defaults to `true` so the returned
-trajectory is owned by the caller and will not be overwritten by a later solve
-using the same workspace. Set `copy_result=false` for allocation-sensitive
-internal loops; in that mode the returned trajectory may alias workspace-owned
-buffers such as `workspace.S_tmp`.
+Set `return_info=true` to return `(trajectory, info)`, where `info` has fields
+`converged`, `iters`, `metric`, `jacobian`, `damping`, `probes`,
+`jacobian_damping`, and `jacobian_clip`. Reaching `maxiter` logs a warning
+rather than throwing an error; pass `warn=false` to silence it.
+
+Pass a `DEERWorkspace` to reuse buffers across solves. Otherwise, one is created.
+
+With a supplied workspace, the result is copied by default so later solves
+cannot overwrite it. Set `copy_result=false` to skip that copy, but use or copy
+the result before reusing the workspace.
 
 Two keywords stabilise the Newton step when the linearized recursion amplifies
 errors, which happens for multimodal targets and large step sizes (Zoltowski et
@@ -659,11 +637,6 @@ estimate as is.
 `damping` is deprecated. It relaxes the iterate, `S ← (1 - damping) S_old +
 damping S_new`, which loses the `T`-iteration bound; use the Jacobian options
 instead.
-
-If the solve uses all `maxiter` iterations without meeting the tolerance, it logs a
-warning and returns the last iterate, which is not an exact sequential trajectory.
-Pass `warn=false` to silence the warning, and `return_info=true` to check
-`info.converged` yourself.
 """
 function solve(
     rec::TapedRecursion,

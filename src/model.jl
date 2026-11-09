@@ -1,38 +1,45 @@
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp, hvp_batch)
+    DensityModel(logdensity, grad_logdensity, dim;
+                 param_names=nothing, hvp=nothing,
+                 logdensity_batch=nothing,
+                 grad_logdensity_batch=nothing, hvp_batch=nothing)
 
-Wrap a log-density and its derivatives for ParallelMCMC samplers.
+Describe a target density and the derivatives used by ParallelMCMC's samplers.
 
-Each derivative slot (`grad_logdensity`, `hvp`, `grad_logdensity_batch`,
-`hvp_batch`) takes a callable or an `ADTypes.AbstractADType`, so a model can be
-built from the log-density alone:
+For a vector `x` of length `dim`, `logdensity(x)` must return a real scalar and
+`grad_logdensity(x)` must return a vector like `x`. The log-density may omit its
+normalizing constant. Instead of a gradient function, `grad_logdensity` may be
+an `ADTypes.AbstractADType` backend:
 
-    DensityModel(logp, AutoForwardDiff(), dim)
+```julia
+model = DensityModel(logdensity, AutoForwardDiff(), dim)
+```
 
-Backends are prepared when sampling starts. An HVP backend differentiates a
-callable gradient once. With an AD-derived gradient it forms
-`DifferentiationInterface.SecondOrder(hvp_backend, grad_backend)` on the
-log-density. An explicit `SecondOrder` also bypasses the gradient slot.
+Sequential MALA needs only the gradient. Parallel MALA also needs
+Hessian-vector products: pass a function `hvp(x, v)`, an AD backend as `hvp`, or
+a `backend` to [`ParallelMALASampler`](@ref). A backend in `hvp` takes
+precedence over the sampler's `backend`. If neither is given and
+`grad_logdensity` is an AD backend `g`, the HVP is computed with
+`SecondOrder(forward_counterpart(g), g)` from DifferentiationInterface. AD
+backends are prepared when sampling starts, once the element type and array
+type of the initial state are known.
 
-- `logdensity(x::AbstractVector) -> Real`
-- `grad_logdensity` — callable `x -> AbstractVector`, or an AD backend.
-- `hvp` — optional callable `(x, v) -> AbstractVector`, or a backend. If
-  `nothing`, DEER builds the HVP from the sampler's `backend`.
-- `logdensity_batch(X::AbstractMatrix) -> AbstractVector` — optional batched
-  log-density over independent columns.
-- `grad_logdensity_batch` — optional callable `X -> AbstractMatrix`, or a
-  backend. It is derived from `logdensity_batch` when `grad_logdensity` is a
-  backend.
-- `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend,
-  resolved like `hvp`.
-- `dim::Int` — dimensionality of the parameter space
-- `param_names` — optional collection of parameter names used in `FlexiChains` output. If
-  `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
-  See the [`Parameter names`](@ref parameter-names) section of the docs for more
-  information.
+The optional batched functions operate on independent columns:
 
-Both batched derivative slots require `logdensity_batch`. `AutoReactant()` has
-additional pairing and tracing constraints; see the GPU guide.
+- `logdensity_batch(X)` returns one log-density per column of `X`.
+- `grad_logdensity_batch(X)` returns a matrix shaped like `X`.
+- `hvp_batch(X, V)` returns `H(X[:, j]) * V[:, j]` in column `j`.
+
+`grad_logdensity_batch` and `hvp_batch` require `logdensity_batch`, and each
+may be a function or an AD backend. If `grad_logdensity` is an AD backend and
+`grad_logdensity_batch` is omitted, the batched gradient differentiates
+`sum(logdensity_batch(X))`. This is correct only if each entry of
+`logdensity_batch(X)` depends on the matching column of `X` alone.
+
+`param_names` controls the parameter keys in the returned `FlexiChain`. With
+the default `nothing`, the chain contains one vector-valued parameter named
+`:x`. See [Defining models](@ref) for naming, batching, and the rules for
+combining derivative backends.
 """
 struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
     logdensity::F
