@@ -42,7 +42,8 @@ _reactant_backend_name(platform) = platform in ("cuda", "rocm") ? "gpu" : platfo
 
 #= `ReactantCall` frees the output buffer before it returns, so a test that needs
 to look at that buffer has to run the compiled function itself. Returns the
-uploaded inputs too, since they have to be freed alongside the output. =#
+uploaded inputs too, since they have to be freed alongside the output. Prepared
+slots compile on first call; `_force!` compiles them here. =#
 function _run_compiled(call, args...)
     inputs = map(REACTANT_EXT._upload, args, call.stages)
     return inputs, call.compiled(inputs...)
@@ -408,6 +409,38 @@ end
             @test st.workspace !== solver_M
         end
 
+        @testset "chains of one sample call share the compiled iteration" begin
+            s = ParallelMALASampler(0.05; T=8)
+            prep() = ParallelMCMC._prepare_model(model_rb, x0_b, s.T, s.backend)
+            workspace(m) = ParallelMCMC._mala_deer_workspace(m, s, x0_b, nothing)
+            m1, m2 = prep(), prep()
+            ws1, ws2 = ParallelMCMC.with(
+                ParallelMCMC.SAMPLE_CACHE => ParallelMCMC.SampleCache()
+            ) do
+                workspace(m1), workspace(m2)
+            end
+            @test ws1.compiled === ws2.compiled
+            @test workspace(m1).compiled !== ws1.compiled  # no cache outside a call
+
+            # The compiled iteration replaces the batched derivatives, which never compile.
+            @test m1.grad_logdensity_batch.call === nothing
+            @test m1.hvp_batch.call === nothing
+
+            chains = sample(
+                MersenneTwister(89),
+                model_rb,
+                s,
+                ParallelMCMC.AbstractMCMC.MCMCThreads(),
+                3s.T,
+                2;
+                chain_type=Any,
+                progress=false,
+                initial_params=fill(x0_b, 2),
+            )
+            @test length(chains) == 2
+            @test ParallelMCMC.SAMPLE_CACHE[] === nothing
+        end
+
         @testset "Float32 initial point with a Float64 step size" begin
             s = ParallelMALASampler(0.05; T=8)
             chain = sample(
@@ -456,9 +489,9 @@ end
         @test Hv1.data !== Hv2.data
 
         # Everything above would also pass if no stage had been allocated.
-        @test only(m_p.grad_logdensity.stages) isa Vector{Float32}
-        @test size(only(m_p.grad_logdensity.stages)) == (D_R,)
-        @test all(s -> s isa Vector{Float32}, m_p.hvp.stages)
+        @test only(REACTANT_EXT._force!(m_p.grad_logdensity).stages) isa Vector{Float32}
+        @test size(only(REACTANT_EXT._force!(m_p.grad_logdensity).stages)) == (D_R,)
+        @test all(s -> s isa Vector{Float32}, REACTANT_EXT._force!(m_p.hvp).stages)
 
         # XLA only ever sees the stage, so a short input has to be rejected here.
         @test_throws DimensionMismatch m_p.grad_logdensity(
@@ -529,7 +562,7 @@ end
     @testset "a host-resident output declines the pointer path" begin
         x0 = StagedArray(randn(MersenneTwister(76), Float32, D_R))
         model = DensityModel(logp_r32, AutoReactant(), D_R)
-        call = ParallelMCMC._prepare_model(model, x0).grad_logdensity
+        call = REACTANT_EXT._force!(ParallelMCMC._prepare_model(model, x0).grad_logdensity)
         inputs, out = _run_compiled(call, x0)
         GC.@preserve out begin
             if call.platform == "cpu"
@@ -618,7 +651,7 @@ end
                             logp_r32, AutoReactant(), D_R; hvp=AutoReactant()
                         )
                         m_p = ParallelMCMC._prepare_model(model, x_d, 8, nothing)
-                        call = m_p.grad_logdensity
+                        call = REACTANT_EXT._force!(m_p.grad_logdensity)
                         @test call.platform == "cuda"
 
                         inputs, out = _run_compiled(call, x_d)
@@ -671,7 +704,7 @@ end
                         m_p = ParallelMCMC._prepare_model(
                             model, CUDA.CuArray(X_h[:, 1]), T, nothing
                         )
-                        call = m_p.grad_logdensity_batch
+                        call = REACTANT_EXT._force!(m_p.grad_logdensity_batch)
                         @test call.platform == "cuda"
 
                         inputs, out = _run_compiled(call, X_d)
@@ -712,7 +745,9 @@ end
                     @testset "an unsupported destination falls back to the host" begin
                         x0 = StagedArray(randn(rng, Float32, D_R))
                         model = DensityModel(logp_r32, AutoReactant(), D_R)
-                        call = ParallelMCMC._prepare_model(model, x0).grad_logdensity
+                        call = REACTANT_EXT._force!(
+                            ParallelMCMC._prepare_model(model, x0).grad_logdensity
+                        )
                         @test call.platform == "cuda"
                         res = call(x0)
                         @test res isa StagedArray{Float32,1}

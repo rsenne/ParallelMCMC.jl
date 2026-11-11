@@ -243,7 +243,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 ```
 
 !!! warning "Reactant constraints"
-    **Captured arrays are frozen at compile time.** Mutating them after preparation does not change the compiled derivative. Pass mutable data as an argument.
+    **Captured arrays are frozen at compile time.** Each `sample` call compiles again, so data mutated between calls is picked up, but data mutated during one is not. Pass mutable data as an argument.
 
     **Reactant chooses the execution device independently of the input array.** With a CUDA client, `CuArray` inputs are staged through pinned host memory and results are copied back on the device. With the CPU client, both directions go through the host and the sampler warns when it prepares the model. Select a GPU client with `Reactant.set_default_backend` when available.
 
@@ -251,7 +251,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
 - Only the default `AutoReactant()` mode is supported.
 
-When the batched gradient is derived from `logdensity_batch` with `AutoReactant()`, [`ParallelMALASampler`](@ref) compiles each DEER iteration (probes, batched MALA step and JVP, scan, convergence test) into one XLA executable. The trajectory stays on the XLA device during a block. Each chain compiles once; for a German Credit-sized logistic regression this took about 21 s on a GPU. A hand-written `grad_logdensity_batch` or `hvp_batch`, or `jacobian=:diag`, keeps the uncompiled DEER loop.
+When the batched gradient is derived from `logdensity_batch` with `AutoReactant()`, [`ParallelMALASampler`](@ref) compiles each DEER iteration (probes, batched MALA step and JVP, scan, convergence test) into one XLA executable. The trajectory stays on the XLA device during a block. It compiles once per `sample` call, and the chains of an `MCMCThreads` or `MCMCSerial` call share it. For a German Credit-sized logistic regression on a GPU, the first `sample` call in a Julia session spent about 50 s preparing and compiling, most of it compiling Reactant's tracing code; later compiles took 2–3 s. A hand-written `grad_logdensity_batch` or `hvp_batch`, or `jacobian=:diag`, keeps the uncompiled DEER loop.
 
 Probes come from Reactant's random number generator, seeded once per block from `rng`. The DEER solution does not depend on the probes, so the first block matches the uncompiled loop up to the DEER tolerance. Drawing the seed changes what `rng` produces afterwards, so later blocks differ.
 

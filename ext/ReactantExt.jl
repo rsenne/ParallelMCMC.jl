@@ -147,13 +147,43 @@ function _compile_full_precision(core, inputs...)
     end
 end
 
-function _compiled(core, templates::AbstractArray...)
+# Compile-time inputs only carry shapes and types, so they upload without a stage.
+function _compile(core, templates, extra...)
     _warn_reactant_host_roundtrip(templates[1])
+    inputs = map(t -> _upload(t, nothing), templates)
+    try
+        return _compile_full_precision(core, inputs..., extra...)
+    finally
+        foreach(_free!, inputs)
+        foreach(_free!, extra)
+    end
+end
+
+function _compiled(core, templates::AbstractArray...)
+    compiled = _compile(core, templates)
     stages = map(_in_stage, templates)
-    inputs = map(_upload, templates, stages)
-    compiled = _compile_full_precision(core, inputs...)
     return ReactantCall(compiled, stages, templates[1], _reactant_client_platform())
 end
+
+#= Compiles on first call. ParallelMALASampler's batched path never calls the scalar
+derivatives, and its compiled DEER iteration replaces the batched ones (#86). =#
+mutable struct LazyReactantCall{F}
+    const build::F
+    call::Union{Nothing,ReactantCall}
+end
+
+function _lazy_compiled(core, templates::AbstractArray...)
+    _warn_reactant_host_roundtrip(templates[1])
+    return LazyReactantCall(() -> _compiled(core, templates...), nothing)
+end
+
+_force!(c::ReactantCall) = c
+function _force!(c::LazyReactantCall)
+    c.call === nothing && (c.call = c.build())
+    return c.call
+end
+
+(c::LazyReactantCall)(args::AbstractArray...) = _force!(c)(args...)
 
 # For g = gradlogp, this JVP is the HVP. The callable and its captures are constant.
 function _jvp(g, x, v)
@@ -186,7 +216,7 @@ function ParallelMCMC._reactant_resolve_gradient(
 )
     _check_reactant_mode(backend)
     core = Base.Fix1(_rev_gradient, logdensity)
-    return _compiled(core, x_template)
+    return _lazy_compiled(core, x_template)
 end
 
 function ParallelMCMC._reactant_resolve_gradient_batch(
@@ -194,7 +224,7 @@ function ParallelMCMC._reactant_resolve_gradient_batch(
 )
     _check_reactant_mode(backend)
     core = Base.Fix1(_rev_gradient, ParallelMCMC._BatchLogdensitySum(logdensity_batch))
-    return _compiled(core, X_template)
+    return _lazy_compiled(core, X_template)
 end
 
 # AD-derived gradients differentiate the log-density; callable gradients use a JVP.
@@ -204,7 +234,7 @@ function DEER._make_hvp_fn_second_order(
     _check_reactant_mode(backend)
     inner = Base.Fix1(_rev_gradient, logdensity)
     core = JVPWith(inner)
-    return _compiled(core, x_template, x_template)
+    return _lazy_compiled(core, x_template, x_template)
 end
 
 function DEER._make_hvp_fn(
@@ -212,7 +242,7 @@ function DEER._make_hvp_fn(
 )
     _check_reactant_mode(backend)
     core = JVPWith(gradlogp)
-    return _compiled(core, x_template, x_template)
+    return _lazy_compiled(core, x_template, x_template)
 end
 
 function DEER._make_hvp_batch_fn_second_order(
@@ -221,7 +251,7 @@ function DEER._make_hvp_batch_fn_second_order(
     _check_reactant_mode(backend)
     inner = Base.Fix1(_rev_gradient, logdensity_batch_sum)
     core = JVPWith(inner)
-    return _compiled(core, X_template, X_template)
+    return _lazy_compiled(core, X_template, X_template)
 end
 
 function DEER._make_hvp_batch_fn(
@@ -229,7 +259,7 @@ function DEER._make_hvp_batch_fn(
 )
     _check_reactant_mode(backend)
     core = JVPWith(grad_batch)
-    return _compiled(core, X_template, X_template)
+    return _lazy_compiled(core, X_template, X_template)
 end
 
 function ParallelMCMC._reactant_resolve_value_grad_hvp_batch(
@@ -266,7 +296,7 @@ function DEERIteration(evaluator::ValueGradHVPBatch, sampler)
     return DEERIteration(
         evaluator,
         sampler.epsilon,
-        _host_cholesky(sampler.cholM),
+        sampler.cholM,
         sampler.T,
         sampler.probes,
         sampler.jacobian_damping,
@@ -280,17 +310,32 @@ _host_cholesky(::Nothing) = nothing
 function _host_cholesky(C::LinearAlgebra.Cholesky)
     return LinearAlgebra.Cholesky(Array(C.factors), C.uplo, C.info)
 end
-
-# The fields a DEERIteration compiles in, read from it or from a sampler.
-function _settings(x)
-    return (x.epsilon, x.T, x.probes, x.jacobian_damping, x.jacobian_clip, x.damping)
+function _on_host(it::DEERIteration)
+    return DEERIteration(
+        it.evaluator,
+        it.epsilon,
+        _host_cholesky(it.cholM),
+        it.T,
+        it.probes,
+        it.jacobian_damping,
+        it.jacobian_clip,
+        it.damping,
+    )
 end
 
-#= A rebuilt sampler may carry an equal `cholM` in a new object; compare it by value then.
-Only the triangle `uplo` names is set: `cholesky` leaves the other one uninitialized. =#
-function _same_cholM(compiled, cholM)
-    (compiled === nothing || cholM === nothing) && return compiled === cholM
-    return compiled.U == _host_cholesky(cholM).U
+#= Whether `a` and `b` compile to the same executable. A rebuilt sampler may carry an
+equal `cholM` in a new object, so that compares by value. Only the triangle `uplo`
+names is set: `cholesky` leaves the other one uninitialized. =#
+function _same_iteration(a::DEERIteration, b::DEERIteration)
+    return all(fieldnames(DEERIteration)) do f
+        x, y = getfield(a, f), getfield(b, f)
+        return f === :cholM ? _same_cholM(x, y) : isequal(x, y)
+    end
+end
+function _same_cholM(a, b)
+    a === b && return true
+    (a === nothing || b === nothing) && return false
+    return _host_cholesky(a).U == _host_cholesky(b).U
 end
 
 # Returns `S_new` and `[Δ_max, S_max]`, one download for the convergence test.
@@ -320,9 +365,8 @@ function (it::DEERIteration)(S, s0, Xi, U, seed)
     return S_new, maxima, probe_rng.seed
 end
 
-struct ReactantDEERSolver{I,M,C,S,X}
+struct ReactantDEERSolver{I,C,S,X}
     iteration::I
-    cholM::M
     compiled::C
     stages::S
     template::X
@@ -336,34 +380,47 @@ function ParallelMCMC._mala_deer_workspace(
     sampler.jacobian === :stoch_diag ||
         return ParallelMCMC._mala_deer_workspace(nothing, model, sampler, x0, old)
     FP = typeof(sampler.epsilon)
-    template = similar(x0, FP, 0, 0)
-    if old isa ReactantDEERSolver &&
-        old.iteration.evaluator === evaluator &&
-        isequal(_settings(old.iteration), _settings(sampler)) &&
-        old.D == length(x0) &&
-        typeof(old.template) == typeof(template) &&
-        (old.cholM === sampler.cholM || _same_cholM(old.iteration.cholM, sampler.cholM))
-        return old
-    end
-    iteration = DEERIteration(evaluator, sampler)
-
     D, T = length(x0), sampler.T
-    S0 = similar(x0, FP, D, T)
-    s0 = similar(x0, FP)
-    templates = (S0, s0, similar(S0), similar(s0, T))
-    _warn_reactant_host_roundtrip(x0)
-    stages = map(_in_stage, templates)
-    inputs = map(_upload, templates, stages)
-    seed = Reactant.to_rarray(zeros(UInt64, 2))
-    compiled = try
-        _compile_full_precision(iteration, inputs..., seed)
-    finally
-        foreach(_free!, inputs)
-        _free!(seed)
+    template = similar(x0, FP, 0, 0)
+    iteration = DEERIteration(evaluator, sampler)
+    function fits(s)
+        return s isa ReactantDEERSolver &&
+               s.D == D &&
+               typeof(s.template) == typeof(template) &&
+               _same_iteration(s.iteration, iteration)
     end
-    return ReactantDEERSolver(
-        iteration, sampler.cholM, compiled, stages, template, D, _reactant_client_platform()
-    )
+    fits(old) && return old
+
+    S0 = similar(x0, FP, D, T)
+    s0 = similar(x0, FP, D)
+    templates = (S0, s0, similar(S0), similar(s0, T))
+    platform = _reactant_client_platform()
+    # Each solver has its own stages, so chains sharing an executable never share them.
+    function with_stages(compiled)
+        stages = map(_in_stage, templates)
+        return ReactantDEERSolver(iteration, compiled, stages, template, D, platform)
+    end
+    function compile()
+        seed = Reactant.to_rarray(zeros(UInt64, 2))
+        return _compile(_on_host(iteration), templates, seed)
+    end
+
+    cache = ParallelMCMC.SAMPLE_CACHE[]
+    cache === nothing && return with_stages(compile())
+    return lock(cache.lock) do
+        i = findfirst(fits, cache.entries)
+        i === nothing || return with_stages(cache.entries[i].compiled)
+        solver = with_stages(compile())
+        push!(cache.entries, solver)
+        return solver
+    end
+end
+
+# x0 in every column, filled on the host since the upload starts there anyway.
+function _upload_filled(stage, s0::Vector, T::Int)
+    S = stage === nothing ? similar(s0, length(s0), T) : stage
+    S .= s0
+    return Reactant.to_rarray(S)
 end
 
 function ParallelMCMC._solve_mala_block(
@@ -378,36 +435,31 @@ function ParallelMCMC._solve_mala_block(
     warn::Bool=true,
 )
     # Later blocks start from the downloaded trajectory, whose eltype can differ from x0's.
-    FP = eltype(Xi)
-    S0 = similar(Xi)
-    S0 .= x0
-    s0 = similar(Xi, FP, length(x0))
-    s0 .= x0
-    s0_r, Xi_r, U_r = map(_upload, (s0, Xi, U), ws.stages[2:4])
-    S = _upload(S0, ws.stages[1])
-    S_last = Ref{Any}(S)  # newest trajectory, so the error path frees it too
-    S_spare = nothing
-    seed = Ref(Reactant.to_rarray(rand(rng, UInt64, 2)))
+    s0 = convert(Vector{eltype(Xi)}, Array(x0))
+    #= Every XLA buffer of the block, freed on any exit. Seeds wait until then: the RNG
+    updates its seed in place, so a new seed may wrap the old one's buffer. =#
+    owned = Any[]
+    own(x) = (push!(owned, x); x)
     try
+        s0_r = own(_upload(s0, ws.stages[2]))
+        Xi_r = own(_upload(Xi, ws.stages[3]))
+        U_r = own(_upload(U, ws.stages[4]))
+        S = own(_upload_filled(ws.stages[1], s0, size(Xi, 2)))
+        seed = Ref(own(Reactant.to_rarray(rand(rng, UInt64, 2))))
         step = function (S_old, S_in)
             _free!(S_old)
-            S_next, maxima, seed_next = ws.compiled(S_in, s0_r, Xi_r, U_r, seed[])
-            S_last[] = S_next
-            # The RNG updates its seed in place, so `seed_next` may wrap the old seed's buffer.
-            Reactant.get_buffer(seed_next) === Reactant.get_buffer(seed[]) ||
-                _free!(seed[])
-            seed[] = seed_next
+            S_next, maxima, seed[] = map(own, ws.compiled(S_in, s0_r, Xi_r, U_r, seed[]))
             Δ_max, S_max = Array(maxima)
             _free!(maxima)
             return S_next, Δ_max, S_max
         end
-        S, S_spare, converged, _, metric = DEER._deer_loop(
+        S, _, converged, _, metric = DEER._deer_loop(
             step, S, nothing, sampler.tol_abs, sampler.tol_rel, sampler.maxiter
         )
         warn && !converged && DEER._warn_not_converged(sampler.maxiter, metric)
         return _download(ws.template, S, ws.platform), converged
     finally
-        foreach(_free!, (s0_r, Xi_r, U_r, seed[], S_last[], S_spare))
+        foreach(_free!, owned)
     end
 end
 

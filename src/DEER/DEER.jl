@@ -634,6 +634,14 @@ function deer_update(
     return S_out
 end
 
+function _check_solve_args(maxiter, tol_abs, tol_rel, damping)
+    maxiter ≥ 1 || throw(ArgumentError("maxiter must be ≥ 1"))
+    tol_abs ≥ 0 || throw(ArgumentError("tol_abs must be ≥ 0"))
+    tol_rel ≥ 0 || throw(ArgumentError("tol_rel must be ≥ 0"))
+    damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
+    return nothing
+end
+
 # `step(S_spare, S) -> (S_next, Δ_max, S_max)` may write into or free `S_spare`.
 function _deer_loop(step, S, S_spare, tol_abs, tol_rel, maxiter::Int)
     converged = false
@@ -716,10 +724,7 @@ function solve(
     D = length(s0)
     T = length(rec.tape)
 
-    maxiter ≥ 1 || throw(ArgumentError("maxiter must be ≥ 1"))
-    tol_abs ≥ 0 || throw(ArgumentError("tol_abs must be ≥ 0"))
-    tol_rel ≥ 0 || throw(ArgumentError("tol_rel must be ≥ 0"))
-    damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
+    _check_solve_args(maxiter, tol_abs, tol_rel, damping)
     _depwarn_damping(damping, :solve)
     _check_jacobian_modifiers(jacobian_damping, jacobian_clip)
 

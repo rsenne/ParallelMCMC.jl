@@ -7,6 +7,7 @@ using FlexiChains
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 using Random
+using ScopedValues: ScopedValue, with
 using Statistics
 
 const DI = DifferentiationInterface

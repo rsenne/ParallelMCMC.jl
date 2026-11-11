@@ -39,6 +39,10 @@ hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
     s3 = @test_deprecated ParallelMALASampler(0.1; damping=0.8, backend=_AD)
     @test s3.damping == 0.8
     @test_throws ArgumentError ParallelMALASampler(0.1; jacobian=:full, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; maxiter=0, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; tol_abs=-1, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; tol_rel=-1, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; damping=0, backend=_AD)
 end
 
 @testset "ParallelMALASampler initial step" begin

@@ -58,13 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - With `AutoReactant()` batched derivatives, `ParallelMALASampler` compiles a
   whole DEER iteration into one XLA executable and keeps the trajectory on the
-  device during a block. It compiles once per chain, and again if the step
-  size, mass matrix or Jacobian options change. Before, each iteration made six
+  device during a block. It compiles once per `sample` call, shared by the
+  chains of an `MCMCThreads` or `MCMCSerial` call, and again if the step size,
+  mass matrix or Jacobian options change. Before, each iteration made six
   separate model calls. On a German Credit-sized logistic regression
   (N = 1000, D = 25, T = 64 000) on GPU, a block solve's median time drops from
-  about 270 ms to about 140 ms. The probes now come from Reactant's random
+  about 250 ms to about 125 ms. The probes now come from Reactant's random
   number generator, so these chains differ from earlier releases after the
   first block (#86).
+- `AutoReactant()` derivatives compile on their first call instead of when the
+  model is prepared, so `ParallelMALASampler` no longer compiles the
+  derivatives its compiled DEER iteration replaces (#86).
+- `ParallelMALASampler` checks `maxiter`, `tol_abs`, `tol_rel` and `damping`
+  when it is constructed, not at the first DEER solve (#86).
 - `DEER.TapedRecursion`'s last type parameter is now the tape's type instead of
   its element type, so methods that dispatch on that parameter need updating
   (#86).

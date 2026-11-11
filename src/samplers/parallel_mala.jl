@@ -71,6 +71,8 @@ function ParallelMALASampler(
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
     (jacobian === :stoch_diag || jacobian === :diag) ||
         throw(ArgumentError("jacobian must be :stoch_diag or :diag"))
+    # Checked here too: compiled DEER solves (ReactantExt) skip `DEER.solve`.
+    DEER._check_solve_args(maxiter, tol_abs, tol_rel, damping)
     DEER._check_jacobian_modifiers(jacobian_damping, jacobian_clip)
     DEER._depwarn_damping(damping, :ParallelMALASampler)
     eps_f = float(epsilon)
@@ -263,6 +265,16 @@ function _deer_solve_new_tape(
     S, converged = _solve_mala_block(ws, rng, model, sampler, x0, tape, Xi, U; warn=warn)
     return S, tape, ws, converged
 end
+
+#= Workspaces the chains of one ensemble `sample` call can share, such as compiled
+executables (ReactantExt). It lives for one call only, so the next call compiles again
+and picks up captured data mutated in between. =#
+struct SampleCache
+    lock::ReentrantLock
+    entries::Vector{Any}
+end
+SampleCache() = SampleCache(ReentrantLock(), Any[])
+const SAMPLE_CACHE = ScopedValue{Union{Nothing,SampleCache}}(nothing)
 
 #= Returns `old` if it still fits, else a new workspace. Extensions return their own
 workspace, with a `_solve_mala_block` method, for the fused models they compile. =#
