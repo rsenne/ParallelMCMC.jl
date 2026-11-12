@@ -84,14 +84,18 @@ end
 """
 A [`DensityModel`](@ref) whose AD backends have been resolved to callables.
 `source` prevents a cached preparation from being reused with another model.
+
+`value_grad_hvp_batch` is a traceable `(X, V) -> (logp, grad, Hv)` evaluator that
+an extension compiles into whole DEER iterations, or `nothing`.
 """
-struct PreppedDensityModel{F,G,H,FB,GB,HB,PN,SM<:DensityModel}
+struct PreppedDensityModel{F,G,H,FB,GB,HB,VB,PN,SM<:DensityModel}
     logdensity::F
     grad_logdensity::G
     hvp::H
     logdensity_batch::FB
     grad_logdensity_batch::GB
     hvp_batch::HB
+    value_grad_hvp_batch::VB
     dim::Int
     param_names::PN
     source::SM
@@ -166,6 +170,26 @@ function _resolve_gradient_batch(
     return _reactant_resolve_gradient_batch(logdensity_batch, backend, X_template)
 end
 function _reactant_resolve_gradient_batch(logdensity_batch, backend, X_template)
+    return error(_REACTANT_LOAD_HINT)
+end
+
+# Reactant only: compiled into whole DEER iterations by ReactantExt (#86).
+function _resolve_value_grad_hvp_batch(
+    logdensity_batch, grad_batch_backend, hvp_batch_backend, X_template
+)
+    return nothing
+end
+function _resolve_value_grad_hvp_batch(
+    logdensity_batch,
+    ::ADTypes.AutoReactant,
+    hvp_batch_backend::ADTypes.AutoReactant,
+    X_template::AbstractMatrix,
+)
+    return _reactant_resolve_value_grad_hvp_batch(
+        logdensity_batch, hvp_batch_backend, X_template
+    )
+end
+function _reactant_resolve_value_grad_hvp_batch(logdensity_batch, backend, X_template)
     return error(_REACTANT_LOAD_HINT)
 end
 
@@ -283,6 +307,7 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector)
         model.logdensity_batch,
         nothing,
         nothing,
+        nothing,
         model.dim,
         model.param_names,
         model,
@@ -336,6 +361,7 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
     grad_batch_backend = grad_batch isa AbstractADType ? grad_batch : nothing
 
     hvp_batch = model.hvp_batch
+    value_grad_hvp_batch = nothing
     batch_active = model.logdensity_batch !== nothing && grad_batch !== nothing
 
     if batch_active
@@ -377,6 +403,9 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
                 hvp_batch_backend,
                 X_template,
             )
+            value_grad_hvp_batch = _resolve_value_grad_hvp_batch(
+                model.logdensity_batch, grad_batch_backend, hvp_batch_backend, X_template
+            )
         end
     elseif hvp_batch !== nothing
         # Do not silently ignore an explicitly supplied HVP.
@@ -394,6 +423,7 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
         model.logdensity_batch,
         grad_batch,
         hvp_batch,
+        value_grad_hvp_batch,
         model.dim,
         model.param_names,
         model,

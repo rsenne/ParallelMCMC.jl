@@ -59,10 +59,20 @@ jobs:
 
       - name: Run Reactant tests
         run: |
-          julia --project=test -e '
+          julia --code-coverage=@"$PWD" --project=test -e '
             using Test
             @testset verbose=true "Reactant" begin
                 include("test/test-Reactant-Validation.jl")
                 include("test/test-Reactant-HVP.jl")
             end
           '
+
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src,ext
+
+      - uses: codecov/codecov-action@v7
+        with:
+          file: lcov.info
+          flags: reactant
+          token: ${{ secrets.CODECOV_TOKEN }}

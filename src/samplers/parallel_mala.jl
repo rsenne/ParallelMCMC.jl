@@ -71,6 +71,8 @@ function ParallelMALASampler(
     epsilon > 0 || throw(ArgumentError("epsilon must be > 0, got $epsilon"))
     (jacobian === :stoch_diag || jacobian === :diag) ||
         throw(ArgumentError("jacobian must be :stoch_diag or :diag"))
+    # Checked here too: compiled DEER solves (ReactantExt) skip `DEER.solve`.
+    DEER._check_solve_args(maxiter, tol_abs, tol_rel, damping)
     DEER._check_jacobian_modifiers(jacobian_damping, jacobian_clip)
     DEER._depwarn_damping(damping, :ParallelMALASampler)
     eps_f = float(epsilon)
@@ -223,31 +225,26 @@ function _build_mala_deer_rec(
 
             X_template = similar(x0_like, D, T)
             fill!(X_template, zero(eltype(X_template)))
-            batch_ws = MALA.MALABatchedWorkspace(X_template)
-            FT = similar(X_template)
-            Jt = similar(X_template)
-            hvp_batch = model.hvp_batch
-
-            (Xbar, Z) -> MALA.mala_step_batched_fwd_and_jvp!(
-                FT,
-                Jt,
-                batch_ws,
-                model.logdensity_batch,
-                model.grad_logdensity_batch,
-                hvp_batch,
-                Xbar,
-                ε,
-                Xi,
-                U,
-                Z;
-                cholM=cholM,
+            evaluator = MALA.SeparateBatchEval(
+                model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
             )
+            _mala_batched_fwd_and_jvp(X_template, evaluator, ε, Xi, U, cholM)
         else
             nothing
         end
 
     return DEER.TapedRecursion(
         step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp, fwd_and_jvp_batch=fwd_and_jvp_batch
+    )
+end
+
+# `(Xbar, Z) -> (FT, Jt)` for DEER's batched path, also traced by ReactantExt.
+function _mala_batched_fwd_and_jvp(X_template, evaluator, ε, Xi, U, cholM)
+    batch_ws = MALA.MALABatchedWorkspace(X_template)
+    FT = similar(X_template)
+    Jt = similar(X_template)
+    return (Xbar, Z) -> MALA._mala_step_batched_fwd_and_jvp!(
+        FT, Jt, batch_ws, evaluator, Xbar, ε, Xi, U, Z; cholM=cholM
     )
 end
 
@@ -264,7 +261,42 @@ function _deer_solve_new_tape(
     FP = typeof(sampler.epsilon)
 
     tape, Xi, U = _make_mala_tape_block(rng, x0, FP, D, T)
+    ws = _mala_deer_workspace(model, sampler, x0, workspace)
+    S, converged = _solve_mala_block(ws, rng, model, sampler, x0, tape, Xi, U; warn=warn)
+    return S, tape, ws, converged
+end
 
+#= Workspaces the chains of one ensemble `sample` call can share, such as compiled
+executables (ReactantExt). It lives for one call only, so the next call compiles again
+and picks up captured data mutated in between. =#
+struct SampleCache
+    lock::ReentrantLock
+    entries::Vector{Any}
+end
+SampleCache() = SampleCache(ReentrantLock(), Any[])
+const SAMPLE_CACHE = ScopedValue{Union{Nothing,SampleCache}}(nothing)
+
+#= Returns `old` if it still fits, else a new workspace. Extensions return their own
+workspace, with a `_solve_mala_block` method, for the fused models they compile. =#
+function _mala_deer_workspace(model::PreppedDensityModel, sampler, x0, old)
+    return _mala_deer_workspace(model.value_grad_hvp_batch, model, sampler, x0, old)
+end
+function _mala_deer_workspace(_, model, sampler::ParallelMALASampler, x0, old)
+    old isa DEER.DEERWorkspace && size(old.A) == (model.dim, sampler.T) && return old
+    return DEER.DEERWorkspace(x0, sampler.T)
+end
+
+function _solve_mala_block(
+    ws::DEER.DEERWorkspace,
+    rng::Random.AbstractRNG,
+    model::PreppedDensityModel,
+    sampler::ParallelMALASampler,
+    x0::AbstractVector,
+    tape,
+    Xi,
+    U;
+    warn::Bool=true,
+)
     rec = _build_mala_deer_rec(
         model,
         sampler.epsilon,
@@ -274,8 +306,6 @@ function _deer_solve_new_tape(
         tape_noise=Xi,
         tape_uniforms=U,
     )
-
-    ws = workspace === nothing ? DEER.DEERWorkspace(x0, T) : workspace
 
     S, info = DEER.solve(
         rec,
@@ -294,7 +324,7 @@ function _deer_solve_new_tape(
         warn=warn,
         return_info=true,
     )
-    return S, tape, ws, info.converged
+    return S, info.converged
 end
 
 function _trajectory_logps(model::PreppedDensityModel, S::AbstractMatrix)

@@ -574,6 +574,55 @@ function mala_step_batched_fwd_and_jvp!(
     Z::AbstractMatrix;
     cholM=nothing,
 )
+    return _mala_step_batched_fwd_and_jvp!(
+        FT,
+        Jt,
+        ws,
+        SeparateBatchEval(logp_batch, gradlogp_batch, hvp_batch),
+        X,
+        ε,
+        Ξ,
+        u,
+        Z;
+        cholM=cholM,
+    )
+end
+
+struct SeparateBatchEval{F,G,H}
+    logp_batch::F
+    gradlogp_batch::G
+    hvp_batch::H
+end
+
+function _value_grad_hvp!(lp, G, Hv, value_grad_hvp_batch, X, V)
+    lp_X, G_X, Hv_X = value_grad_hvp_batch(X, V)
+    copyto!(lp, lp_X)
+    copyto!(G, G_X)
+    copyto!(Hv, Hv_X)
+    return nothing
+end
+
+#= Copy each result before the next call: hand-written batched functions often
+return a buffer that the next call overwrites. =#
+function _value_grad_hvp!(lp, G, Hv, e::SeparateBatchEval, X, V)
+    copyto!(G, e.gradlogp_batch(X))
+    copyto!(lp, e.logp_batch(X))
+    copyto!(Hv, e.hvp_batch(X, V))
+    return nothing
+end
+
+function _mala_step_batched_fwd_and_jvp!(
+    FT::AbstractMatrix,
+    Jt::AbstractMatrix,
+    ws::MALABatchedWorkspace,
+    value_grad_hvp_batch,
+    X::AbstractMatrix,
+    ε::Real,
+    Ξ::AbstractMatrix,
+    u::AbstractVector,
+    Z::AbstractMatrix;
+    cholM=nothing,
+)
     D, T = size(X)
     size(Ξ) == (D, T) || throw(DimensionMismatch("X and Ξ must have the same size"))
     size(Z) == (D, T) || throw(DimensionMismatch("X and Z must have the same size"))
@@ -584,17 +633,19 @@ function mala_step_batched_fwd_and_jvp!(
     εT = convert(eltype(X), ε)
     oneT = one(eltype(X))
 
-    copyto!(ws.G_X, gradlogp_batch(X))
+    _value_grad_hvp!(ws.lp_X, ws.G_X, ws.Hv_X, value_grad_hvp_batch, X, Z)
     _apply_M_batched!(ws.MG_X, ws.G_X, cholM, ws.solve_tmp)
     _apply_L_batched!(ws.LΞ, Ξ, cholM)
     @. ws.Y = X + εT * ws.MG_X + sqrt(2 * εT) * ws.LΞ
 
-    copyto!(ws.lp_X, logp_batch(X))
-    copyto!(ws.lp_Y, logp_batch(ws.Y))
-    copyto!(ws.G_Y, gradlogp_batch(ws.Y))
+    _apply_M_batched!(ws.M_Hv_X, ws.Hv_X, cholM, ws.solve_tmp)
+    @. ws.W = Z + εT * ws.M_Hv_X
 
-    logq_mala_batched!(ws.lq_YX, ws, ws.Y, X, ws.G_X, εT; cholM=cholM)
-    logq_mala_batched!(ws.lq_XY, ws, X, ws.Y, ws.G_Y, εT; cholM=cholM)
+    _value_grad_hvp!(ws.lp_Y, ws.G_Y, ws.Hv_Y, value_grad_hvp_batch, ws.Y, ws.W)
+
+    # `ε`, not `εT`: under Reactant tracing `εT` is a traced number, not a `Real`.
+    logq_mala_batched!(ws.lq_YX, ws, ws.Y, X, ws.G_X, ε; cholM=cholM)
+    logq_mala_batched!(ws.lq_XY, ws, X, ws.Y, ws.G_Y, ε; cholM=cholM)
 
     @. ws.logα = (ws.lp_Y + ws.lq_XY) - (ws.lp_X + ws.lq_YX)
     @. ws.logu = log(u)
@@ -603,11 +654,6 @@ function mala_step_batched_fwd_and_jvp!(
     copyto!(ws.accepted_row, ws.accepted)
     @. FT = ifelse(ws.accepted_row, ws.Y, X)
 
-    copyto!(ws.Hv_X, hvp_batch(X, Z))
-    _apply_M_batched!(ws.M_Hv_X, ws.Hv_X, cholM, ws.solve_tmp)
-    @. ws.W = Z + εT * ws.M_Hv_X
-
-    copyto!(ws.Hv_Y, hvp_batch(ws.Y, ws.W))
     _apply_M_batched!(ws.MG_Y, ws.G_Y, cholM, ws.solve_tmp)
     _apply_M_batched!(ws.M_Hv_Y, ws.Hv_Y, cholM, ws.solve_tmp)
     @. ws.R = X - ws.Y - εT * ws.MG_Y

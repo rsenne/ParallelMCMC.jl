@@ -39,6 +39,10 @@ hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
     s3 = @test_deprecated ParallelMALASampler(0.1; damping=0.8, backend=_AD)
     @test s3.damping == 0.8
     @test_throws ArgumentError ParallelMALASampler(0.1; jacobian=:full, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; maxiter=0, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; tol_abs=-1, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; tol_rel=-1, backend=_AD)
+    @test_throws ArgumentError ParallelMALASampler(0.1; damping=0, backend=_AD)
 end
 
 @testset "ParallelMALASampler initial step" begin
@@ -154,6 +158,37 @@ end
 
     @test FT_ad ≈ FT_ref atol = 1e-10 rtol = 1e-10
     @test Jt_ad ≈ Jt_ref atol = 1e-10 rtol = 1e-10
+end
+
+@testset "batched step from one value-gradient-HVP call matches three calls" begin
+    rng = MersenneTwister(86)
+    D, T = 3, 7
+    ε = 0.05
+    logp_b(X) = vec(sum(@. -0.5 * X^2 - 0.1 * X^4; dims=1))
+    grad_b(X) = @. -X - 0.4 * X^3
+    hvp_b(X, V) = @. (-1 - 1.2 * X^2) * V
+    ncalls = Ref(0)
+    fused = (X, V) -> (ncalls[] += 1; (logp_b(X), grad_b(X), hvp_b(X, V)))
+
+    X = randn(rng, D, T)
+    Z = randn(rng, D, T)
+    Ξ = randn(rng, D, T)
+    U = rand(rng, T)
+    L = [1.0 0 0; 0.3 0.8 0; -0.2 0.1 1.2]
+    for cholM in (nothing, cholesky(Symmetric(L * L')))
+        ws = ParallelMCMC.MALA.MALABatchedWorkspace(X)
+        FT, Jt = similar(X), similar(X)
+        ncalls[] = 0
+        ParallelMCMC.MALA._mala_step_batched_fwd_and_jvp!(
+            FT, Jt, ws, fused, X, ε, Ξ, U, Z; cholM=cholM
+        )
+        @test ncalls[] == 2
+        FT_ref, Jt_ref = ParallelMCMC.MALA.mala_step_batched_fwd_and_jvp(
+            logp_b, grad_b, hvp_b, X, ε, Ξ, U, Z; cholM=cholM
+        )
+        @test FT == FT_ref
+        @test Jt == Jt_ref
+    end
 end
 
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin
