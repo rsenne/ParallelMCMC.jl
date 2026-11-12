@@ -9,14 +9,18 @@ coverage:
         target: 90%
   range: "80...90" # Yellow within this range
 
+# A commit without a Reactant CI run (path filter) or a local GPU run
+# (ci/gpu-coverage.sh) reuses the last upload for that flag.
+flags:
+  reactant:
+    carryforward: true
+  gpu:
+    carryforward: true
+
 # ext/EnzymeExt.jl holds custom EnzymeRules (forward/augmented_primal/reverse).
 # Enzyme runs those rule bodies through its own compiled derivative pipeline,
 # which does not emit Julia's --code-coverage line counters, so they report as
 # uncovered even though test-Owned-Matmul.jl exercises them and asserts correct
 # numerics.
-
-# ext/CUDAExt.jl is a two-line trait shim whose only statement,
-# `needs_host_staging(::CuArray) = true`, cannot run without a physical GPU, so we drop
 ignore:
   - "ext/EnzymeExt.jl"
-  - "ext/CUDAExt.jl"
