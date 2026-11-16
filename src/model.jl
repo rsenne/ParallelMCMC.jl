@@ -1,5 +1,5 @@
 """
-    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp, hvp_batch)
+    DensityModel(logdensity, grad_logdensity, dim; param_names, logdensity_batch, grad_logdensity_batch, hvp, hvp_batch, value_grad_hvp_batch)
 
 Wrap a log-density and its derivatives for ParallelMCMC samplers.
 
@@ -25,22 +25,29 @@ log-density. An explicit `SecondOrder` also bypasses the gradient slot.
   backend.
 - `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend,
   resolved like `hvp`.
+- `value_grad_hvp_batch` — optional callable `(X, V) -> (logp, grad, Hv)` that
+  returns the batched log-density, gradient and HVP from one call. It replaces
+  `grad_logdensity_batch` and `hvp_batch` in [`ParallelMALASampler`](@ref)'s
+  batched DEER step, so work the three share, such as `X' * B` in a GLM, is done
+  once per state. It must be a callable and requires `logdensity_batch`.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional collection of parameter names used in `FlexiChains` output. If
   `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
   See the [`Parameter names`](@ref parameter-names) section of the docs for more
   information.
 
-Both batched derivative slots require `logdensity_batch`. `AutoReactant()` has
+All batched derivative slots require `logdensity_batch`. `value_grad_hvp_batch`
+cannot be combined with `grad_logdensity_batch` or `hvp_batch`. `AutoReactant()` has
 additional pairing and tracing constraints; see the GPU guide.
 """
-struct DensityModel{F,G,H,FB,GB,HB,PN} <: AbstractMCMC.AbstractModel
+struct DensityModel{F,G,H,FB,GB,HB,VB,PN} <: AbstractMCMC.AbstractModel
     logdensity::F
     grad_logdensity::G
     hvp::H
     logdensity_batch::FB
     grad_logdensity_batch::GB
     hvp_batch::HB
+    value_grad_hvp_batch::VB
     dim::Int
     param_names::PN
 end
@@ -54,6 +61,7 @@ function DensityModel(
     logdensity_batch=nothing,
     grad_logdensity_batch=nothing,
     hvp_batch=nothing,
+    value_grad_hvp_batch=nothing,
 )
     logdensity isa AbstractADType &&
         throw(ArgumentError("logdensity must be callable, not an AD backend"))
@@ -68,6 +76,17 @@ function DensityModel(
     if logdensity_batch === nothing
         grad_logdensity_batch === nothing || _batch_needs_logp("grad_logdensity_batch")
         hvp_batch === nothing || _batch_needs_logp("hvp_batch")
+        value_grad_hvp_batch === nothing || _batch_needs_logp("value_grad_hvp_batch")
+    end
+    if value_grad_hvp_batch !== nothing
+        value_grad_hvp_batch isa AbstractADType &&
+            throw(ArgumentError("value_grad_hvp_batch must be callable, not an AD backend"))
+        (grad_logdensity_batch === nothing && hvp_batch === nothing) || throw(
+            ArgumentError(
+                "value_grad_hvp_batch replaces grad_logdensity_batch and hvp_batch; " *
+                "supply one or the other",
+            ),
+        )
     end
     return DensityModel(
         logdensity,
@@ -76,6 +95,7 @@ function DensityModel(
         logdensity_batch,
         grad_logdensity_batch,
         hvp_batch,
+        value_grad_hvp_batch,
         dim,
         param_names,
     )
@@ -85,8 +105,9 @@ end
 A [`DensityModel`](@ref) whose AD backends have been resolved to callables.
 `source` prevents a cached preparation from being reused with another model.
 
-`value_grad_hvp_batch` is a traceable `(X, V) -> (logp, grad, Hv)` evaluator that
-an extension compiles into whole DEER iterations, or `nothing`.
+`value_grad_hvp_batch` is the model's fused `(X, V) -> (logp, grad, Hv)` callable,
+ReactantExt's traceable evaluator that it compiles into whole DEER iterations, or
+`nothing`.
 """
 struct PreppedDensityModel{F,G,H,FB,GB,HB,VB,PN,SM<:DensityModel}
     logdensity::F
@@ -173,7 +194,8 @@ function _reactant_resolve_gradient_batch(logdensity_batch, backend, X_template)
     return error(_REACTANT_LOAD_HINT)
 end
 
-# Reactant only: compiled into whole DEER iterations by ReactantExt (#86).
+# Only Reactant derives a fused evaluator, which ReactantExt compiles into whole DEER
+# iterations (#86).
 function _resolve_value_grad_hvp_batch(
     logdensity_batch, grad_batch_backend, hvp_batch_backend, X_template
 )
@@ -354,14 +376,17 @@ function _prepare_model(model::DensityModel, x_template::AbstractVector, T::Int,
         model.hvp
     end
 
+    # A fused evaluator stands in for the batched gradient and HVP, so derive neither.
+    value_grad_hvp_batch = model.value_grad_hvp_batch
     grad_batch = model.grad_logdensity_batch
-    if grad_batch === nothing && model.logdensity_batch !== nothing
+    if grad_batch === nothing &&
+        model.logdensity_batch !== nothing &&
+        value_grad_hvp_batch === nothing
         grad_batch = grad_backend
     end
     grad_batch_backend = grad_batch isa AbstractADType ? grad_batch : nothing
 
     hvp_batch = model.hvp_batch
-    value_grad_hvp_batch = nothing
     batch_active = model.logdensity_batch !== nothing && grad_batch !== nothing
 
     if batch_active

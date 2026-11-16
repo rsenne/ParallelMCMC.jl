@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEER.solve` scale and clip the diagonal Jacobian estimate before each DEER
   step, as in Zoltowski et al. (2025, App. B). They stabilise DEER for
   multimodal targets and large step sizes (#19).
+- `DensityModel` takes an optional `value_grad_hvp_batch`, a callable
+  `(X, V) -> (logp, grad, Hv)` that replaces `grad_logdensity_batch` and
+  `hvp_batch`. `ParallelMALASampler` then makes two batched model calls per DEER
+  iteration instead of six, and a model can share work such as `X * B` between
+  the three. The `LogDensityProblems` constructor forwards it (#86).
 - `DEER.solve` warns when it reaches `maxiter` without converging; pass
   `warn=false` to silence it. `ParallelMALASampler` warns once per run with the
   number of blocks that did not converge (#78).

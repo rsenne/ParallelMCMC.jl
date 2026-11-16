@@ -12,8 +12,7 @@ using .DEERScan
 
 const DI = DifferentiationInterface
 
-export TapedRecursion,
-    DEERWorkspace, deer_update!, deer_update, solve, _prepare_hvp, _hvp_prepared, _hvp_nopre
+export TapedRecursion, DEERWorkspace, deer_update!, deer_update, solve
 
 """
 Deterministic recursion driven by a pre-generated tape.

@@ -5,7 +5,8 @@ using LogDensityProblems: LogDensityProblems
 
 """
     DensityModel(ld; param_names=nothing, hvp=nothing,
-                 logdensity_batch=nothing, grad_logdensity_batch=nothing, hvp_batch=nothing)
+                 logdensity_batch=nothing, grad_logdensity_batch=nothing, hvp_batch=nothing,
+                 value_grad_hvp_batch=nothing)
 
 Construct a `DensityModel` from any object implementing the
 [LogDensityProblems](https://github.com/tpapp/LogDensityProblems.jl) interface.
@@ -55,6 +56,7 @@ function ParallelMCMC.DensityModel(
     logdensity_batch=nothing,
     grad_logdensity_batch=nothing,
     hvp_batch=nothing,
+    value_grad_hvp_batch=nothing,
 )
     caps = LogDensityProblems.capabilities(ld)
     caps isa LogDensityProblems.LogDensityOrder{0} && error(
@@ -76,6 +78,7 @@ function ParallelMCMC.DensityModel(
         logdensity_batch=logdensity_batch,
         grad_logdensity_batch=grad_logdensity_batch,
         hvp_batch=hvp_batch,
+        value_grad_hvp_batch=value_grad_hvp_batch,
     )
 end
 

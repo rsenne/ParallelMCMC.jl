@@ -262,6 +262,11 @@ function DEER._make_hvp_batch_fn(
     return _lazy_compiled(core, X_template, X_template)
 end
 
+# Outside a compiled iteration (`jacobian=:diag`), use the compiled separate slots.
+function ParallelMCMC._batch_evaluator(::ValueGradHVPBatch, model)
+    return ParallelMCMC._batch_evaluator(nothing, model)
+end
+
 function ParallelMCMC._reactant_resolve_value_grad_hvp_batch(
     logdensity_batch, backend::AutoReactant, X_template::AbstractMatrix
 )
