@@ -45,7 +45,7 @@ to look at that buffer has to run the compiled function itself. Returns the
 uploaded inputs too, since they have to be freed alongside the output. Prepared
 slots compile on first call; `_force!` compiles them here. =#
 function _run_compiled(call, args...)
-    inputs = map(REACTANT_EXT._upload, args, call.stages)
+    inputs = REACTANT_EXT._upload_all(args, call.stages)
     return inputs, call.compiled(inputs...)
 end
 
@@ -497,6 +497,22 @@ end
         @test_throws DimensionMismatch m_p.grad_logdensity(
             StagedArray(randn(rng, Float32, D_R - 1))
         )
+        # `copyto!` into the stage would otherwise narrow Float64 to Float32 silently.
+        @test_throws ArgumentError m_p.grad_logdensity(StagedArray(randn(rng, D_R)))
+        # A bad second argument fails, and the first one's upload is freed.
+        @test_throws DimensionMismatch m_p.hvp(x1, StagedArray(randn(rng, Float32, D_R - 1)))
+        @test_throws ArgumentError m_p.hvp(x1, StagedArray(randn(rng, D_R)))
+        @test_throws ArgumentError m_p.grad_logdensity(x1, v1)
+        @test m_p.hvp(x1, v1).data ≈ Hv1.data
+        #= Widening is lossless, so a narrower input is accepted. ParallelMALA relies
+        on this: it keeps a Float64 `initial_params` as given, so the slots compile
+        for Float64, then calls them on the Float32 trajectory of a Float32 ε. =#
+        x64 = StagedArray(Float64.(x1.data))
+        m_64 = ParallelMCMC._prepare_model(model, x64, 8, nothing)
+        g_w = m_64.grad_logdensity(x1)
+        @test g_w isa StagedArray{Float64,1}
+        @test g_w.data ≈ gradlogp_r(Float64.(x1.data))
+        @test m_64.hvp(x1, v1).data ≈ hvp_r(Float64.(x1.data), Float64.(v1.data))
 
         @testset "batched slots" begin
             T = 8
@@ -557,6 +573,38 @@ end
             GC.gc(true)
             @test collect(call(template)) == collect(template)
         end
+    end
+
+    @testset "a later argument failing to upload frees the earlier ones" begin
+        ext = REACTANT_EXT
+        rng = MersenneTwister(78)
+        x = StagedArray(randn(rng, Float32, D_R))
+        stages = (ext._in_stage(x), ext._in_stage(x))
+        bad = StagedArray(randn(rng, Float32, D_R - 1))
+        for _ in 1:20
+            # `_upload_all` has no up-front check, so this throws after `x` uploads.
+            @test_throws DimensionMismatch ext._upload_all((x, bad), stages)
+        end
+        GC.gc(true)
+        inputs = ext._upload_all((x, x), stages)
+        @test all(r -> Array(r) == x.data, inputs)
+        foreach(ext._free!, inputs)
+    end
+
+    #= Tasks sharing a prepared model share its stages; each must get its own result.
+    With one thread the tasks never interleave, so the test would pass without the
+    lock; CI runs this file with `--threads=2`. =#
+    Threads.nthreads() == 1 &&
+        @warn "Only one thread: the concurrent-call test cannot detect a stage race"
+    @testset "concurrent calls do not mix up staged inputs" begin
+        x0 = StagedArray(randn(MersenneTwister(79), Float32, D_R))
+        model = DensityModel(logp_r32, AutoReactant(), D_R)
+        grad = ParallelMCMC._prepare_model(model, x0).grad_logdensity
+        REACTANT_EXT._force!(grad)
+        xs = [StagedArray(fill(Float32(i), D_R)) for i in 1:64]
+        tasks = [Threads.@spawn grad(x) for x in xs]
+        gs = fetch.(tasks)
+        @test all(((x, g),) -> g.data ≈ gradlogp_r(x.data), zip(xs, gs))
     end
 
     @testset "a host-resident output declines the pointer path" begin
