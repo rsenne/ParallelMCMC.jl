@@ -197,7 +197,10 @@ function _build_mala_deer_rec(
         )
 
     fwd_and_jvp_batch =
-        if model.logdensity_batch !== nothing && model.grad_logdensity_batch !== nothing
+        if model.logdensity_batch !== nothing && (
+            model.grad_logdensity_batch !== nothing ||
+            model.value_grad_hvp_batch !== nothing
+        )
             D = length(x0_like)
             T = length(tape)
 
@@ -225,9 +228,14 @@ function _build_mala_deer_rec(
 
             X_template = similar(x0_like, D, T)
             fill!(X_template, zero(eltype(X_template)))
-            evaluator = MALA.SeparateBatchEval(
-                model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
-            )
+            # A model's own fused function excludes the batched gradient slot.
+            evaluator = if model.grad_logdensity_batch === nothing
+                model.value_grad_hvp_batch
+            else
+                MALA.SeparateBatchEval(
+                    model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
+                )
+            end
             _mala_batched_fwd_and_jvp(X_template, evaluator, ε, Xi, U, cholM)
         else
             nothing

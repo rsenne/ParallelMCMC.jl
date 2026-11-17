@@ -20,6 +20,9 @@ gradlogp_batch_deer(X) = -X
 logp_quartic_deer(x) = -0.5 * dot(x, x) - 0.1 * sum(abs2.(x) .^ 2)
 gradlogp_quartic_deer(x) = @. -x - 0.4 * x^3
 hvp_quartic_deer(x, v) = @. (-1 - 1.2 * x^2) * v
+logp_batch_quartic_deer(X) = vec(sum(@. -0.5 * X^2 - 0.1 * X^4; dims=1))
+gradlogp_batch_quartic_deer(X) = @. -X - 0.4 * X^3
+hvp_batch_quartic_deer(X, V) = @. (-1 - 1.2 * X^2) * V
 
 @testset "ParallelMALASampler construction" begin
     s = ParallelMALASampler(0.05; backend=_AD)
@@ -164,9 +167,9 @@ end
     rng = MersenneTwister(86)
     D, T = 3, 7
     ε = 0.05
-    logp_b(X) = vec(sum(@. -0.5 * X^2 - 0.1 * X^4; dims=1))
-    grad_b(X) = @. -X - 0.4 * X^3
-    hvp_b(X, V) = @. (-1 - 1.2 * X^2) * V
+    logp_b = logp_batch_quartic_deer
+    grad_b = gradlogp_batch_quartic_deer
+    hvp_b = hvp_batch_quartic_deer
     ncalls = Ref(0)
     fused = (X, V) -> (ncalls[] += 1; (logp_b(X), grad_b(X), hvp_b(X, V)))
 
@@ -189,6 +192,78 @@ end
         @test FT == FT_ref
         @test Jt == Jt_ref
     end
+end
+
+@testset "DensityModel value_grad_hvp_batch slot" begin
+    D, T = 3, 16
+    logp, gradlogp, hvp = logp_quartic_deer, gradlogp_quartic_deer, hvp_quartic_deer
+    logp_b = logp_batch_quartic_deer
+    grad_b = gradlogp_batch_quartic_deer
+    hvp_b = hvp_batch_quartic_deer
+    ncalls = Ref(0)
+    fused = (X, V) -> (ncalls[] += 1; (logp_b(X), grad_b(X), hvp_b(X, V)))
+
+    separate = DensityModel(
+        logp,
+        gradlogp,
+        D;
+        hvp=hvp,
+        logdensity_batch=logp_b,
+        grad_logdensity_batch=grad_b,
+        hvp_batch=hvp_b,
+    )
+    one_call = DensityModel(
+        logp, gradlogp, D; hvp=hvp, logdensity_batch=logp_b, value_grad_hvp_batch=fused
+    )
+    sampler = ParallelMALASampler(0.1; T=T)
+    x0 = [0.5, -0.3, 0.1]
+    run(m) = sample(
+        MersenneTwister(86),
+        m,
+        sampler,
+        3T;
+        initial_params=x0,
+        chain_type=Any,
+        progress=false,
+    )
+
+    ref = run(separate)
+    out = run(one_call)
+    @test ncalls[] > 0
+    @test [t.x for t in out] == [t.x for t in ref]
+    @test [t.logp for t in out] == [t.logp for t in ref]
+
+    # The fused slot stands in for both batched derivatives, even with an AD gradient.
+    m_ad = DensityModel(
+        logp, _AD, D; hvp=hvp, logdensity_batch=logp_b, value_grad_hvp_batch=fused
+    )
+    m_p = ParallelMCMC._prepare_model(m_ad, x0, T, nothing)
+    @test m_p.value_grad_hvp_batch === fused
+    @test m_p.grad_logdensity_batch === nothing
+    @test m_p.hvp_batch === nothing
+
+    # `:diag` takes the unbatched path.
+    ncalls[] = 0
+    sample(
+        MersenneTwister(1),
+        one_call,
+        ParallelMALASampler(0.1; T=T, jacobian=:diag),
+        T;
+        initial_params=x0,
+        chain_type=Any,
+        progress=false,
+    )
+    @test ncalls[] == 0
+
+    @test_throws ArgumentError DensityModel(logp, gradlogp, D; value_grad_hvp_batch=fused)
+    for kw in ((; grad_logdensity_batch=grad_b), (; hvp_batch=hvp_b))
+        @test_throws ArgumentError DensityModel(
+            logp, gradlogp, D; logdensity_batch=logp_b, value_grad_hvp_batch=fused, kw...
+        )
+    end
+    @test_throws ArgumentError DensityModel(
+        logp, gradlogp, D; logdensity_batch=logp_b, value_grad_hvp_batch=_AD
+    )
 end
 
 @testset "ParallelMALASampler sequential steps advance trajectory index" begin

@@ -251,7 +251,7 @@ sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoReactant())
 - Across an HVP's two AD passes, use `AutoReactant()` for both or neither. A hand-written gradient may pair with it. `SecondOrder` cannot contain `AutoReactant()`.
 - Only the default `AutoReactant()` mode is supported.
 
-When the batched gradient is derived from `logdensity_batch` with `AutoReactant()`, [`ParallelMALASampler`](@ref) compiles each DEER iteration (probes, batched MALA step and JVP, scan, convergence test) into one XLA executable. The trajectory stays on the XLA device during a block. It compiles once per `sample` call, and the chains of an `MCMCThreads` or `MCMCSerial` call share it. For a German Credit-sized logistic regression on a GPU, the first `sample` call in a Julia session spent about 50 s preparing and compiling, most of it compiling Reactant's tracing code; later compiles took 2–3 s. A hand-written `grad_logdensity_batch` or `hvp_batch`, or `jacobian=:diag`, keeps the uncompiled DEER loop.
+When the batched gradient is derived from `logdensity_batch` with `AutoReactant()`, [`ParallelMALASampler`](@ref) compiles each DEER iteration (probes, batched MALA step and JVP, scan, convergence test) into one XLA executable. The trajectory stays on the XLA device during a block. It compiles once per `sample` call, and the chains of an `MCMCThreads` or `MCMCSerial` call share it. For a German Credit-sized logistic regression on a GPU, the first `sample` call in a Julia session spent about 50 s preparing and compiling, most of it compiling Reactant's tracing code; later compiles took 2–3 s. A hand-written `grad_logdensity_batch`, `hvp_batch` or `value_grad_hvp_batch`, or `jacobian=:diag`, keeps the uncompiled DEER loop.
 
 Probes come from Reactant's random number generator, seeded once per block from `rng`. The DEER solution does not depend on the probes, so the first block matches the uncompiled loop up to the DEER tolerance. Drawing the seed changes what `rng` produces afterwards, so later blocks differ.
 
@@ -308,6 +308,33 @@ sampler = ParallelMALASampler(0.005f0; T=16)
 ```
 
 This recovers the same posterior as the fallback version — the only difference is that HVPs come from a plain matmul instead of a reverse-mode pass over `gradlogp`.
+
+### Value, gradient and HVP in one call
+
+Each DEER iteration evaluates the log-density, gradient and HVP at the current states and at the proposals.
+With separate slots, each of those six calls recomputes $X\beta$.
+`value_grad_hvp_batch` takes one function that returns all three, so the shared work runs once per state:
+
+```julia
+function value_grad_hvp_batch(B, V)
+    Z  = X_gpu * B
+    Σ  = 1f0 ./ (1f0 .+ exp.(-Z))
+    lp = vec(sum(y_gpu .* Z .- softplus.(Z); dims=1)) .- 0.5f0 .* vec(sum(abs2, B; dims=1))
+    G  = -B .+ transpose(X_gpu) * (y_gpu .- Σ)
+    Hv = -V .- transpose(X_gpu) * (Σ .* (1f0 .- Σ) .* (X_gpu * V))
+    return lp, G, Hv
+end
+
+model = DensityModel(logp, gradlogp, D;
+                     hvp=hvp,
+                     logdensity_batch=logp_batch,
+                     value_grad_hvp_batch=value_grad_hvp_batch)
+```
+
+It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well.
+`hvp` and `logdensity_batch` are still needed.
+The sampler copies the three results before its next call, so the function may return buffers it reuses.
+With `jacobian=:diag`, DEER takes the unbatched path and does not call it.
 
 ---
 
