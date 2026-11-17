@@ -76,14 +76,14 @@ end
 throws. Recursing over the tuples keeps the result type-stable. =#
 _upload_all(::Tuple{}, ::Tuple{}) = ()
 function _upload_all(args::Tuple, stages::Tuple)
-    first = _upload(args[1], stages[1])
+    head = _upload(args[1], stages[1])
     rest = try
         _upload_all(Base.tail(args), Base.tail(stages))
     catch
-        _free!(first)
+        _free!(head)
         rethrow()
     end
-    return (first, rest...)
+    return (head, rest...)
 end
 
 # Host arrays upload directly and need no stage.
@@ -123,13 +123,12 @@ function _download(template::AbstractArray, out, platform::AbstractString)
     return _promote_like(template, Array(out))
 end
 
-# One per compiled function, owning a staging buffer per argument. `template`
-# is the first argument, whose array type the result is rebuilt as.
-# `platform` is read once, at compile time, from the default XLA client.
-#= `lock` guards the stages: two tasks sharing a prepared model would otherwise
-overwrite each other's stage between `copyto!` and `to_rarray`, and one would
-silently get the other's result. It is held only while uploading, since XLA
-copies out of the stage before `to_rarray` returns. =#
+#= One per compiled function, owning a staging buffer per argument. `template` is
+the first argument, whose array type the result is rebuilt as. `platform` is read
+once, at compile time, from the default XLA client. `lock` guards the stages: two
+tasks sharing a prepared model would otherwise overwrite each other's stage between
+`copyto!` and `to_rarray`, and one would silently get the other's result. It is held
+only while uploading, since XLA copies out of the stage before `to_rarray` returns. =#
 struct ReactantCall{F,S,T}
     compiled::F
     stages::S
@@ -163,7 +162,6 @@ function (c::ReactantCall)(args::AbstractArray...)
             "AutoReactant compiled for $(length(c.stages)) argument(s), got $(length(args))",
         ),
     )
-    # `_upload` checks each argument; `_upload_all` frees earlier ones if a later one fails.
     inputs = lock(() -> _upload_all(args, c.stages), c.lock)
     out = nothing
     try
@@ -207,21 +205,25 @@ function _compiled(core, templates::AbstractArray...)
 end
 
 #= Compiles on first call. ParallelMALASampler's batched path never calls the scalar
-derivatives, and its compiled DEER iteration replaces the batched ones (#86). =#
+derivatives, and its compiled DEER iteration replaces the batched ones (#86). `lock`
+keeps tasks sharing a prepared model from each compiling it. =#
 mutable struct LazyReactantCall{F}
     const build::F
     call::Union{Nothing,ReactantCall}
+    const lock::ReentrantLock
 end
 
 function _lazy_compiled(core, templates::AbstractArray...)
     _warn_reactant_host_roundtrip(templates[1])
-    return LazyReactantCall(() -> _compiled(core, templates...), nothing)
+    return LazyReactantCall(() -> _compiled(core, templates...), nothing, ReentrantLock())
 end
 
 _force!(c::ReactantCall) = c
 function _force!(c::LazyReactantCall)
-    c.call === nothing && (c.call = c.build())
-    return c.call
+    return lock(c.lock) do
+        c.call === nothing && (c.call = c.build())
+        return c.call
+    end
 end
 
 (c::LazyReactantCall)(args::AbstractArray...) = _force!(c)(args...)

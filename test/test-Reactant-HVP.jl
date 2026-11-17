@@ -499,7 +499,7 @@ end
         )
         # `copyto!` into the stage would otherwise narrow Float64 to Float32 silently.
         @test_throws ArgumentError m_p.grad_logdensity(StagedArray(randn(rng, D_R)))
-        # A bad second argument fails, and the first one's upload is freed.
+        # A bad second argument fails after the first one uploads.
         @test_throws DimensionMismatch m_p.hvp(
             x1, StagedArray(randn(rng, Float32, D_R - 1))
         )
@@ -598,6 +598,18 @@ end
     lock; CI runs this file with `--threads=2`. =#
     Threads.nthreads() == 1 &&
         @warn "Only one thread: the concurrent-call test cannot detect a stage race"
+    @testset "concurrent first calls compile once" begin
+        x = StagedArray(randn(MersenneTwister(80), Float32, D_R))
+        call = REACTANT_EXT._compiled(identity, x)
+        builds = Threads.Atomic{Int}(0)
+        # The sleep yields, so the tasks interleave even on one thread.
+        build = () -> (Threads.atomic_add!(builds, 1); sleep(0.05); call)
+        lazy = REACTANT_EXT.LazyReactantCall(build, nothing, ReentrantLock())
+        calls = fetch.([Threads.@spawn REACTANT_EXT._force!(lazy) for _ in 1:8])
+        @test builds[] == 1
+        @test all(c -> c === call, calls)
+    end
+
     @testset "concurrent calls do not mix up staged inputs" begin
         x0 = StagedArray(randn(MersenneTwister(79), Float32, D_R))
         model = DensityModel(logp_r32, AutoReactant(), D_R)

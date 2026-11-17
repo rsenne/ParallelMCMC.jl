@@ -59,7 +59,7 @@ jobs:
 
       - name: Run Reactant tests
         run: |
-          # Threads let the concurrent-call test actually interleave its tasks.
+          # Threads let the concurrent-call test interleave its tasks.
           julia --threads=2 --code-coverage=@"$PWD" --project=test -e '
             using Test
             @testset verbose=true "Reactant" begin
