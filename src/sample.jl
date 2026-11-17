@@ -22,7 +22,10 @@ function AbstractMCMC.sample(
     chain_type::Type=VNChain,
     kwargs...,
 )
-    return AbstractMCMC.mcmcsample(
-        rng, model, sampler, parallel, N, nchains; chain_type, kwargs...
-    )
+    cache = sampler isa ParallelMALASampler ? SampleCache() : nothing
+    return with(SAMPLE_CACHE => cache) do
+        return AbstractMCMC.mcmcsample(
+            rng, model, sampler, parallel, N, nchains; chain_type, kwargs...
+        )
+    end
 end

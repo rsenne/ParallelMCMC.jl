@@ -110,6 +110,16 @@ end
     @test prepped.grad_logdensity_batch === grad_b
     @test prepped.hvp_batch === hvp_b
 
+    fused = (X, V) -> (logp_b(X), grad_b(X), hvp_b(X, V))
+    model_fused = DensityModel(
+        _NormalLD();
+        hvp=(x, v) -> -5 .* v,
+        logdensity_batch=logp_b,
+        value_grad_hvp_batch=fused,
+    )
+    prepped_fused = ParallelMCMC._prepare_model(model_fused, [0.0], 8, nothing)
+    @test prepped_fused.value_grad_hvp_batch === fused
+
     chain = sample(
         MersenneTwister(13),
         model,

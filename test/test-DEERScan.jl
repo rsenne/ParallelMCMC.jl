@@ -5,6 +5,10 @@ using LinearAlgebra
 using ParallelMCMC
 const DEERScan = ParallelMCMC.DEERScan
 
+@testset "DEERScan is a single module" begin
+    @test ParallelMCMC.DEERScan === ParallelMCMC.DEER.DEERScan
+end
+
 # GPU is the primary target here.
 using CUDA: CUDA
 

@@ -7,6 +7,7 @@ using FlexiChains
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 using Random
+using ScopedValues: ScopedValue, with
 using Statistics
 
 const DI = DifferentiationInterface
@@ -65,8 +66,9 @@ and `model.jl`'s gradient hooks report it. =#
 const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using Reactant` to load ParallelMCMC's ReactantExt."
 
 include("MALA/MALA.jl")
-include("DEER/DEERScan.jl")
 include("DEER/DEER.jl")
+# Alias, not a second copy: the solver and CUDAExt use DEER.DEERScan.
+const DEERScan = DEER.DEERScan
 include("model.jl")
 include("chains.jl")
 include("samplers/mala.jl")
