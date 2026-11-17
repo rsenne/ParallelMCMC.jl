@@ -38,13 +38,15 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 We repeat the Bayesian logistic regression of Zoltowski et al. (2025, Section 5.2) on the German Credit data, with whitened covariates, an intercept, and a $\mathcal{N}(0, I)$ prior, so the posterior has 25 dimensions.
 Each method draws one chain of $L$ samples with step size $\varepsilon = 0.0015$, which accepts about 85% of proposals.
 `ParallelMALASampler` solves the whole chain as one block, and its samples match the sequential chain step for step up to the solver tolerance of $5 \times 10^{-4}$.
-The exception is an accept decision that falls within that tolerance of the threshold: in one 16 000-step run a single such decision flipped, and the two chains rejoined 43 steps later.
+The model returns its log-density, gradient and Hessian-vector product from one `value_grad_hvp_batch` call, so each DEER iteration computes $X\beta$ once per state.
+The exception is an accept decision that falls within that tolerance of the threshold: in the 16 000-step run a single such decision flipped, and the two chains rejoined 43 steps later.
+The 64 000-step run draws the same random numbers for its first 16 000 steps and has the same flip.
 
 <p align="center">
   <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
 </p>
 
-At $L = 64\,000$ the parallel sampler is 3.2 times faster than sequential MALA on the CPU and 62 times faster than sequential MALA on the GPU.
+At $L = 64\,000$ the parallel sampler is 4.3 times faster than sequential MALA on the CPU and 85 times faster than sequential MALA on the GPU.
 These timings come from one RTX 5090 and a 12-thread CPU under Windows.
 Sequential MALA on a GPU waits for the device several times per step to make each accept decision on the host, so it trails the CPU at this size.
 The paper compiles its sequential baseline with JAX, which keeps the whole loop on the device, and reports parallel speedups of 20 to 30 times.

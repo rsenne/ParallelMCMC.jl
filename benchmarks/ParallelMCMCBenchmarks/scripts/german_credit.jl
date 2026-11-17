@@ -16,7 +16,10 @@ We time one chain of `L` samples with
 
 - sequential `MALASampler` on the CPU,
 - sequential `MALASampler` on the GPU, which is the baseline used in the paper,
-- `ParallelMALASampler` on the GPU.
+- `ParallelMALASampler` on the GPU, with the log-density, gradient and HVP from one
+  `value_grad_hvp_batch` call,
+- `ParallelMALASampler` on the GPU, with separate `logdensity_batch`,
+  `grad_logdensity_batch` and `hvp_batch` calls.
 
 Every method reports the best of `PMCMC_REPS` timed runs after a warm-up run, the
 acceptance rate, and the largest gap between its posterior means and those of a long
@@ -91,9 +94,9 @@ function logistic_model(X, y)
     end
 
     #= The batched functions work in place on buffers sized for the number of columns
-    they last saw. Each DEER iteration makes six of these calls on `N × T` arrays,
-    and on a GPU allocating those arrays costs far more than the arithmetic. The
-    sampler copies every result before the next call, so returning a buffer is safe. =#
+    they last saw. On a GPU, allocating the `N × T` arrays costs far more than the
+    arithmetic. The sampler copies every result before the next call, so returning a
+    buffer is safe. =#
     N = size(X, 1)
     buffers = Ref{Any}(nothing)
     function buffers_for(M)
@@ -104,6 +107,7 @@ function logistic_model(X, y)
                 P=similar(X, N, M),
                 Q=similar(X, N, M),
                 DM=similar(X, D, M),
+                HV=similar(X, D, M),
                 row_a=similar(X, 1, M),
                 row_b=similar(X, 1, M),
                 out=similar(X, M),
@@ -142,6 +146,26 @@ function logistic_model(X, y)
         return b.DM
     end
 
+    # One `X * B` for all three, where the separate calls compute it three times.
+    function value_grad_hvp_batch(B, V)
+        b = buffers_for(size(B, 2))
+        mul!(b.Z, X, B)
+        mul!(b.Q, X, V)
+        @. b.P = y * b.Z - softplus(b.Z)
+        sum!(b.row_a, b.P)
+        @. b.DM = B^2
+        sum!(b.row_b, b.DM)
+        b.out .= vec(b.row_a) .- half .* vec(b.row_b)
+        @. b.P = sigmoid(b.Z)
+        @. b.Q = b.P * (1 - b.P) * b.Q
+        mul!(b.HV, transpose(X), b.Q)
+        @. b.HV = -b.HV - V
+        @. b.P = y - b.P
+        mul!(b.DM, transpose(X), b.P)
+        b.DM .-= B
+        return b.out, b.DM, b.HV
+    end
+
     sequential = DensityModel(logp, grad, D; hvp=hvp)
     batched = DensityModel(
         logp,
@@ -152,7 +176,15 @@ function logistic_model(X, y)
         grad_logdensity_batch=grad_batch,
         hvp_batch=hvp_batch,
     )
-    return sequential, batched
+    fused = DensityModel(
+        logp,
+        grad,
+        D;
+        hvp=hvp,
+        logdensity_batch=logp_batch,
+        value_grad_hvp_batch=value_grad_hvp_batch,
+    )
+    return sequential, batched, fused
 end
 
 # Timing
@@ -208,8 +240,8 @@ X_cpu, y_cpu = load_german_credit()
 N_data, D = size(X_cpu)
 X_gpu, y_gpu = CuArray(X_cpu), CuArray(y_cpu)
 
-cpu_model, _ = logistic_model(X_cpu, y_cpu)
-gpu_seq_model, gpu_batch_model = logistic_model(X_gpu, y_gpu)
+cpu_model, _, _ = logistic_model(X_cpu, y_cpu)
+gpu_seq_model, gpu_batch_model, gpu_fused_model = logistic_model(X_gpu, y_gpu)
 
 epsilon = parse(Float32, get(ENV, "PMCMC_EPSILON", "0.0015"))
 mala = MALASampler(epsilon)
@@ -237,7 +269,8 @@ for L in L_VALS
     configs = (
         ("MALA, CPU", cpu_model, mala, x0_cpu),
         ("MALA, GPU", gpu_seq_model, mala, x0_gpu),
-        ("DEER MALA, GPU", gpu_batch_model, deer(L), x0_gpu),
+        ("DEER MALA, GPU", gpu_fused_model, deer(L), x0_gpu),
+        ("DEER MALA, GPU, separate calls", gpu_batch_model, deer(L), x0_gpu),
     )
     S_seq = nothing
     for (name, model, sampler, x0) in configs
@@ -248,7 +281,7 @@ for L in L_VALS
         gap = mean_gap(S[:, (burn + 1):end], ref_mean, ref_std)
         push!(results, (; L, name, t, acc=acceptance(S), gap))
         @printf(
-            "L = %6d  %-26s %9.3f s  acc %.2f  mean gap %.2f sd\n",
+            "L = %6d  %-30s %9.3f s  acc %.2f  mean gap %.2f sd\n",
             L,
             name,
             t,
@@ -256,7 +289,7 @@ for L in L_VALS
             gap
         )
     end
-    S_deer = draws(run_chain(gpu_batch_model, deer(L), L, x0_gpu))
+    S_deer = draws(run_chain(gpu_fused_model, deer(L), L, x0_gpu))
     @printf("L = %6d  max |DEER - sequential| = %.1e\n", L, maximum(abs.(S_deer .- S_seq)))
     println()
 end
@@ -278,5 +311,12 @@ for L in L_VALS
     seq = only(filter(r -> r.name == "MALA, GPU", rs)).t
     cpu = only(filter(r -> r.name == "MALA, CPU", rs)).t
     par = only(filter(r -> r.name == "DEER MALA, GPU", rs)).t
-    @printf("L = %6d  %6.1f× vs GPU MALA, %6.1f× vs CPU MALA\n", L, seq / par, cpu / par)
+    sep = only(filter(r -> r.name == "DEER MALA, GPU, separate calls", rs)).t
+    @printf(
+        "L = %6d  %6.1f× vs GPU MALA, %6.1f× vs CPU MALA, %4.2f× vs separate calls\n",
+        L,
+        seq / par,
+        cpu / par,
+        sep / par
+    )
 end
