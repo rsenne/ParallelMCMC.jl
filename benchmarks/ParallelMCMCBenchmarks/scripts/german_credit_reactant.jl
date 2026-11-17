@@ -138,10 +138,11 @@ N_data, D = size(X)
 epsilon = parse(Float32, get(ENV, "PMCMC_EPSILON", "0.0015"))
 
 cpu_model = DensityModel(β -> logp(X, y, β), β -> grad(X, y, β), D)
-logp_batch(B) = (Z=X * B; vec(sum(y .* Z .- softplus.(Z); dims=1)) .- 0.5f0 .* vec(sum(abs2, B; dims=1)))
-xla_model = DensityModel(
-    β -> logp(X, y, β), AutoReactant(), D; logdensity_batch=logp_batch
-)
+function logp_batch(B)
+    Z = X * B
+    return vec(sum(y .* Z .- softplus.(Z); dims=1)) .- 0.5f0 .* vec(sum(abs2, B; dims=1))
+end
+xla_model = DensityModel(β -> logp(X, y, β), AutoReactant(), D; logdensity_batch=logp_batch)
 
 mala = MALASampler(epsilon)
 function deer(L)
@@ -182,9 +183,13 @@ for L in L_VALS
     s = deer(L)
     prepped = ParallelMCMC._prepare_model(xla_model, x0, L, s.backend)
     t_compile = @elapsed ws = ParallelMCMC._mala_deer_workspace(prepped, s, x0, nothing)
-    solve() = first(
-        ParallelMCMC._deer_solve_new_tape(MersenneTwister(42), prepped, s, x0; workspace=ws)
-    )
+    function solve()
+        return first(
+            ParallelMCMC._deer_solve_new_tape(
+                MersenneTwister(42), prepped, s, x0; workspace=ws
+            ),
+        )
+    end
 
     t_cpu, c_cpu = best_of(() -> run_chain(cpu_model, mala, L, x0))
     t_seq, S_seq = best_of(() -> Array(chain_xla(X_r, y_r, x0_r, Ξ_r, logU_r, epsilon)))
