@@ -25,11 +25,11 @@ log-density. An explicit `SecondOrder` also bypasses the gradient slot.
   backend.
 - `hvp_batch` — optional callable `(X, V) -> AbstractMatrix`, or a backend,
   resolved like `hvp`.
-- `value_grad_hvp_batch` — optional callable `(X, V) -> (logp, grad, Hv)` that
-  returns the batched log-density, gradient and HVP from one call. It replaces
-  `grad_logdensity_batch` and `hvp_batch` in [`ParallelMALASampler`](@ref)'s
-  batched DEER step, so work the three share, such as `X' * B` in a GLM, is done
-  once per state. It must be a callable and requires `logdensity_batch`.
+- `value_grad_hvp_batch` — optional callable `(X, V) -> (logp, grad, Hv)` returning
+  the batched log-density, gradient and HVP from one call.
+  [`ParallelMALASampler`](@ref) uses it in place of `grad_logdensity_batch` and
+  `hvp_batch`, so work the three share, such as `X * B` in a GLM, runs once per
+  state. It cannot be a backend.
 - `dim::Int` — dimensionality of the parameter space
 - `param_names` — optional collection of parameter names used in `FlexiChains` output. If
   `nothing` (the default), uses a single vector-valued parameter `:x` with shape `(dim,)`.
@@ -84,7 +84,7 @@ function DensityModel(
         (grad_logdensity_batch === nothing && hvp_batch === nothing) || throw(
             ArgumentError(
                 "value_grad_hvp_batch replaces grad_logdensity_batch and hvp_batch; " *
-                "supply one or the other",
+                "do not pass them together",
             ),
         )
     end
@@ -105,8 +105,8 @@ end
 A [`DensityModel`](@ref) whose AD backends have been resolved to callables.
 `source` prevents a cached preparation from being reused with another model.
 
-`value_grad_hvp_batch` is the model's fused `(X, V) -> (logp, grad, Hv)` callable,
-ReactantExt's traceable evaluator that it compiles into whole DEER iterations, or
+`value_grad_hvp_batch` is a fused `(X, V) -> (logp, grad, Hv)` evaluator: the model's
+own, or the traceable one ReactantExt compiles into whole DEER iterations. Otherwise
 `nothing`.
 """
 struct PreppedDensityModel{F,G,H,FB,GB,HB,VB,PN,SM<:DensityModel}

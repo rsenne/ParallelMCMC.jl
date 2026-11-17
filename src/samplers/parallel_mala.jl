@@ -228,7 +228,14 @@ function _build_mala_deer_rec(
 
             X_template = similar(x0_like, D, T)
             fill!(X_template, zero(eltype(X_template)))
-            evaluator = _batch_evaluator(model.value_grad_hvp_batch, model)
+            # A model's own fused function excludes the batched gradient slot.
+            evaluator = if model.grad_logdensity_batch === nothing
+                model.value_grad_hvp_batch
+            else
+                MALA.SeparateBatchEval(
+                    model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
+                )
+            end
             _mala_batched_fwd_and_jvp(X_template, evaluator, ε, Xi, U, cholM)
         else
             nothing
@@ -236,15 +243,6 @@ function _build_mala_deer_rec(
 
     return DEER.TapedRecursion(
         step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp, fwd_and_jvp_batch=fwd_and_jvp_batch
-    )
-end
-
-# The model's fused evaluator, else separate calls. ReactantExt adds a method for its
-# own evaluator, which is only usable inside a compiled DEER iteration.
-_batch_evaluator(value_grad_hvp_batch, model) = value_grad_hvp_batch
-function _batch_evaluator(::Nothing, model)
-    return MALA.SeparateBatchEval(
-        model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
     )
 end
 

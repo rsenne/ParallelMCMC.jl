@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ParallelMCMC.DEERScan` and `ParallelMCMC.DEER.DEERScan` are now one module. They
+  were separate copies, and `CUDAExt`'s scan method applied only to the second.
 - `SecondOrder` now respects both configured backends.
 - Backend normalization no longer picks a differentiation mode on the user's
   behalf (#62). `AutoEnzyme()` keeps its unset mode. Pass

@@ -312,7 +312,7 @@ This recovers the same posterior as the fallback version — the only difference
 ### Value, gradient and HVP in one call
 
 Each DEER iteration evaluates the log-density, gradient and HVP at the current states and at the proposals.
-With separate slots, each of those six calls recomputes $X\beta$ and $\sigma(X\beta)$.
+With separate slots, each of those six calls recomputes $X\beta$.
 `value_grad_hvp_batch` takes one function that returns all three, so the shared work runs once per state:
 
 ```julia
@@ -331,9 +331,9 @@ model = DensityModel(logp, gradlogp, D;
                      value_grad_hvp_batch=value_grad_hvp_batch)
 ```
 
-It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well.
+It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well. `hvp` and `logdensity_batch` are still needed.
 The sampler copies the three results before its next call, so the function may return buffers it reuses.
-With `jacobian=:diag`, DEER takes the unbatched path and this function is not called.
+With `jacobian=:diag`, DEER takes the unbatched path and does not call it.
 
 ---
 
