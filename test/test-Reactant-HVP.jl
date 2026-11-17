@@ -500,7 +500,9 @@ end
         # `copyto!` into the stage would otherwise narrow Float64 to Float32 silently.
         @test_throws ArgumentError m_p.grad_logdensity(StagedArray(randn(rng, D_R)))
         # A bad second argument fails, and the first one's upload is freed.
-        @test_throws DimensionMismatch m_p.hvp(x1, StagedArray(randn(rng, Float32, D_R - 1)))
+        @test_throws DimensionMismatch m_p.hvp(
+            x1, StagedArray(randn(rng, Float32, D_R - 1))
+        )
         @test_throws ArgumentError m_p.hvp(x1, StagedArray(randn(rng, D_R)))
         @test_throws ArgumentError m_p.grad_logdensity(x1, v1)
         @test m_p.hvp(x1, v1).data ≈ Hv1.data
