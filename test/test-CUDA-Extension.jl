@@ -11,7 +11,6 @@ end
 @testset "Workspaces skip host buffers for CPU arrays" begin
     ws = ParallelMCMC.DEER.DEERWorkspace(randn(Float32, 5), 4)
     @test ws.Zhost === nothing
-    @test ws.zhost === nothing
 end
 
 @testset "Convergence check returns both maxima" begin
@@ -33,11 +32,9 @@ isdefined(@__MODULE__, :StagedArray) || include(joinpath(@__DIR__, "staged_array
     ws = ParallelMCMC.DEER.DEERWorkspace(x, 3)
     @test ws.Zhost isa Matrix{Float32}
     @test size(ws.Zhost) == (6, 3)
-    @test ws.zhost isa Vector{Float32}
-    @test length(ws.zhost) == 6
 
     rng = MersenneTwister(0)
-    ParallelMCMC.DEER._rademacher!(x, rng, ws.zhost)
+    ParallelMCMC.DEER._rademacher!(x, rng, Vector{Float32}(undef, 6))
     @test all(v -> abs(v) == 1.0f0, x.data)
 
     fill!(x.data, 0.0f0)

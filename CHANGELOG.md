@@ -128,6 +128,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jacobian_clip=1`, was `Inf`. With one-probe `:stoch_diag` estimates on
   correlated targets, the unclipped solve could run far past `T` iterations
   without converging. Pass `jacobian_clip=Inf` for the old behaviour (#84).
+- `ParallelMALASampler` runs the batched MALA step and its JVP for every model.
+  A model without batched functions is evaluated one column at a time, and
+  `jacobian=:diag` probes the batched step with each unit vector instead of
+  stepping through the trajectory. `DEER.deer_update!` has one code path: a
+  `TapedRecursion` without `fwd_and_jvp_batch` is called one column at a time.
+  The samples are unchanged. With `probes > 1`, a per-step recursion draws its
+  probes in a different order, so its DEER iterates differ from earlier
+  releases.
+- The vector forms of the surrogate JVP, `MALA.mala_step_surrogate_sigmoid_jvp`
+  and `MALA.mala_step_taped_and_jvp`, run the batched step on a one-column
+  matrix. The sequential samplers keep their own vector step, now one function
+  instead of three copies.
 
 ### Deprecated
 
@@ -144,6 +156,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MALA.mala_step_full`. Nothing in the package called them; they now live in
   the test suite as references. Use `MALA.mala_step_taped` or
   `MALA.mala_step_with_logα` instead.
+- `MALA.mala_step_taped_and_jvp!`. Use `MALA.mala_step_taped_and_jvp`.
+- `DEER.jac_diag_via_jvps` and `DEER.jac_diag_stoch`. `DEER.deer_update!` builds
+  the diagonal Jacobian estimate itself, in `workspace.A`.
+- The `zhost` and `jt_buf` fields of `DEER.DEERWorkspace`, and the `Hv_x`, `Hv_y`,
+  `dr` and `jvp_out` fields of `MALA.MALAWorkspace`, which nothing used anymore.
 
 ## [0.2.0] - 2026-06-29
 

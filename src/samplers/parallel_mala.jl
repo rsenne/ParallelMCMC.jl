@@ -166,6 +166,8 @@ function _make_mala_tape_block(
     return tape, Xi, U
 end
 
+#= DEER's recursion for one block: the batched MALA step over all T states, for every
+model. Models without batched functions are evaluated one column at a time. =#
 function _build_mala_deer_rec(
     model::PreppedDensityModel,
     ε::Real,
@@ -175,75 +177,54 @@ function _build_mala_deer_rec(
     tape_noise=nothing,
     tape_uniforms=nothing,
 )
-    logp = model.logdensity
-    gradlogp = model.grad_logdensity
+    D = length(x0_like)
+    T = length(tape)
 
-    hvp_fn = model.hvp
+    (tape_noise === nothing) == (tape_uniforms === nothing) ||
+        throw(ArgumentError("tape_noise and tape_uniforms must be provided together"))
+    Xi, U = if tape_noise === nothing
+        _tape_matrices(tape, x0_like)
+    else
+        size(tape_noise) == (D, T) ||
+            throw(DimensionMismatch("tape_noise must have size (D, T)"))
+        length(tape_uniforms) == T ||
+            throw(DimensionMismatch("tape_uniforms must have length T"))
+        tape_noise, tape_uniforms
+    end
 
-    # Exact forward step.
-    step_fwd =
-        (x, te) -> MALA.mala_step_taped(logp, gradlogp, x, ε, te.ξ, te.u; cholM=cholM)
-
-    # Explicit analytical JVP of the surrogate step.
-    jvp =
-        (x, te, v) -> MALA.mala_step_surrogate_sigmoid_jvp(
-            logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
-        )
-
-    # Fused forward step + JVP.
-    fwd_and_jvp =
-        (x, te, v) -> MALA.mala_step_taped_and_jvp(
-            logp, gradlogp, x, ε, te.ξ, te.u, v, hvp_fn; cholM=cholM
-        )
-
-    fwd_and_jvp_batch =
-        if model.logdensity_batch !== nothing && (
-            model.grad_logdensity_batch !== nothing ||
-            model.value_grad_hvp_batch !== nothing
-        )
-            D = length(x0_like)
-            T = length(tape)
-
-            (tape_noise === nothing) == (tape_uniforms === nothing) || throw(
-                ArgumentError("tape_noise and tape_uniforms must be provided together")
-            )
-            Xi, U = if tape_noise === nothing
-                Xi_local = similar(x0_like, D, T)
-                U_host = Vector{typeof(tape[1].u)}(undef, T)
-                U_local = similar(x0_like, typeof(tape[1].u), T)
-
-                for t in 1:T
-                    copyto!(Xi_local, (t - 1) * D + 1, tape[t].ξ, 1, D)
-                    U_host[t] = tape[t].u
-                end
-                copyto!(U_local, U_host)
-                Xi_local, U_local
-            else
-                size(tape_noise) == (D, T) ||
-                    throw(DimensionMismatch("tape_noise must have size (D, T)"))
-                length(tape_uniforms) == T ||
-                    throw(DimensionMismatch("tape_uniforms must have length T"))
-                tape_noise, tape_uniforms
-            end
-
-            X_template = similar(x0_like, D, T)
-            fill!(X_template, zero(eltype(X_template)))
-            # A model's own fused function excludes the batched gradient slot.
-            evaluator = if model.grad_logdensity_batch === nothing
-                model.value_grad_hvp_batch
-            else
-                MALA.SeparateBatchEval(
-                    model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
-                )
-            end
-            _mala_batched_fwd_and_jvp(X_template, evaluator, ε, Xi, U, cholM)
-        else
-            nothing
-        end
-
-    return DEER.TapedRecursion(
-        step_fwd, jvp, tape; fwd_and_jvp=fwd_and_jvp, fwd_and_jvp_batch=fwd_and_jvp_batch
+    X_template = similar(x0_like, D, T)
+    fill!(X_template, zero(eltype(X_template)))
+    step = _mala_batched_fwd_and_jvp(
+        X_template, _mala_evaluator(model, x0_like), ε, Xi, U, cholM
     )
+    return DEER.TapedRecursion(nothing, nothing, tape; fwd_and_jvp_batch=step)
+end
+
+# The tape's noise as a D×T matrix and its uniforms as a vector, on x0_like's device.
+function _tape_matrices(tape::Vector{<:MALATapeElement}, x0_like::AbstractVector)
+    D, T = length(x0_like), length(tape)
+    Xi = similar(x0_like, D, T)
+    U_host = Vector{typeof(tape[1].u)}(undef, T)
+    U = similar(x0_like, typeof(tape[1].u), T)
+    for t in 1:T
+        copyto!(Xi, (t - 1) * D + 1, tape[t].ξ, 1, D)
+        U_host[t] = tape[t].u
+    end
+    copyto!(U, U_host)
+    return Xi, U
+end
+
+#= The batched evaluator for a model: its fused function, its three batched functions,
+or its per-state functions one column at a time. A model's own fused function excludes
+the batched gradient slot. =#
+function _mala_evaluator(model::PreppedDensityModel, x0_like::AbstractVector)
+    if model.logdensity_batch !== nothing
+        model.grad_logdensity_batch === nothing || return MALA.SeparateBatchEval(
+            model.logdensity_batch, model.grad_logdensity_batch, model.hvp_batch
+        )
+        model.value_grad_hvp_batch === nothing || return model.value_grad_hvp_batch
+    end
+    return MALA.ColumnwiseEval(model.logdensity, model.grad_logdensity, model.hvp, x0_like)
 end
 
 # `(Xbar, Z) -> (FT, Jt)` for DEER's batched path, also traced by ReactantExt.

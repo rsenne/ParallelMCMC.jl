@@ -19,9 +19,14 @@ Deterministic recursion driven by a pre-generated tape.
 
 - `step_fwd(x, tape_t)`: exact forward transition (may include MH accept/reject).
 - `jvp(x, tape_t, v)`: explicit JVP `(x, tape_t, v) -> J·v` of the differentiable
-  surrogate step. Required; must not call AD through `step_fwd`'s control flow.
+  surrogate step. Must not call AD through `step_fwd`'s control flow.
 - `fwd_and_jvp(x, tape_t, v)`: optional fused function `-> (x_next, J·v)`.
-- `fwd_and_jvp_batch(Xbar, Z)`: optional batched function `-> (FT, Jt)`.
+- `fwd_and_jvp_batch(Xbar, Z)`: optional batched function `-> (FT, Jt)` over all
+  steps at once, column `t` of each matrix belonging to step `t`.
+
+DEER always works on whole trajectories. Without `fwd_and_jvp_batch` it calls the
+per-step functions one column at a time, so `step_fwd` and `jvp` are required then
+and may be `nothing` otherwise.
 """
 struct TapedRecursion{Ff,Fj,Ffj,Ffb,V<:AbstractVector}
     step_fwd::Ff
@@ -34,6 +39,14 @@ end
 function TapedRecursion(
     step_fwd, jvp, tape::AbstractVector; fwd_and_jvp=nothing, fwd_and_jvp_batch=nothing
 )
+    fwd_and_jvp_batch === nothing &&
+        (jvp === nothing || (step_fwd === nothing && fwd_and_jvp === nothing)) &&
+        throw(
+            ArgumentError(
+                "TapedRecursion needs `fwd_and_jvp_batch`, or `jvp` with `step_fwd` " *
+                "or `fwd_and_jvp`",
+            ),
+        )
     return TapedRecursion(step_fwd, jvp, fwd_and_jvp, fwd_and_jvp_batch, tape)
 end
 
@@ -48,7 +61,7 @@ constructed from device-array templates.
 `nothing`. If it is set, the batched Hutchinson probes are drawn on the device,
 seeded from the caller's `rng`; otherwise they are drawn on the host.
 """
-struct DEERWorkspace{M,V,SW,HZ,H,R}
+struct DEERWorkspace{M,V,SW,HZ,R}
     A::M
     B::M
     Xbar::M
@@ -57,8 +70,6 @@ struct DEERWorkspace{M,V,SW,HZ,H,R}
     S_work::M
     S_tmp::M
     zbuf::V
-    zhost::H
-    jt_buf::V
     xbar_buf::V
     scan::SW
     probe_rng::R
@@ -115,17 +126,12 @@ function DEERWorkspace(
     end
     S_work = similar(S_template)
     S_tmp = similar(S_template)
+    # Column buffers for recursions given per step; see `_add_probe!`.
     zbuf = similar(s0_template)
-    zhost = if needs_host_staging(zbuf)
-        Vector{eltype(s0_template)}(undef, length(s0_template))
-    else
-        nothing
-    end
-    jt_buf = similar(s0_template)
     xbar_buf = similar(s0_template)
     scan = DEERScan.AffineScanWorkspace(S_template)
     return DEERWorkspace(
-        A, B, Xbar, Z, Zhost, S_work, S_tmp, zbuf, zhost, jt_buf, xbar_buf, scan, probe_rng
+        A, B, Xbar, Z, Zhost, S_work, S_tmp, zbuf, xbar_buf, scan, probe_rng
     )
 end
 
@@ -412,46 +418,48 @@ end
 @inline _rademacher_matrix!(Z::AbstractMatrix, rng::AbstractRNG, host) =
     _rademacher!(Z, rng, host)
 
-function jac_diag_via_jvps(rec::TapedRecursion, x::AbstractVector, t::Int)
-    D = length(x)
-    FT = eltype(x)
-    ei_host = Vector{FT}(undef, D)
-    ei = similar(x)
-    d = similar(x)
-    fill!(d, zero(FT))
-    for i in 1:D
-        fill!(ei_host, zero(FT))
-        ei_host[i] = one(FT)
-        copyto!(ei, ei_host)
-        jv = rec.jvp(x, rec.tape[t], ei)
-        d .+= ei .* jv
-    end
-    return d
+#= Probe `k` of a DEER update. `:stoch_diag` draws Rademacher probes. `:diag` probes
+with the k-th unit vector in every column, so after all D probes the sum of
+`Z .* (J Z)` is the exact diagonal. =#
+function _probe!(Z::AbstractMatrix, jacobian::Symbol, k::Int, rng::AbstractRNG, ws)
+    jacobian === :stoch_diag && return _probe_matrix!(Z, rng, ws)
+    fill!(Z, zero(eltype(Z)))
+    view(Z, k, :) .= one(eltype(Z))
+    return Z
 end
 
-function jac_diag_stoch(
-    rec::TapedRecursion,
-    x::AbstractVector,
-    t::Int;
-    probes::Int=1,
-    rng::AbstractRNG=Random.default_rng(),
-    zbuf::Union{Nothing,AbstractVector}=nothing,
-)
-    D = length(x)
-    FT = float(eltype(x))
-    probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
-
-    z = zbuf === nothing ? similar(x, FT, D) : zbuf
-    length(z) == D || throw(ArgumentError("zbuf must have length D"))
-
-    d = fill!(similar(z, D), zero(FT))
-    for _ in 1:probes
-        _rademacher!(z, rng)
-        jv = rec.jvp(x, rec.tape[t], z)
-        @. d += z * jv
+#= Adds probe `Z`'s diagonal estimate `Z .* (J Z)` to `A`, overwriting `A` on the
+first probe, and returns the forward steps `f(Xbar)`. Every DEER update runs through
+here; a recursion without a batched function is called one column at a time. =#
+function _add_probe!(A, rec::TapedRecursion, ws, Xbar, Z, first::Bool)
+    if rec.fwd_and_jvp_batch !== nothing
+        FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
+        first ? (@. A = Z * Jt) : (@. A += Z * Jt)
+        return FT
     end
-    d .*= one(FT) / probes
-    return d
+
+    # The forward steps go to `ws.B`, which `deer_update!` then turns into offsets.
+    D, T = size(Xbar)
+    x, z = ws.xbar_buf, ws.zbuf
+    for t in 1:T
+        off = (t - 1) * D + 1
+        copyto!(x, 1, Xbar, off, D)
+        copyto!(z, 1, Z, off, D)
+        if first
+            ft, jv = _step_and_jvp(rec, x, rec.tape[t], z)
+            copyto!(ws.B, off, ft, 1, D)
+        else
+            jv = rec.jvp(x, rec.tape[t], z)
+        end
+        a = view(A, :, t)
+        first ? (@. a = z * jv) : (@. a += z * jv)
+    end
+    return ws.B
+end
+
+function _step_and_jvp(rec::TapedRecursion, x, tape_t, z)
+    rec.fwd_and_jvp === nothing || return rec.fwd_and_jvp(x, tape_t, z)
+    return rec.step_fwd(x, tape_t), rec.jvp(x, tape_t, z)
 end
 
 #=
@@ -514,87 +522,28 @@ function deer_update!(
     T == length(rec.tape) || throw(ArgumentError("size(S,2) must match length(rec.tape)"))
     damping > 0 && damping ≤ 1 || throw(ArgumentError("damping must be in (0,1]"))
     probes ≥ 1 || throw(ArgumentError("probes must be ≥ 1"))
+    (jacobian === :stoch_diag || jacobian === :diag) ||
+        throw(ArgumentError("jacobian must be :diag or :stoch_diag"))
     size(ws.A) == (D, T) || throw(ArgumentError("workspace matrix size mismatch"))
     _check_jacobian_modifiers(jacobian_damping, jacobian_clip)
     modify = _modifies_jacobian(jacobian_damping, jacobian_clip)
 
-    A = ws.A
-    B = ws.B
+    A, B, Xbar, Z = ws.A, ws.B, ws.Xbar, ws.Z
 
-    if rec.fwd_and_jvp_batch !== nothing && jacobian === :stoch_diag
-        Xbar = ws.Xbar
-        Z = ws.Z
+    # Column t of Xbar is the state step t starts from.
+    copyto!(Xbar, 1, s0, 1, D)
+    T > 1 && copyto!(Xbar, D + 1, S_in, 1, D * (T - 1))
 
-        copyto!(Xbar, 1, s0, 1, D)
-        if T > 1
-            copyto!(Xbar, D + 1, S_in, 1, D * (T - 1))
-        end
-
-        _probe_matrix!(Z, rng, ws)
-
-        FT, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
-        @. A = Z * Jt
-        for _ in 2:probes
-            _probe_matrix!(Z, rng, ws)
-            _, Jt = rec.fwd_and_jvp_batch(Xbar, Z)
-            @. A += Z * Jt
-        end
-        if probes > 1
-            A .*= one(eltype(A)) / probes
-        end
-        modify && _modify_jacobian!(A, jacobian_damping, jacobian_clip)
-        @. B = FT - A * Xbar
-    else
-        zbuf = ws.zbuf
-        jt_buf = ws.jt_buf
-        xbar_buf = ws.xbar_buf
-
-        for t in 1:T
-            xbar = if t == 1
-                s0
-            else
-                copyto!(xbar_buf, 1, S_in, (t - 2) * D + 1, D)
-                xbar_buf
-            end
-
-            if jacobian === :stoch_diag
-                _rademacher!(zbuf, rng, ws.zhost)
-                ft, jvp1 = if rec.fwd_and_jvp !== nothing
-                    rec.fwd_and_jvp(xbar, rec.tape[t], zbuf)
-                else
-                    (rec.step_fwd(xbar, rec.tape[t]), rec.jvp(xbar, rec.tape[t], zbuf))
-                end
-
-                @. jt_buf = zbuf * jvp1
-                for _ in 2:probes
-                    _rademacher!(zbuf, rng, ws.zhost)
-                    jvp_k = rec.jvp(xbar, rec.tape[t], zbuf)
-                    @. jt_buf += zbuf * jvp_k
-                end
-                if probes > 1
-                    jt_buf .*= one(eltype(jt_buf)) / probes
-                end
-                modify && _modify_jacobian!(jt_buf, jacobian_damping, jacobian_clip)
-
-                colstart = (t - 1) * D + 1
-                copyto!(A, colstart, jt_buf, 1, D)
-                @. xbar_buf = ft - jt_buf * xbar
-                copyto!(B, colstart, xbar_buf, 1, D)
-
-            elseif jacobian === :diag
-                ft = rec.step_fwd(xbar, rec.tape[t])
-                jt = jac_diag_via_jvps(rec, xbar, t)
-                modify && _modify_jacobian!(jt, jacobian_damping, jacobian_clip)
-                colstart = (t - 1) * D + 1
-                copyto!(A, colstart, jt, 1, D)
-                @. xbar_buf = ft - jt * xbar
-                copyto!(B, colstart, xbar_buf, 1, D)
-
-            else
-                throw(ArgumentError("jacobian must be :diag or :stoch_diag"))
-            end
-        end
+    nprobes = jacobian === :diag ? D : probes
+    FT = _add_probe!(A, rec, ws, Xbar, _probe!(Z, jacobian, 1, rng, ws), true)
+    for k in 2:nprobes
+        _add_probe!(A, rec, ws, Xbar, _probe!(Z, jacobian, k, rng, ws), false)
     end
+    if jacobian === :stoch_diag && probes > 1
+        A .*= one(eltype(A)) / probes
+    end
+    modify && _modify_jacobian!(A, jacobian_damping, jacobian_clip)
+    @. B = FT - A * Xbar
 
     DEERScan.solve_affine_scan_diag!(S_out, A, B, s0, ws.scan)
     if damping != 1.0

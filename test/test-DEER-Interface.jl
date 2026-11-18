@@ -107,27 +107,93 @@ end
     @test run(ParallelMALASampler(0.1; T=8))[1].x == x0
 end
 
-@testset "scalar DEER path can AD the logdensity HVP with Enzyme when hvp is omitted" begin
+@testset "scalar-only model runs the batched step one column at a time" begin
     rng = MersenneTwister(2027)
     D, T = 3, 5
     ε = 0.03
 
     tape = [ParallelMCMC.MALATapeElement(randn(rng, D), rand(rng)) for _ in 1:T]
-    model = DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D)
-
-    model_p = ParallelMCMC._prepare_model(model, zeros(D), T, _AD)
-    rec_ad = ParallelMCMC._build_mala_deer_rec(model_p, ε, tape, zeros(D))
-    x = randn(rng, D)
-    v = randn(rng, D)
-    te = tape[1]
-
-    f_ad, jvp_ad = rec_ad.fwd_and_jvp(x, te, v)
-    f_ref, jvp_ref = ParallelMCMC.MALA.mala_step_taped_and_jvp(
-        logp_quartic_deer, gradlogp_quartic_deer, x, ε, te.ξ, te.u, v, hvp_quartic_deer
+    Ξ = reduce(hcat, (te.ξ for te in tape))
+    U = [te.u for te in tape]
+    X = randn(rng, D, T)
+    Z = randn(rng, D, T)
+    ref = ParallelMCMC.MALA.mala_step_batched_fwd_and_jvp(
+        logp_batch_quartic_deer,
+        gradlogp_batch_quartic_deer,
+        hvp_batch_quartic_deer,
+        X,
+        ε,
+        Ξ,
+        U,
+        Z,
     )
 
-    @test f_ad ≈ f_ref atol = 1e-10 rtol = 1e-10
-    @test jvp_ad ≈ jvp_ref atol = 1e-10 rtol = 1e-10
+    # The HVP from the model, and from Enzyme over the gradient when the model has none.
+    for (model, backend) in (
+        (
+            DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D; hvp=hvp_quartic_deer),
+            nothing,
+        ),
+        (DensityModel(logp_quartic_deer, gradlogp_quartic_deer, D), _AD),
+    )
+        model_p = ParallelMCMC._prepare_model(model, zeros(D), T, backend)
+        rec = ParallelMCMC._build_mala_deer_rec(model_p, ε, tape, zeros(D))
+        @test rec.step_fwd === nothing && rec.jvp === nothing
+        FT, Jt = rec.fwd_and_jvp_batch(X, Z)
+        @test FT ≈ ref[1] atol = 1e-10 rtol = 1e-10
+        @test Jt ≈ ref[2] atol = 1e-10 rtol = 1e-10
+    end
+end
+
+@testset "vector JVP functions match the batched step on one column" begin
+    rng = MersenneTwister(31)
+    D = 3
+    ε = 0.05
+    L = [1.0 0 0; 0.3 0.8 0; -0.2 0.1 1.2]
+    for cholM in (nothing, cholesky(Symmetric(L * L')))
+        x, ξ, v = randn(rng, D), randn(rng, D), randn(rng, D)
+        u = 0.4
+        f, jv = ParallelMCMC.MALA.mala_step_taped_and_jvp(
+            logp_quartic_deer,
+            gradlogp_quartic_deer,
+            x,
+            ε,
+            ξ,
+            u,
+            v,
+            hvp_quartic_deer;
+            cholM=cholM,
+        )
+        FT, Jt = ParallelMCMC.MALA.mala_step_batched_fwd_and_jvp(
+            logp_batch_quartic_deer,
+            gradlogp_batch_quartic_deer,
+            hvp_batch_quartic_deer,
+            reshape(x, D, 1),
+            ε,
+            reshape(ξ, D, 1),
+            [u],
+            reshape(v, D, 1);
+            cholM=cholM,
+        )
+        @test f ≈ vec(FT) atol = 1e-12
+        @test jv ≈ vec(Jt) atol = 1e-12
+        # The forward step agrees with the vector step the sequential samplers take.
+        x_next = ParallelMCMC.MALA.mala_step_taped(
+            logp_quartic_deer, gradlogp_quartic_deer, x, ε, ξ, u; cholM=cholM
+        )
+        @test f ≈ x_next atol = 1e-12
+        @test ParallelMCMC.MALA.mala_step_surrogate_sigmoid_jvp(
+            logp_quartic_deer,
+            gradlogp_quartic_deer,
+            x,
+            ε,
+            ξ,
+            u,
+            v,
+            hvp_quartic_deer;
+            cholM=cholM,
+        ) == jv
+    end
 end
 
 @testset "batched DEER path can AD the batched gradient when hvp_batch is omitted" begin
@@ -242,18 +308,20 @@ end
     @test m_p.grad_logdensity_batch === nothing
     @test m_p.hvp_batch === nothing
 
-    # `:diag` takes the unbatched path.
+    # `:diag` probes with each unit vector, two fused calls per probe.
     ncalls[] = 0
-    sample(
+    run_diag(m) = sample(
         MersenneTwister(1),
-        one_call,
+        m,
         ParallelMALASampler(0.1; T=T, jacobian=:diag),
         T;
         initial_params=x0,
         chain_type=Any,
         progress=false,
     )
-    @test ncalls[] == 0
+    out_diag = run_diag(one_call)
+    @test ncalls[] > 0 && ncalls[] % (2D) == 0
+    @test [t.x for t in out_diag] == [t.x for t in run_diag(separate)]
 
     @test_throws ArgumentError DensityModel(logp, gradlogp, D; value_grad_hvp_batch=fused)
     for kw in ((; grad_logdensity_batch=grad_b), (; hvp_batch=hvp_b))

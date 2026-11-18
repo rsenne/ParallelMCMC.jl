@@ -334,7 +334,7 @@ model = DensityModel(logp, gradlogp, D;
 It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well.
 `hvp` and `logdensity_batch` are still needed.
 The sampler copies the three results before its next call, so the function may return buffers it reuses.
-With `jacobian=:diag`, DEER takes the unbatched path and does not call it.
+With `jacobian=:diag`, DEER probes with each of the `D` unit vectors, so it calls it `2D` times per iteration instead of twice.
 
 ---
 

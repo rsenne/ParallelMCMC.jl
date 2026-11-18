@@ -50,8 +50,15 @@ end
 # Construct a tape for toy affine recursion: b_t vectors
 make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T]
 
+# The diagonal Jacobian estimate a DEER update linearizes with, unmodified.
+function linearized_diag(rec, s0, S; kwargs...)
+    ws = DEER.DEERWorkspace(S, s0)
+    DEER.deer_update!(ws, similar(S), rec, s0, S; jacobian_clip=Inf, kwargs...)
+    return ws.A
+end
+
 @testset "Jacobian / surrogate tune-up" begin
-    @testset "jac_diag_via_jvps gives exact diagonal on affine step" begin
+    @testset ":diag linearizes with the exact diagonal on an affine step" begin
         rng = MersenneTwister(20251231)
         D, T = 6, 5
 
@@ -63,15 +70,11 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         jvp = (x, b, v) -> A * v
         rec = DEER.TapedRecursion(step_fwd, jvp, tape)
 
-        x = randn(rng, D)
-        for t in 1:T
-            d = DEER.jac_diag_via_jvps(rec, x, t)
-            @test size(d) == (D,)
-            @test d ≈ diag(A) atol = 1e-12 rtol = 1e-12
-        end
+        J = linearized_diag(rec, randn(rng, D), randn(rng, D, T); jacobian=:diag)
+        @test J ≈ repeat(diag(A), 1, T) atol = 1e-12 rtol = 1e-12
     end
 
-    @testset "jac_diag_stoch approaches diag(J) as probes increase (affine step)" begin
+    @testset ":stoch_diag approaches diag(J) as probes increase (affine step)" begin
         rng = MersenneTwister(20251231)
         D, T = 8, 3
 
@@ -82,17 +85,17 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         jvp = (x, b, v) -> A * v
         rec = DEER.TapedRecursion(step_fwd, jvp, tape)
 
-        x = randn(rng, D)
-        t = 1
-        dtrue = diag(A)
+        s0 = randn(rng, D)
+        S = randn(rng, D, T)
+        Jtrue = repeat(diag(A), 1, T)
 
         # Compare MSE averaged over multiple independent probe RNG streams
         function mse_for_probes(K::Int; nrep::Int=25)
             mses = zeros(Float64, nrep)
             for r in 1:nrep
                 rrng = MersenneTwister(10_000 + 97 * r)
-                dest = DEER.jac_diag_stoch(rec, x, t; probes=K, rng=rrng)
-                mses[r] = mean((dest .- dtrue) .^ 2)
+                J = linearized_diag(rec, s0, S; probes=K, rng=rrng)
+                mses[r] = mean((J .- Jtrue) .^ 2)
             end
             return mean(mses)
         end
@@ -105,8 +108,8 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         @test mse64 < mse8
     end
 
-    @testset "jac_diag_stoch default probe uses x-like storage" begin
-        x = TaggedVector([1.0, 2.0, 3.0])
+    @testset "per-step recursions get probes like the initial state" begin
+        s0 = TaggedVector([1.0, 2.0, 3.0])
         tape = [1]
         step_fwd = (x, t) -> x
         jvp = function (x, t, v)
@@ -115,10 +118,7 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         end
         rec = DEER.TapedRecursion(step_fwd, jvp, tape)
 
-        d = DEER.jac_diag_stoch(rec, x, 1; rng=MersenneTwister(1))
-
-        @test d isa TaggedVector
-        @test collect(d) == ones(3)
+        @test linearized_diag(rec, s0, ones(3, 1); rng=MersenneTwister(1)) == ones(3, 1)
     end
 
     @testset "Rademacher and DEER argument validation paths" begin
@@ -133,14 +133,13 @@ make_affine_tape(rng::AbstractRNG, D::Int, T::Int) = [randn(rng, D) for _ in 1:T
         step_fwd = (x, t) -> 0.8 .* x .+ t
         jvp = (x, t, v) -> 0.8 .* v
         rec = DEER.TapedRecursion(step_fwd, jvp, tape)
-        x = randn(rng, D)
 
-        @test_throws ArgumentError DEER.jac_diag_stoch(
-            rec, x, 1; probes=0, rng=MersenneTwister(1)
-        )
-        @test_throws ArgumentError DEER.jac_diag_stoch(
-            rec, x, 1; zbuf=zeros(D + 1), rng=MersenneTwister(1)
-        )
+        # Per-step recursions need a JVP and a forward step.
+        @test_throws ArgumentError DEER.TapedRecursion(nothing, nothing, tape)
+        @test_throws ArgumentError DEER.TapedRecursion(step_fwd, nothing, tape)
+        @test_throws ArgumentError DEER.TapedRecursion(nothing, jvp, tape)
+        @test DEER.TapedRecursion(nothing, jvp, tape; fwd_and_jvp=(x, t, v) -> (x, v)) isa
+            DEER.TapedRecursion
 
         S = randn(rng, D, T)
         S_out = similar(S)

@@ -190,14 +190,20 @@ end
         @test isapprox(view(S_deer, :, t), xs_seq[t + 1]; rtol=1e-5, atol=1e-7)
     end
 
-    # Verify jac_diag_via_jvps and jac_diag_stoch agree on an affine-like check.
-    tcheck = 5
-    xbar = xs_seq[tcheck]
-
-    diag_exact = DEER.jac_diag_via_jvps(rec, xbar, tcheck)
-    diag_est = DEER.jac_diag_stoch(
-        rec, xbar, tcheck; probes=200, rng=MersenneTwister(123), zbuf=zeros(D)
+    # Many Hutchinson probes approach the exact diagonal DEER linearizes with.
+    S_seq = reduce(hcat, xs_seq[2:end])
+    ws = DEER.DEERWorkspace(S_seq, x0)
+    DEER.deer_update!(ws, similar(S_seq), rec, x0, S_seq; jacobian=:diag)
+    diag_exact = ws.A[:, 5]
+    DEER.deer_update!(
+        ws,
+        similar(S_seq),
+        rec,
+        x0,
+        S_seq;
+        jacobian=:stoch_diag,
+        probes=200,
+        rng=MersenneTwister(123),
     )
-
-    @test isapprox(diag_est, diag_exact; rtol=0.15, atol=0.15)
+    @test isapprox(ws.A[:, 5], diag_exact; rtol=0.15, atol=0.15)
 end
