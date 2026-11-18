@@ -4,6 +4,8 @@ using AbstractMCMC
 using ADTypes: ADTypes, AbstractADType
 using DifferentiationInterface: DifferentiationInterface
 using FlexiChains
+using GPUArraysCore: AnyGPUArray
+using KernelAbstractions: KernelAbstractions
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 using Random
@@ -33,13 +35,34 @@ which is the default.
 `ReactantExt` also reads it as "this array lives on a device", to warn when the
 XLA client is on the host while the parameters are not.
 
-`CUDAExt` defines it for `CuArray`. To support another device array type:
+It is `true` for GPU arrays (`GPUArraysCore.AnyGPUArray`). To support another
+device array type:
 
 ```julia
-ParallelMCMC.needs_host_staging(::ROCArray) = true
+ParallelMCMC.needs_host_staging(::MyDeviceArray) = true
 ```
 """
 needs_host_staging(::AbstractArray) = false
+needs_host_staging(::AnyGPUArray) = true
+
+"""
+    _kernel_backend(arrays...) -> KernelAbstractions.Backend or nothing
+
+The KernelAbstractions backend that runs the package's kernels (the DEER scan and
+convergence check) on these arrays, or `nothing` to use whole-array broadcasts.
+
+GPU arrays (`AnyGPUArray`) get their own backend, so the kernels run on every GPU
+vendor. Everything else gets `nothing`: CPU arrays, and Reactant's arrays, which
+XLA compiles and fuses from the broadcasts. Reactant defines `get_backend` for its
+arrays, so this opts in by type rather than asking `get_backend`.
+"""
+_kernel_backend(::AbstractArray) = nothing
+_kernel_backend(x::AnyGPUArray) = KernelAbstractions.get_backend(x)
+function _kernel_backend(x::AbstractArray, y::AbstractArray, rest::AbstractArray...)
+    b = _kernel_backend(x)
+    b === nothing && return nothing
+    return b == _kernel_backend(y, rest...) ? b : nothing
+end
 
 """
     _host_staging_buffer(template::AbstractArray, ::Type{T}, dims::Dims) -> Array{T}
@@ -67,7 +90,7 @@ const _REACTANT_LOAD_HINT = "AutoReactant requires Reactant.jl: add `using React
 
 include("MALA/MALA.jl")
 include("DEER/DEER.jl")
-# Alias, not a second copy: the solver and CUDAExt use DEER.DEERScan.
+# Alias, not a second copy: the solver uses DEER.DEERScan.
 const DEERScan = DEER.DEERScan
 include("model.jl")
 include("chains.jl")

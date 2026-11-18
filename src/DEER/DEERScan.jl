@@ -1,5 +1,8 @@
 module DEERScan
 
+using KernelAbstractions: KernelAbstractions as KA, @kernel, @index, @Const
+import ...ParallelMCMC: _kernel_backend
+
 export AffineScanWorkspace,
     solve_affine_seq!,
     solve_affine_seq,
@@ -105,14 +108,97 @@ CPU arrays and GPU arrays alike, as long as broadcasted assignment and
 slicing/views are supported by the array type.
 
 Notes:
-- This is the backend-agnostic implementation. It performs O(log T) sweep
-  levels, each made of whole-array broadcasts, so it launches about four kernels
-  per level on a GPU. The CUDA extension replaces it for `CuArray`s with a
-  chunked scan that launches three.
+- GPU arrays run a chunked scan in three KernelAbstractions kernels (see
+  `_scan_chunked!`). Other arrays, including Reactant's, run O(log T) sweep
+  levels of whole-array broadcasts, which XLA fuses under Reactant.
 - `S` may alias neither `A` nor `B`.
 - `ws` allows the scan to run without warm-path allocations.
 """
 function solve_affine_scan_diag!(
+    S::AbstractMatrix,
+    A::AbstractMatrix,
+    B::AbstractMatrix,
+    s0::AbstractVector,
+    ws::AffineScanWorkspace;
+    check_shapes::Bool=true,
+)
+    backend = _kernel_backend(S, A, B, s0)
+    backend === nothing || return _scan_chunked!(backend, S, A, B, s0, ws)
+    return _scan_doubling!(S, A, B, s0, ws; check_shapes=check_shapes)
+end
+
+#= Chunked scan of s_t = A[:, t] .* s_{t-1} .+ B[:, t] in three launches. Work-item
+(d, k) composes the maps of chunk k for parameter d, one work-item per d carries the
+state across chunks, and work-item (d, k) replays its chunk from that state. Each
+state comes from the same sequential recursion as `solve_affine_seq!`. =#
+@kernel function _chunk_summary_kernel!(Asum, Bsum, @Const(A), @Const(B), C::Int, T::Int)
+    i = @index(Global, Linear)
+    D = size(A, 1)
+    d = (i - 1) % D + 1
+    k = (i - 1) ÷ D + 1
+    # (a, b) is the map s ↦ a * s + b of the steps so far; step t turns it into
+    # s ↦ A[d, t] * (a * s + b) + B[d, t].
+    a = one(eltype(Asum))
+    b = zero(eltype(Bsum))
+    @inbounds for t in ((k - 1) * C + 1):min(k * C, T)
+        at = A[d, t]
+        a = at * a
+        b = at * b + B[d, t]
+    end
+    @inbounds Asum[d, k] = a
+    @inbounds Bsum[d, k] = b
+end
+
+@kernel function _chunk_carry_kernel!(Sin, @Const(Asum), @Const(Bsum), @Const(s0))
+    d = @index(Global, Linear)
+    # Sin[d, k] is the state entering chunk k.
+    @inbounds s = s0[d]
+    @inbounds for k in axes(Sin, 2)
+        Sin[d, k] = s
+        s = Asum[d, k] * s + Bsum[d, k]
+    end
+end
+
+@kernel function _chunk_replay_kernel!(S, @Const(A), @Const(B), @Const(Sin), C::Int, T::Int)
+    i = @index(Global, Linear)
+    D = size(A, 1)
+    d = (i - 1) % D + 1
+    k = (i - 1) ÷ D + 1
+    @inbounds s = Sin[d, k]
+    @inbounds for t in ((k - 1) * C + 1):min(k * C, T)
+        s = A[d, t] * s + B[d, t]
+        S[d, t] = s
+    end
+end
+
+#= Kernels are built with a dynamic workgroup size and launched with this one. A
+static size, `kernel!(backend, 256)`, does not infer, so each launch would dispatch
+at run time, which costs more than a small scan. =#
+const _WORKGROUP = 256
+
+function _scan_chunked!(backend::KA.Backend, S, A, B, s0, ws::AffineScanWorkspace)
+    D, Tn = size(A)
+    #= Always check sizes, even with `check_shapes=false`: the kernels use
+    `@inbounds`, so a mismatch would corrupt memory instead of throwing. =#
+    _check_scan_shapes(S, A, B, s0, ws)
+    (Tn == 0 || D == 0) && return S
+    #= Each work-item of the carry kernel walks K = T / C steps, and each of the
+    other two walks C steps; C ≈ √T keeps both short. =#
+    C = max(32, isqrt(Tn))
+    K = cld(Tn, C)
+    Asum = view(ws.alpha, :, 1:K)
+    Bsum = view(ws.beta, :, 1:K)
+    Sin = view(ws.alpha_new, :, 1:K)
+    wg = _WORKGROUP
+    _chunk_summary_kernel!(backend)(
+        Asum, Bsum, A, B, C, Tn; ndrange=D * K, workgroupsize=wg
+    )
+    _chunk_carry_kernel!(backend)(Sin, Asum, Bsum, s0; ndrange=D, workgroupsize=wg)
+    _chunk_replay_kernel!(backend)(S, A, B, Sin, C, Tn; ndrange=D * K, workgroupsize=wg)
+    return S
+end
+
+function _scan_doubling!(
     S::AbstractMatrix,
     A::AbstractMatrix,
     B::AbstractMatrix,

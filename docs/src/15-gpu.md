@@ -4,6 +4,10 @@ DEER's prefix-scan and per-step batch evaluations are array-type-agnostic, so th
 
 ParallelMCMC does not depend on CUDA.jl.  `using CUDA` loads the `CUDAExt` extension, which is required for `CuArray` parameters.
 
+On GPU arrays, DEER's affine scan and convergence test run as [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) kernels, so they are not tied to CUDA: any `AbstractGPUArray` (for example AMDGPU's `ROCArray` or Metal's `MtlArray`) uses them without an extension.  `CUDAExt` adds what needs CUDA itself: Hutchinson probes drawn on the device, and pinned host buffers for staging.  Other GPU array types draw the probes on the host and copy them over.  Only CUDA is tested on a real GPU; the kernels are also tested on JLArrays, a reference GPU array type that runs on the CPU.
+
+When `ParallelMALASampler` compiles the whole DEER iteration with Reactant, XLA runs the scan and convergence test and these kernels are not used; see [Reactant HVPs](#Reactant-HVPs).
+
 ---
 
 ## When to use GPU

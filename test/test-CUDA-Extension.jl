@@ -14,7 +14,7 @@ end
     @test ws.zhost === nothing
 end
 
-@testset "Convergence check returns both maxima" begin
+@testset "Convergence check returns both maxima on the host" begin
     S_new = [1.0 -4.0; 2.5 0.5]
     S = [0.5 -1.0; 2.0 0.0]
     @test ParallelMCMC.DEER._max_abs_change(S_new, S) == (3.0, 4.0)
@@ -171,7 +171,9 @@ end
     end
 end
 
-@testset "CUDAExt replaces the scan, convergence check and probes" begin
+# The scan and convergence-check kernels are tested on every GPU array type in
+# test-GPU-Kernels.jl. CUDAExt keeps only the device RNG for the probes.
+@testset "CUDAExt draws probes on the device" begin
     cuda_functional = try
         using CUDA
         CUDA.functional() && (CUDA.CuArray([1.0f0]); true)
@@ -179,75 +181,16 @@ end
         false
     end
     if !cuda_functional || Base.get_extension(ParallelMCMC, :CUDAExt) === nothing
-        @info "CUDAExt kernels: CUDAExt unavailable, skipping"
+        @info "CUDAExt probes: CUDAExt unavailable, skipping"
     else
         DEER = ParallelMCMC.DEER
-        rng = MersenneTwister(11)
-
-        # Shapes cover one chunk, a partial last chunk, D = 1 and T = 1.
-        @testset "chunked scan matches the sequential recursion (D=$D, T=$T, $FT)" for (
-            D, T, FT
-        ) in (
-            (3, 1, Float32),
-            (7, 33, Float32),
-            (1, 1000, Float32),
-            (25, 4097, Float32),
-            (5, 300, Float64),
-        )
-            A = FT(0.9) .* rand(rng, FT, D, T) .+ FT(0.05)
-            B = randn(rng, FT, D, T)
-            s0 = randn(rng, FT, D)
-            Ad, Bd, s0d = CUDA.CuArray(A), CUDA.CuArray(B), CUDA.CuArray(s0)
-            S = similar(Ad)
-            DEER.DEERScan.solve_affine_scan_diag!(
-                S, Ad, Bd, s0d, DEER.DEERScan.AffineScanWorkspace(Ad)
-            )
-            @test Array(S) ≈ DEER.DEERScan.solve_affine_seq(A, B, s0)
-        end
-
-        @testset "convergence check matches the host ($FT)" for FT in (Float32, Float64)
-            S_new = randn(rng, FT, 6, 500)
-            S = randn(rng, FT, 6, 500)
-            @test DEER._max_abs_change(CUDA.CuArray(S_new), CUDA.CuArray(S)) ==
-                DEER._max_abs_change(S_new, S)
-            S_new[4, 321] = FT(NaN)
-            Δ, m = DEER._max_abs_change(CUDA.CuArray(S_new), CUDA.CuArray(S))
-            @test isnan(Δ) && isnan(m)
-            @test_throws DimensionMismatch DEER._max_abs_change(
-                CUDA.CuArray(S_new), CUDA.CuArray(S[:, 1:10])
-            )
-        end
-
-        @testset "scan checks sizes even with check_shapes=false" begin
-            A = CUDA.rand(Float32, 4, 50)
-            ws = DEER.DEERScan.AffineScanWorkspace(A)
-            @test_throws DimensionMismatch DEER.DEERScan.solve_affine_scan_diag!(
-                similar(A),
-                A,
-                CUDA.rand(Float32, 4, 49),
-                CUDA.rand(Float32, 4),
-                ws;
-                check_shapes=false,
-            )
-            @test_throws DimensionMismatch DEER.DEERScan.solve_affine_scan_diag!(
-                similar(A),
-                A,
-                CUDA.rand(Float32, 4, 50),
-                CUDA.rand(Float32, 3),
-                ws;
-                check_shapes=false,
-            )
-        end
-
-        @testset "probes are drawn on the device" begin
-            ws = DEER.DEERWorkspace(CUDA.zeros(Float32, 4), 64)
-            @test ws.probe_rng !== nothing
-            @test ws.Zhost === nothing
-            DEER._probe_matrix!(ws.Z, MersenneTwister(3), ws)
-            Z1 = Array(ws.Z)
-            @test all(v -> abs(v) == 1.0f0, Z1)
-            DEER._probe_matrix!(ws.Z, MersenneTwister(3), ws)
-            @test Array(ws.Z) == Z1
-        end
+        ws = DEER.DEERWorkspace(CUDA.zeros(Float32, 4), 64)
+        @test ws.probe_rng !== nothing
+        @test ws.Zhost === nothing
+        DEER._probe_matrix!(ws.Z, MersenneTwister(3), ws)
+        Z1 = Array(ws.Z)
+        @test all(v -> abs(v) == 1.0f0, Z1)
+        DEER._probe_matrix!(ws.Z, MersenneTwister(3), ws)
+        @test Array(ws.Z) == Z1
     end
 end

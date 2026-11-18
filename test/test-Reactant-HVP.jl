@@ -97,6 +97,21 @@ end
         @test Base.get_extension(ParallelMCMC, :ReactantExt) !== nothing
     end
 
+    #= Reactant defines KernelAbstractions' `get_backend` for its arrays, but they
+    must keep the broadcast scan, which XLA traces and fuses. =#
+    @testset "Reactant arrays keep the broadcast scan" begin
+        @test ParallelMCMC._kernel_backend(Reactant.to_rarray(zeros(3, 4))) === nothing
+        rng = MersenneTwister(5)
+        A = 0.9 .* rand(rng, 3, 40)
+        B = randn(rng, 3, 40)
+        s0 = randn(rng, 3)
+        scan(A, B, s0) = ParallelMCMC.DEERScan.solve_affine_scan_diag(A, B, s0)
+        S = Reactant.@jit scan(
+            Reactant.to_rarray(A), Reactant.to_rarray(B), Reactant.to_rarray(s0)
+        )
+        @test Array(S) ≈ ParallelMCMC.DEERScan.solve_affine_seq(A, B, s0)
+    end
+
     @testset "a non-default AutoReactant mode is rejected" begin
         bad = AutoReactant(; mode=AutoEnzyme(; mode=Enzyme.Forward))
         model_grad = DensityModel(logp_r, bad, D_R)

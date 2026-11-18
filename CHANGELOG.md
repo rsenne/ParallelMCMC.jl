@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `warn=false` to silence it. `ParallelMALASampler` warns once per run with the
   number of blocks that did not converge (#78).
 
+### Changed
+
+- DEER's chunked affine scan and its convergence test are now
+  KernelAbstractions.jl kernels in the core package instead of CUDA kernels in
+  `CUDAExt`, so they run on any GPU array type (`AbstractGPUArray`), not only
+  `CuArray`. `needs_host_staging` is `true` for every GPU array, including views
+  of one. CPU arrays and Reactant's traced arrays keep the broadcast scan.
+  KernelAbstractions and GPUArraysCore are new dependencies.
+
 ### Fixed
 
 - `ParallelMCMC.DEERScan` and `ParallelMCMC.DEER.DEERScan` are now one module. They

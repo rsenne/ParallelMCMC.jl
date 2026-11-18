@@ -4,8 +4,10 @@ using LinearAlgebra
 using DifferentiationInterface
 using ADTypes: ADTypes, AbstractADType
 using Random
+using KernelAbstractions:
+    KernelAbstractions as KA, @kernel, @index, @Const, @localmem, @synchronize, @uniform
 
-import ..ParallelMCMC: needs_host_staging
+import ..ParallelMCMC: needs_host_staging, _kernel_backend
 
 include("DEERScan.jl")
 using .DEERScan
@@ -85,11 +87,16 @@ end
     _max_abs_change(S_new, S) -> (maximum(abs.(S_new .- S)), maximum(abs.(S_new)))
 
 Both maxima of the convergence test in one pass, so a device method needs only one
-reduction and one copy to the host.
+reduction and one copy to the host. A NaN in `S_new` propagates to both, as with
+`maximum`.
 """
-function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
+function _max_abs_change(S_new::AbstractArray, S::AbstractArray)
     size(S_new) == size(S) ||
         throw(DimensionMismatch("S_new and S must have the same size"))
+    return _max_abs_change(_kernel_backend(S_new, S), S_new, S)
+end
+
+function _max_abs_change(::Nothing, S_new::AbstractArray{T}, S::AbstractArray) where {T}
     return mapreduce(
         (a, b) -> (abs(a - b), abs(a)),
         (x, y) -> (max(x[1], y[1]), max(x[2], y[2])),
@@ -97,6 +104,80 @@ function _max_abs_change(S_new::AbstractArray{T}, S::AbstractArray) where {T}
         S;
         init=(zero(real(T)), zero(real(T))),
     )
+end
+
+#= Each workgroup folds a grid-stride slice into its two maxima, then reduces them in
+local memory. The host takes the maximum over the workgroups' results, so no atomics
+are needed. Every `@synchronize` sits at the top level of the kernel, as the CPU
+backend of KernelAbstractions 0.9 requires; the tree is unrolled for that, so it is
+tied to `_REDUCE_WORKGROUP = 256`. =#
+const _REDUCE_WORKGROUP = 256
+const _REDUCE_MAX_GROUPS = 256
+
+@inline function _tree_step!(dmax, smax, l, s)
+    if l <= s
+        @inbounds dmax[l] = max(dmax[l], dmax[l + s])
+        @inbounds smax[l] = max(smax[l], smax[l + s])
+    end
+    return nothing
+end
+
+@kernel function _max_abs_change_kernel!(partials, @Const(S_new), @Const(S), stride::Int)
+    @uniform R = eltype(partials)
+    dmax_s = @localmem R (_REDUCE_WORKGROUP,)
+    smax_s = @localmem R (_REDUCE_WORKGROUP,)
+    i = @index(Global, Linear)
+    n = length(S_new)
+    dmax = zero(R)
+    smax = zero(R)
+    while i <= n
+        @inbounds a = S_new[i]
+        @inbounds dmax = max(dmax, abs(a - S[i]))
+        smax = max(smax, abs(a))
+        i += stride
+    end
+    @inbounds dmax_s[@index(Local, Linear)] = dmax
+    @inbounds smax_s[@index(Local, Linear)] = smax
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 128)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 64)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 32)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 16)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 8)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 4)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 2)
+    @synchronize
+    _tree_step!(dmax_s, smax_s, @index(Local, Linear), 1)
+    @synchronize
+    if @index(Local, Linear) == 1
+        g = @index(Group, Linear)
+        @inbounds partials[1, g] = dmax_s[1]
+        @inbounds partials[2, g] = smax_s[1]
+    end
+end
+
+function _max_abs_change(
+    backend::KA.Backend, S_new::AbstractArray{T}, S::AbstractArray
+) where {T}
+    R = real(T)
+    n = length(S_new)
+    n == 0 && return (zero(R), zero(R))
+    ngroups = min(cld(n, _REDUCE_WORKGROUP), _REDUCE_MAX_GROUPS)
+    # A multiple of the workgroup size, so every work-item reaches each `@synchronize`.
+    nitems = ngroups * _REDUCE_WORKGROUP
+    partials = similar(S_new, R, 2, ngroups)
+    # Dynamic workgroup size at construction, for inference; see `DEERScan._WORKGROUP`.
+    _max_abs_change_kernel!(backend)(
+        partials, S_new, S, nitems; ndrange=nitems, workgroupsize=_REDUCE_WORKGROUP
+    )
+    h = Array(partials)
+    return maximum(view(h, 1, :)), maximum(view(h, 2, :))
 end
 
 function DEERWorkspace(
