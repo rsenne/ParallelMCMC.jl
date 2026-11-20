@@ -38,19 +38,19 @@ The approach and its scaling tricks (stochastic Hutchinson Jacobian estimators, 
 We repeat the Bayesian logistic regression of Zoltowski et al. (2025, Section 5.2) on the German Credit data, with whitened covariates, an intercept, and a $\mathcal{N}(0, I)$ prior, so the posterior has 25 dimensions.
 Each method draws one chain of $L$ samples with step size $\varepsilon = 0.0015$, which accepts about 85% of proposals.
 `ParallelMALASampler` solves the whole chain as one block, and its samples match the sequential chain step for step up to the solver tolerance of $5 \times 10^{-4}$.
+The exception would be an accept decision that falls within that tolerance of the threshold and flips; none did in these runs, and the parallel chain stayed within $3 \times 10^{-4}$ of the sequential one at every $L$.
 The model returns its log-density, gradient and Hessian-vector product from one `value_grad_hvp_batch` call, so each DEER iteration computes $X\beta$ once per state.
-The exception is an accept decision that falls within that tolerance of the threshold: in the 16 000-step run a single such decision flipped, and the two chains rejoined 43 steps later.
-The 64 000-step run draws the same random numbers for its first 16 000 steps and has the same flip.
 
 <p align="center">
   <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
 </p>
 
-At $L = 64\,000$ the parallel sampler is 4.3 times faster than sequential MALA on the CPU and 85 times faster than sequential MALA on the GPU.
-These timings come from one RTX 5090 and a 12-thread CPU under Windows.
+At $L = 64\,000$ the parallel sampler is 4.6 times faster than sequential MALA on the CPU and 37 times faster than sequential MALA on the GPU.
+These timings come from one NVIDIA H200 NVL and 8 cores of an AMD EPYC 9135 under Linux.
 Sequential MALA on a GPU waits for the device several times per step to make each accept decision on the host, so it trails the CPU at this size.
-The paper compiles its sequential baseline with JAX, which keeps the whole loop on the device, and reports parallel speedups of 20 to 30 times.
-The script is [`benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl).
+Compiled into one device program with Reactant, as the paper does with JAX, sequential MALA takes 12 µs per step on the same GPU, and the parallel sampler is 2.8 times faster than that.
+The paper's speedups of 20 to 30 times are for two chains at a time and about 10 for one, against a JAX loop that takes 19 to 28 µs per step on this GPU, depending on the JAX version.
+The scripts are [`german_credit.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl) and [`german_credit_reactant.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit_reactant.jl).
 
 ### Samplers
 
