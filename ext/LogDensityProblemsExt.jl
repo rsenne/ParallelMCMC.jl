@@ -30,25 +30,6 @@ backend. If it is not (for example, it calls AD internally), pass an explicit
 `DifferentiationInterface.SecondOrder`, which differentiates `logdensity` twice instead.
 `AutoReactant()` is unsupported. Batched derivatives require a hand-written
 `logdensity_batch`.
-
-# Example
-```julia
-using LogDensityProblems, ParallelMCMC
-
-struct NormalPosterior
-    y::Float64
-end
-LogDensityProblems.capabilities(::Type{NormalPosterior}) =
-    LogDensityProblems.LogDensityOrder{1}()
-LogDensityProblems.dimension(::NormalPosterior) = 1
-LogDensityProblems.logdensity(ld::NormalPosterior, x) = -0.5 * x[1]^2 - 2 * (ld.y - x[1])^2
-function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
-    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
-end
-
-model = DensityModel(NormalPosterior(1.5); param_names=[:μ])
-chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
-               discard_warmup=true)
 ```
 """
 function ParallelMCMC.DensityModel(
