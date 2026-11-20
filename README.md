@@ -42,13 +42,12 @@ The exception would be an accept decision that falls within that tolerance of th
 The model returns its log-density, gradient and Hessian-vector product from one `value_grad_hvp_batch` call, so each DEER iteration computes $X\beta$ once per state.
 
 <p align="center">
-  <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU and sequential MALA on the CPU and GPU" width="560">
+  <img src="docs/src/assets/german_credit.png" alt="Wall-clock time against chain length for parallel MALA on the GPU, sequential MALA compiled for the GPU, and sequential MALA on the CPU" width="560">
 </p>
 
-At $L = 64\,000$ the parallel sampler is 4.6 times faster than sequential MALA on the CPU and 37 times faster than sequential MALA on the GPU.
+We compare against two sequential baselines: `MALASampler` on the CPU, and the same chain compiled into one GPU program with Reactant, as the paper does with JAX.
+At $L = 64\,000$ the parallel sampler is 4.6 times faster than the CPU chain and 2.8 times faster than the compiled GPU chain, which takes 12 µs per step.
 These timings come from one NVIDIA H200 NVL and 8 cores of an AMD EPYC 9135 under Linux.
-Sequential MALA on a GPU waits for the device several times per step to make each accept decision on the host, so it trails the CPU at this size.
-Compiled into one device program with Reactant, as the paper does with JAX, sequential MALA takes 12 µs per step on the same GPU, and the parallel sampler is 2.8 times faster than that.
 The paper's speedups of 20 to 30 times are for two chains at a time and about 10 for one, against a JAX loop that takes 19 to 28 µs per step on this GPU, depending on the JAX version.
 The scripts are [`german_credit.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl) and [`german_credit_reactant.jl`](benchmarks/ParallelMCMCBenchmarks/scripts/german_credit_reactant.jl).
 

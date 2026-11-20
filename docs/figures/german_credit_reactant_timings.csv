@@ -1,0 +1,13 @@
+L,method,seconds
+1000,"MALA, CPU",0.0207
+1000,"MALA, GPU, compiled loop",0.0120
+1000,"DEER MALA, GPU, AutoReactant",0.0067
+4000,"MALA, CPU",0.0815
+4000,"MALA, GPU, compiled loop",0.0477
+4000,"DEER MALA, GPU, AutoReactant",0.0098
+16000,"MALA, CPU",0.3278
+16000,"MALA, GPU, compiled loop",0.1894
+16000,"DEER MALA, GPU, AutoReactant",0.0226
+64000,"MALA, CPU",1.3505
+64000,"MALA, GPU, compiled loop",0.7482
+64000,"DEER MALA, GPU, AutoReactant",0.2363

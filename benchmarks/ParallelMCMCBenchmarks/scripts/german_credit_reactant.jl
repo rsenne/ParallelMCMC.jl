@@ -17,7 +17,8 @@ environment with ParallelMCMC and Reactant:
 
     julia --project=<env> benchmarks/ParallelMCMCBenchmarks/scripts/german_credit_reactant.jl
 
-`PMCMC_L_VALS`, `PMCMC_REPS` and `PMCMC_EPSILON` work as in `german_credit.jl`.
+`PMCMC_L_VALS`, `PMCMC_REPS`, `PMCMC_EPSILON` and `PMCMC_OUT` work as in `german_credit.jl`;
+the figure reads this script's timings from `docs/figures/german_credit_reactant_timings.csv`.
 """
 
 using Downloads
@@ -214,6 +215,17 @@ for L in L_VALS
     )
     @printf("L = %6d  DEER compile time %.1f s, not included above\n", L, t_compile)
     println()
+end
+
+out = get(ENV, "PMCMC_OUT", "")
+if !isempty(out)
+    open(out, "w") do io
+        println(io, "L,method,seconds")
+        for r in results
+            @printf(io, "%d,\"%s\",%.4f\n", r.L, r.name, r.t)
+        end
+    end
+    println("wrote ", out, "\n")
 end
 
 println("Speedup of DEER MALA (AutoReactant) on the GPU:")

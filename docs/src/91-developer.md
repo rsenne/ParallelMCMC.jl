@@ -207,8 +207,8 @@ julia --project=docs/figures docs/figures/deer_iterations.jl
 julia --project=docs/figures docs/figures/german_credit.jl
 ```
 
-The second script reads `docs/figures/german_credit_timings.csv`.
-Run `benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl` with `PMCMC_OUT` set to that path to refresh the timings.
+The second script reads `docs/figures/german_credit_timings.csv` and `docs/figures/german_credit_reactant_timings.csv`.
+To refresh them, run `benchmarks/ParallelMCMCBenchmarks/scripts/german_credit.jl` and `german_credit_reactant.jl` with `PMCMC_OUT` set to those paths.
 
 ## Making a new release
 
