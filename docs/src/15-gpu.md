@@ -1,23 +1,22 @@
 # GPU execution
 
-There are two ways to run ParallelMCMC on an NVIDIA GPU.
+There are two ways to run ParallelMCMC on an NVIDIA GPU (AMD GPU support is not explicitly supported as of now).
 
 With [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl), the sampler keeps its arrays on the GPU as `CuArray`s and calls your model's functions on them.
 This works on Linux and Windows.
 The derivatives can be written by hand or come from an AD backend that supports `CuArray`s.
 
 With [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), ParallelMCMC compiles each DEER iteration, including your log-density and its derivatives, into one XLA program that Reactant runs on the GPU.
-You write the model for ordinary arrays and get the derivatives from AD.
+
 Reactant only supports GPUs on Linux, so on Windows you have to run Julia inside WSL.
 
 ## Is a GPU worth it?
 
-Parallel MALA does more total work than sequential MALA, so a GPU only pays off when each DEER iteration is expensive enough to keep it busy.
+While Parallel MALA has less _time_ complexity, it does more total work than sequential MALA, so a GPU with a large memory capacity is needed to really reap the benefits of this algorithm.
 Most of that work is evaluating the log-density, its gradient, and Hessian-vector products (HVPs) at all `T` states of the trajectory.
-Large data, many parameters, and a long block `T` all help.
-For a small, cheap target the CPU is usually faster, because kernel launches and copies between the host and the GPU dominate.
+COnsequently, wth small or simple models, you might find it hard to see real speedups with this method. Large data, many parameters, and a long block `T` all help.
+For a small, cheap target the CPU _can_ be faster, because kernel launches and copies between the host and the GPU dominate. But, the space of models where this is true likely also overlaps with the space of models that can likely be quickly evaluated using a sequential algorithm.
 
-Benchmark before you commit to the GPU.
 Run each version once to compile it, then time later calls with the same `T`, step size, and tolerances.
 
 ## The example model
@@ -57,7 +56,7 @@ sigmoid(z) = 1 / (1 + exp(-z))
 
 Load CUDA and pass a `CuVector` as `initial_params`.
 Every sampler then allocates its working arrays on the GPU, and your functions receive `CuArray`s.
-Write them with whole-array operations and broadcasting, because indexing a `CuArray` one element at a time is an error.
+Write them with whole-array operations and broadcasting, because indexing a `CuArray` one element at a time will error.
 
 ### Hand-written derivatives
 
@@ -101,7 +100,7 @@ using LinearAlgebra, Statistics
 norm(β_post - β_true) / norm(β_true)
 ```
 
-### Value, gradient and HVP in one call
+### Value, gradient, and HVP in one call
 
 Each DEER iteration evaluates the log-density, gradient and HVP at the current states and at the proposals.
 With separate functions, each of those six calls recomputes $X\beta$.
