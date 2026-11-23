@@ -1,7 +1,7 @@
 # How the algorithm works
 
 This page explains the implementation behind [`ParallelMALASampler`](@ref).
-The main idea comes from Zoltowski et al. (2025) [^1]: turn a sequential Markov recursion into a nonlinear system, then solve that system with parallel operations.
+The main idea comes from Zoltowski et al. (2025) [^1]: recognize that a sequential Markov recursion is a nonlinear recursion, then solve that recursion with parallel operations.
 
 You do not need this material to use the sampler.
 It is useful when choosing `T`, diagnosing convergence, or working with the low-level DEER API.
@@ -78,13 +78,13 @@ Because $u_t$ uses the same $\hat{J}_t$, the fixed point is still the sequential
 In exact arithmetic the solve therefore finishes in at most $T$ iterations for any $k$ and $c$.
 
 These are the `jacobian_damping` ($k$) and `jacobian_clip` ($c$) keywords.
-[`ParallelMALASampler`](@ref) defaults to $k = 1$ and $c = 1$, like the reference implementation, while `DEER.solve` defaults to $c = \infty$.
+[`ParallelMALASampler`](@ref) and `DEER.solve` both default to $k = 1$ and $c = 1$, like the reference implementation.
 Clipping changes nothing when every entry is already inside $[-c, c]$, but $k < 1$ slows solves that were already stable.
 
 The older `damping` keyword relaxes the iterate instead, as $S^{(i+1)} \leftarrow (1 - \lambda) S^{(i)} + \lambda S^{(i+1)}$.
 That loses the $T$-iteration bound, so `damping` is deprecated.
 
-## Why the diagonal approximation matters
+## Why the diagonal approximation?
 
 A dense $D \times D$ Jacobian at every transition is expensive to form, store, and combine.
 The public sampler therefore uses a diagonal approximation:

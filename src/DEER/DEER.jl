@@ -641,7 +641,7 @@ end
     solve(rec::TapedRecursion, s0; init=nothing, tol_abs=1e-4, tol_rel=1e-3,
           maxiter=200, jacobian=:stoch_diag, damping=1.0, probes=1,
           rng=Random.default_rng(), return_info=false, workspace=nothing,
-          copy_result=nothing)
+          copy_result=nothing, jacobian_damping=1, jacobian_clip=1, warn=true)
 
 Run DEER until the change between iterates meets the tolerances or `maxiter`
 is reached. These defaults differ from those of `ParallelMALASampler`.
@@ -664,8 +664,8 @@ al. 2025, App. B). Each diagonal Jacobian estimate `J` is replaced with
 Damping by `k < 1` is the scale-ELK of Gonzalez et al. (2024). Both only change
 the linearization, so the fixed point is the same and the solve still finishes
 in at most `T` iterations. The defaults (`1` and `1`) match
-[`ParallelMALASampler`](@ref): no scaling, and entries clipped to `[-1, 1]`.
-Without clipping, one-probe `:stoch_diag` estimates on correlated targets often
+[`ParallelMALASampler`](@ref ParallelMCMC.ParallelMALASampler): no scaling, and
+entries clipped to `[-1, 1]`. Without clipping, one-probe `:stoch_diag` estimates on correlated targets often
 exceed 1 in magnitude, and rounding error can then grow along the scan until the
 solve runs far past `T` iterations. Pass `jacobian_clip=Inf` to use the
 estimate as is.

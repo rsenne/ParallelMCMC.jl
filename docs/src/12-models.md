@@ -128,7 +128,7 @@ Only [`ParallelMALASampler`](@ref) uses the batched derivatives, and only with `
 
 Like `hvp`, `hvp_batch` can be a function or an AD backend.
 If you leave it out, the sampler picks a backend for it by the same rules as for `hvp`.
-A hand-written scalar `hvp` is not used for the batched HVP, so a model with batched functions needs `hvp_batch`, an HVP backend, or an AD gradient.
+A hand-written scalar `hvp` is not used for the batched HVP, so a model with batched functions needs `hvp_batch`, an HVP backend, or an AD gradient with no `grad_logdensity_batch`.
 
 If the gradient argument is an AD backend and you leave out `grad_logdensity_batch`, ParallelMCMC differentiates `sum(logdensity_batch(X))` instead.
 This is correct only if each entry of `logdensity_batch(X)` depends on the matching column of `X` alone.
@@ -150,7 +150,7 @@ Names may be `Symbol`s or `VarName`s.
 Give an array-valued entry as a pair of its name and shape, as with `:B => (1, 2)` above.
 The shapes must add up to exactly `dim` values.
 The default chain type, `VNChain`, converts `Symbol` names to `VarName`s.
-Pass `chain_type=SymChain` to `sample` to keep `Symbol` keys.
+To keep `Symbol` keys, load FlexiChains and pass `chain_type=SymChain` to `sample`.
 
 ## LogDensityProblems models
 

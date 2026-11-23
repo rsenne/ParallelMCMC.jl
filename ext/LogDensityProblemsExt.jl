@@ -30,7 +30,6 @@ backend. If it is not (for example, it calls AD internally), pass an explicit
 `DifferentiationInterface.SecondOrder`, which differentiates `logdensity` twice instead.
 `AutoReactant()` is unsupported. Batched derivatives require a hand-written
 `logdensity_batch`.
-```
 """
 function ParallelMCMC.DensityModel(
     ld;
