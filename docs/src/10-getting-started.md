@@ -1,20 +1,19 @@
 # Getting started
 
-This guide samples a two-dimensional banana-shaped density with parallel MALA.
-We tune the step size with sequential MALA first, then reuse it in the parallel sampler.
-The target is
+To illustrate how to use ParallelMCMC, this guide will sample from a two-dimensional banana-shaped density with parallel MALA.
+We first tune the step size with sequential MALA, then reuse it in the parallel sampler.
+Our target is
 
 ```math
 \log p(x) = -\frac{1}{2}\left(\frac{x_1^2}{100} + \left(x_2 + 0.1\, x_1^2 - 1\right)^2\right).
 ```
 
-Its Hessian changes with $x$, so it tests the Hessian-vector products in a way that a Gaussian target would not.
+Its Hessian changes with $x$, so it tests the Hessian-vector products in a way that a Gaussian target would not, as a Gaussian's Hessian does not depend on the data.
 
 ## Installation
-
-Parallel MALA is the main algorithm in ParallelMCMC.
-It needs Hessian-vector products of the log-density, which you can write yourself or get from an automatic differentiation (AD) backend.
-ParallelMCMC does not depend on any AD package, so you load the one you want.
+Before we can sample we need to install the necessary packages. Obviously we will need ParallelMCMC.
+Further, Parallel MALA needs Hessian-vector products of the log-density, which you can write yourself or get from an automatic differentiation (AD) backend.
+ParallelMCMC does not depend on any AD package, so you must load the one you want.
 This guide uses ForwardDiff.
 
 ```julia-repl
@@ -54,7 +53,7 @@ The gradient here is written by hand, but it does not have to be.
 
 ## Tune the step size
 
-MALA is sensitive to its step size.
+MALA is sensitive to its step sizeso it is important we use one that is properly tuned to our problem.
 If the step size is too large, most proposals are rejected; if it is too small, the chain moves slowly and successive samples are highly correlated.
 [`AdaptiveMALASampler`](@ref) tunes the step size during warmup, so we run it first and reuse the result.
 
@@ -80,7 +79,7 @@ After warmup the step size is fixed, so we take the last value of `:step_size`, 
 
 ## Run parallel MALA
 
-Pass the tuned step size to [`ParallelMALASampler`](@ref).
+We can now pass the tuned step size to [`ParallelMALASampler`](@ref).
 The model has no hand-written Hessian-vector product, so `backend=AutoForwardDiff()` tells the sampler to compute one by differentiating `banana_gradient`.
 
 ```@example gs
