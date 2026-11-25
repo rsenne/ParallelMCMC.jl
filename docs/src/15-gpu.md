@@ -131,9 +131,9 @@ We ran this model with each backend on an RTX 5090, with CUDA.jl 6.5 on Julia 1.
 | `AutoForwardDiff()` | Yes | Pushes one tangent through the gradient, so it costs about as much as a hand-written HVP. |
 | `AutoZygote()` | Yes | The gradient must not mutate arrays. |
 | `AutoMooncake()` | Yes | The first `sample` call took more than twice as long as with the other two. |
-| `AutoEnzyme()` | Only on Julia 1.11, with changes | See [Enzyme](@ref) below. |
+| `AutoEnzyme()` | Only in reverse mode, with runtime activity | See [Enzyme](@ref) below. |
 
-With all three working backends, the samples matched those from the hand-written HVPs to `Float32` rounding.
+With each backend, the samples matched those from the hand-written HVPs to `Float32` rounding.
 
 Getting the gradient itself from AD (without Reactant) on the GPU is harder.
 Zygote was the only backend that managed both the gradient and the HVP, and its first `sample` call took about 100 s.
@@ -143,25 +143,21 @@ Until then, use Reactant.
 
 ### Enzyme
 
-On Julia 1.11, Enzyme can compute HVPs from a hand-written gradient, but only with two changes.
-First, the gradient has to use `pmcmc_matmul` instead of `*`.
-This wrapper, along with `pmcmc_dot` for `dot` and `pmcmc_dotsum` for `sum(A .* B)`, has its own Enzyme rule, so Enzyme does not try to differentiate the cuBLAS call inside it.
-Second, runtime activity has to be on, or the model fails with an `EnzymeRuntimeActivityError`:
+In reverse mode with runtime activity turned on, Enzyme differentiates the gradients above as they are written:
 
 ```julia
 using ADTypes, Enzyme
 
-gradlogp(β) = pmcmc_matmul(X', y .- sigmoid.(pmcmc_matmul(X, β))) .- β
-gradlogp_batch(B) = pmcmc_matmul(X', y .- sigmoid.(pmcmc_matmul(X, B))) .- B
-
-model = DensityModel(logp, gradlogp, D;
-                     logdensity_batch=logp_batch,
-                     grad_logdensity_batch=gradlogp_batch)
-mode = Enzyme.set_runtime_activity(Enzyme.Forward)
+mode = Enzyme.set_runtime_activity(Enzyme.Reverse)
 sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoEnzyme(; mode=mode))
 ```
 
-With `*` instead of `pmcmc_matmul`, it fails even with runtime activity.
+Without runtime activity, this model fails with an `EnzymeRuntimeActivityError`.
+
+`AutoEnzyme()` without a mode runs forward mode, which cannot differentiate the cuBLAS calls behind `*` and `dot` on `CuArray`s.
+Forward mode works if runtime activity is on and the gradient calls `pmcmc_matmul(A, B)` instead of `A * B` and `sum(a .* b)` instead of `dot(a, b)`.
+`pmcmc_matmul` has its own Enzyme rule, so Enzyme does not try to differentiate the cuBLAS call inside it.
+On Julia 1.13, forward mode can still fail inside Enzyme ([#2707](https://github.com/EnzymeAD/Enzyme.jl/issues/2707), [#4094](https://github.com/EnzymeAD/Enzyme.jl/issues/4094)), so reverse mode is the safer choice there.
 CPU code and the other backends should keep the ordinary operators.
 
 ## With Reactant

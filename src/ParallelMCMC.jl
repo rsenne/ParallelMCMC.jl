@@ -12,12 +12,10 @@ using Statistics
 
 const DI = DifferentiationInterface
 
-# These wrappers let EnzymeExt define GPU differentiation rules without
-# changing rules for Julia's standard operators. GPU models using Enzyme
-# should call them to avoid the compilation failure described in the GPU guide.
+# This wrapper lets EnzymeExt define a GPU differentiation rule without
+# changing the rule for Julia's `*`. GPU models using forward-mode Enzyme
+# should call it to avoid the compilation failure described in the GPU guide.
 pmcmc_matmul(A::AbstractVecOrMat, B::AbstractVecOrMat) = A * B
-pmcmc_dot(a::AbstractVector, b::AbstractVector) = dot(a, b)
-pmcmc_dotsum(A::AbstractVecOrMat, B::AbstractVecOrMat) = sum(A .* B)
 
 """
     needs_host_staging(x::AbstractArray) -> Bool
@@ -77,7 +75,7 @@ export MALASampler, MALATransition, MALAState
 export AdaptiveMALASampler, AdaptiveMALATransition, AdaptiveMALAState
 export ParallelMALASampler, ParallelMALATransition, ParallelMALAState
 export MALA, DEER
-export pmcmc_matmul, pmcmc_dot, pmcmc_dotsum
+export pmcmc_matmul
 
 # Re-exports for convenience
 import AbstractMCMC: sample

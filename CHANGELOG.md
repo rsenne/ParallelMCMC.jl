@@ -96,6 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `chain_type=Any` for the raw transition vector, or `chain_type=SymChain`
   for `Symbol` keys.
 - CUDA compat widened to `5.11, 6`.
+- Enzyme compat raised to `0.13.221`, the release the Enzyme setup in the GPU
+  guide was tested with.
 - On `CuArray`s, each DEER iteration launches far fewer kernels. The affine scan
   is a three-kernel chunked scan instead of about four kernels per doubling
   level, the convergence test is one reduction, and the Hutchinson probes are
@@ -108,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `needs_host_staging` trait.
 - The AD-HVP fallback now respects the backend's `hvp_mode`, so
   `AutoEnzyme(mode=Enzyme.Reverse)` uses reverse-on-grad (#38).
+- Reverse-on-grad HVPs differentiate `dot(gradlogp(x), v)` with
+  `LinearAlgebra.dot`. With CUDA.jl 6.5 and Enzyme 0.13.221, reverse-mode Enzyme
+  handles `*` and `dot` on `CuArray`s, so
+  `AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse))` works with a
+  gradient written with `*`. Forward mode still needs `pmcmc_matmul`.
 - Deriving a batched gradient applies AD to `logdensity_batch`. Supply
   `grad_logdensity_batch` to avoid this.
 - `ParallelMALASampler`'s `backend` no longer derives a batched gradient, only
@@ -144,6 +151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MALA.mala_step_full`. Nothing in the package called them; they now live in
   the test suite as references. Use `MALA.mala_step_taped` or
   `MALA.mala_step_with_logα` instead.
+- `pmcmc_dot` and `pmcmc_dotsum`, with their Enzyme rules. Use `dot` and
+  `sum(A .* B)`. With runtime activity, Enzyme differentiates `sum(A .* B)` on
+  `CuArray`s in both modes, and reverse mode also handles `dot`.
 
 ## [0.2.0] - 2026-06-29
 

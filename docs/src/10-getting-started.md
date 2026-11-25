@@ -92,14 +92,23 @@ chain = sample(MersenneTwister(43), model, sampler, 2_000; initial_params=zeros(
 
 ## Choose `T` and the DEER controls
 
-Start with the default `T=64`, and change it only after the model samples correctly.
-Larger blocks give parallel hardware more work per iteration, but they use more memory and the nonlinear solve may need more iterations.
+Of the DEER settings, `T` matters most for speed.
+Each DEER iteration updates all `T` states of a block at once, and the solve usually needs far fewer iterations than `T`.
+In our tests on a logistic regression with 25 parameters, a block of 64 transitions took 12 to 16 iterations, while a block of 4096 took 23 to 31.
+[Zoltowski et al. (2025)](https://arxiv.org/abs/2508.18413) saw the same thing on a GPU, where whole chains of up to 64,000 MALA transitions converged in tens of iterations.
+
+This means a longer block needs far fewer sequential steps per sample, and on a GPU the default `T=64` leaves most of that unused.
+The limits are memory and the size of the GPU: once evaluating the model at `T` states takes noticeably longer than at one state, a longer block stops paying off.
+A CPU has much less room for parallel work, so there a long block mostly adds work.
+
+A simple way to choose `T` is to get the model sampling correctly with the default, then double `T` and time `sample` until it stops getting faster.
+In exact arithmetic the solve finishes within `T` iterations, so `maxiter` only comes into play once `T` is larger than it.
 
 The other keywords control the solve:
 
 - `jacobian=:stoch_diag`, the default, estimates the diagonal of each transition's Jacobian with `probes` random vectors. Each extra probe makes the estimate less noisy and costs one more Jacobian-vector product per transition.
 - `jacobian=:diag` computes the diagonal exactly with one Jacobian-vector product per parameter. Use it to check results on small models.
-- `jacobian_damping` and `jacobian_clip` scale and clip the Jacobian diagonal before each scan. The defaults suit most targets; try `jacobian_damping=0.5` if the solve needs many iterations or its iterates blow up. See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
+- `jacobian_damping` and `jacobian_clip` scale and clip the Jacobian diagonal before each scan. The defaults suit most targets; for multimodal targets, try `jacobian_damping=0.5`. See [Damping and clipping the Jacobian](20-algorithms.md#Damping-and-clipping-the-Jacobian).
 - `maxiter`, `tol_abs`, and `tol_rel` decide when the solve stops. See [`ParallelMALASampler`](@ref) for the exact rule.
 
 If a block reaches `maxiter` before it meets the tolerances, the sampler still returns its states as samples and logs one warning for the run.

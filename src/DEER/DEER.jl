@@ -200,19 +200,20 @@ end
 # Compute H*v by differentiating dot(gradlogp(x), v). DI.Constant lets us
 # change v without preparing the gradient again. Batched gradients must treat
 # columns independently for this calculation to give columnwise HVPs.
-# Use pmcmc reductions so Enzyme's GPU rules avoid the gc-transition abort.
+# The batch uses dot, not sum(G .* V): on CuArrays, reverse-mode Enzyme needs
+# runtime activity for that broadcast but not for dot.
 # Keep the closure with its preparation: DI requires the same function instance.
-import ..ParallelMCMC: pmcmc_dot, pmcmc_dotsum, _REACTANT_LOAD_HINT
+import ..ParallelMCMC: _REACTANT_LOAD_HINT
 
 struct _HvpReverseClosure{F}
     grad::F
 end
-(c::_HvpReverseClosure)(x, v) = pmcmc_dot(c.grad(x), v)
+(c::_HvpReverseClosure)(x, v) = dot(c.grad(x), v)
 
 struct _BatchHvpReverseClosure{F}
     grad_batch::F
 end
-(c::_BatchHvpReverseClosure)(X, V) = pmcmc_dotsum(c.grad_batch(X), V)
+(c::_BatchHvpReverseClosure)(X, V) = dot(c.grad_batch(X), V)
 
 # Differentiate a supplied gradient in the direction chosen by DI.hvp_mode:
 # forward mode computes J*v; reverse mode differentiates dot(gradlogp(x), v).
