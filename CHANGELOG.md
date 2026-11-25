@@ -110,9 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `needs_host_staging` trait.
 - The AD-HVP fallback now respects the backend's `hvp_mode`, so
   `AutoEnzyme(mode=Enzyme.Reverse)` uses reverse-on-grad (#38).
-- Reverse-on-grad HVPs differentiate `dot(gradlogp(x), v)` with
-  `LinearAlgebra.dot`. With CUDA.jl 6.5 and Enzyme 0.13.221, reverse-mode Enzyme
-  handles `*` and `dot` on `CuArray`s, so
+- Reverse-on-grad HVPs call `dot` and `sum(G .* V)` directly instead of
+  `pmcmc_dot` and `pmcmc_dotsum`. With Enzyme 0.13.221, reverse-mode Enzyme
+  differentiates `*` on `CuArray`s, so
   `AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse))` works with a
   gradient written with `*`. Forward mode still needs `pmcmc_matmul`.
 - Deriving a batched gradient applies AD to `logdensity_batch`. Supply

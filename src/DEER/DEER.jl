@@ -200,8 +200,9 @@ end
 # Compute H*v by differentiating dot(gradlogp(x), v). DI.Constant lets us
 # change v without preparing the gradient again. Batched gradients must treat
 # columns independently for this calculation to give columnwise HVPs.
-# The batch uses dot, not sum(G .* V): on CuArrays, reverse-mode Enzyme needs
-# runtime activity for that broadcast but not for dot.
+# The batch uses sum(G .* V), not dot(G, V): with CUDA.jl 6.4, reverse-mode
+# Enzyme returns `nothing` from the matrix dot. dot(vec(G), vec(V)) gives wrong
+# HVPs there and reads freed memory on 6.5.
 # Keep the closure with its preparation: DI requires the same function instance.
 import ..ParallelMCMC: _REACTANT_LOAD_HINT
 
@@ -213,7 +214,7 @@ end
 struct _BatchHvpReverseClosure{F}
     grad_batch::F
 end
-(c::_BatchHvpReverseClosure)(X, V) = dot(c.grad_batch(X), V)
+(c::_BatchHvpReverseClosure)(X, V) = sum(c.grad_batch(X) .* V)
 
 # Differentiate a supplied gradient in the direction chosen by DI.hvp_mode:
 # forward mode computes J*v; reverse mode differentiates dot(gradlogp(x), v).
