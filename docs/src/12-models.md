@@ -36,7 +36,7 @@ nothing # hide
 
 ## Option 2: derive the gradient with AD
 
-Pass an AD backend as the gradient argument to build a model from the log-density alone:
+If we would rather not use a hand written gradient, we can pass an AD backend as the gradient argument to build a model from the log-density alone:
 
 ```@example models
 using ADTypes, ForwardDiff
@@ -88,8 +88,11 @@ The HVP backend is the model's `hvp` if it is a backend, and otherwise the sampl
 `SecondOrder` and `forward_counterpart` come from DifferentiationInterface.
 `forward_counterpart` returns a forward-mode version of the backend when one exists, such as `AutoMooncakeForward` for `AutoMooncake`, and the backend itself otherwise.
 
-Not every combination works on every device.
-See [GPU execution](15-gpu.md) before choosing one for GPU work.
+!!! warning "Second-order AD on the GPU"
+    The rows with `SecondOrder` differentiate the log-density twice.
+    On the GPU, only Zygote and Reactant managed this in our tests, and Zygote's first `sample` call took about 100 s.
+    With a hand-written gradient the sampler differentiates only once, and ForwardDiff, Zygote, and Mooncake all work on `CuArray`s.
+    See [GPU execution](15-gpu.md#HVPs-from-an-AD-backend) for what we tested.
 
 ### AD or a hand-written HVP?
 
@@ -97,14 +100,13 @@ AD is the simpler choice when the Hessian has no convenient closed form, as in h
 It also lets you switch backends without changing the model.
 
 A hand-written HVP is worth writing when it has a closed form in quantities the gradient already computes, as in generalized linear models.
-It skips AD compilation, which matters when you run many short chains.
 On the GPU it also avoids the Enzyme restrictions in [GPU execution](15-gpu.md), because the sampler then calls no AD backend.
 
 ## Batched functions
 
 Each DEER iteration evaluates the log-density, the gradient, and HVPs at all `T` states of the current trajectory.
 By default it does this one state at a time.
-If your model can process a matrix whose columns are states, pass batched versions:
+If your model can process a matrix whose columns are states, you can pass batched versions:
 
 ```@example models
 logdensity_batch(X) = vec(-sum(abs2, X; dims=1) / 2)  # one value per column
@@ -123,15 +125,49 @@ model = DensityModel(
 nothing # hide
 ```
 
-Only [`ParallelMALASampler`](@ref) uses the batched derivatives, and only with `jacobian=:stoch_diag`, so you still need the scalar functions.
-`grad_logdensity_batch` and `hvp_batch` both require `logdensity_batch`.
+Recall that each DEER iteration takes one MALA step from every state in the trajectory.
+That step needs the log-density for the accept/reject test, the gradient for the proposal, and an HVP for the Jacobian.
+The batched path computes all three on the whole $D \times T$ matrix, so it needs a batched version of each.
+This is why `grad_logdensity_batch` and `hvp_batch` both require `logdensity_batch`.
 
-Like `hvp`, `hvp_batch` can be a function or an AD backend.
-If you leave it out, the sampler picks a backend for it by the same rules as for `hvp`.
-A hand-written scalar `hvp` is not used for the batched HVP, so a model with batched functions needs `hvp_batch`, an HVP backend, or an AD gradient with no `grad_logdensity_batch`.
+Like `hvp`, the batched HVP can be your own function or come from an AD backend, picked by the same rules.
+ParallelMCMC will not loop your scalar `hvp` over the columns for you, though, so a model with batched functions needs `hvp_batch`, an HVP backend, or an AD gradient with no `grad_logdensity_batch`.
 
-If the gradient argument is an AD backend and you leave out `grad_logdensity_batch`, ParallelMCMC differentiates `sum(logdensity_batch(X))` instead.
-This is correct only if each entry of `logdensity_batch(X)` depends on the matching column of `X` alone.
+However, you still need the scalar functions.
+The sequential samplers use them, `jacobian=:diag` takes the unbatched path, and the sampler evaluates the starting point on its own.
+
+If the gradient is an AD backend and you leave out `grad_logdensity_batch`, ParallelMCMC differentiates `sum(logdensity_batch(X))` to get the batched gradient.
+Column $j$ of that gradient is the gradient of entry $j$ only when no other entry depends on column $j$.
+That holds when `logdensity_batch` evaluates each column on its own, but not if it mixes columns, for example by subtracting their mean.
+
+### Value, gradient, and HVP in one call
+
+Each DEER iteration evaluates the log-density, gradient, and HVP at the current states and at the proposals.
+These often share most of their work.
+In a generalized linear model, for example, each of those six calls recomputes $X B$.
+`value_grad_hvp_batch` takes one function that returns all three, so the shared work runs once per state.
+For the logistic regression in [GPU execution](15-gpu.md), it looks like this:
+
+```julia
+function value_grad_hvp_batch(B, V)
+    Z  = X * B
+    S  = sigmoid.(Z)
+    lp = vec(sum(y .* Z .- softplus.(Z); dims=1)) .- vec(sum(abs2, B; dims=1)) ./ 2
+    G  = X' * (y .- S) .- B
+    Hv = -(X' * (S .* (1 .- S) .* (X * V))) .- V
+    return lp, G, Hv
+end
+
+model = DensityModel(logp, gradlogp, D;
+                     hvp=hvp,
+                     logdensity_batch=logp_batch,
+                     value_grad_hvp_batch=value_grad_hvp_batch)
+```
+
+It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well.
+`logdensity_batch` and a scalar HVP are still needed.
+The sampler copies the three results before its next call, so the function may return buffers that it reuses.
+With `jacobian=:diag`, DEER takes the unbatched path and does not call it.
 
 ## Parameter names
 
@@ -185,7 +221,8 @@ The constructor reads the dimension, log-density, and gradient from the interfac
 Your type must implement `capabilities` (returning at least `LogDensityOrder{1}`), `dimension`, `logdensity`, and `logdensity_and_gradient`.
 It accepts the same HVP and batching keywords as the main constructor.
 
-These models have no default HVP, so for parallel MALA you have to pass `hvp` or a sampler `backend`.
+To ParallelMCMC, a LogDensityProblems model looks like one with a hand-written gradient, so it falls in the "function, none" row of the table above.
+There is no default HVP, and for parallel MALA you have to pass `hvp` or a sampler `backend`.
 An AD backend differentiates `logdensity_and_gradient`, which must therefore be differentiable by that backend.
 If it is not, for example because it already calls AD internally, pass a `DifferentiationInterface.SecondOrder` backend instead, which differentiates `logdensity` twice.
 `AutoReactant()` cannot be used with these models.

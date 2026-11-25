@@ -1,6 +1,6 @@
 # GPU execution
 
-There are two ways to run ParallelMCMC on an NVIDIA GPU (AMD GPU support is not explicitly supported as of now).
+There are two ways to run ParallelMCMC on an NVIDIA GPU (AMD GPUs are not explicitly supported as of now).
 
 With [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl), the sampler keeps its arrays on the GPU as `CuArray`s and calls your model's functions on them.
 This works on Linux and Windows.
@@ -10,14 +10,22 @@ With [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl), ParallelMCMC compil
 
 Reactant only supports GPUs on Linux, so on Windows you have to run Julia inside WSL.
 
+Which one to pick mostly depends on where your gradient comes from.
+If you can write it by hand, CUDA.jl is the simpler route, and an AD backend can still compute the HVPs for you.
+If you want the gradient from AD as well, use Reactant.
+On `CuArray`s, only Zygote managed both the gradient and the HVP in our tests, and its first call was slow (see [HVPs from an AD backend](@ref)).
+
 ## Is a GPU worth it?
 
-While Parallel MALA has less _time_ complexity, it does more total work than sequential MALA, so a GPU with a large memory capacity is needed to really reap the benefits of this algorithm.
+While Parallel MALA needs fewer sequential steps, it does more total work than sequential MALA and keeps all `T` states in memory at once.
+To really reap the benefits, the GPU needs enough cores to run that work in parallel and enough memory to hold the whole block.
 Most of that work is evaluating the log-density, its gradient, and Hessian-vector products (HVPs) at all `T` states of the trajectory.
-COnsequently, wth small or simple models, you might find it hard to see real speedups with this method. Large data, many parameters, and a long block `T` all help.
-For a small, cheap target the CPU _can_ be faster, because kernel launches and copies between the host and the GPU dominate. But, the space of models where this is true likely also overlaps with the space of models that can likely be quickly evaluated using a sequential algorithm.
+Consequently, with small or simple models, you might find it hard to see real speedups with this method.
+Large data, many parameters, and a long block `T` all help.
+For a small, cheap target the CPU _can_ be faster, because kernel launches and copies between the host and the GPU dominate.
+But the space of models where this is true likely also overlaps with the space of models that can be quickly evaluated using a sequential algorithm.
 
-Run each version once to compile it, then time later calls with the same `T`, step size, and tolerances.
+To compare the CPU and the GPU, run each version once to compile it, then time later calls with the same `T`, step size, and tolerances.
 
 ## The example model
 
@@ -54,14 +62,14 @@ sigmoid(z) = 1 / (1 + exp(-z))
 
 ## With CUDA.jl
 
-Load CUDA and pass a `CuVector` as `initial_params`.
+For the CUDA.jl route, load CUDA and pass a `CuVector` as `initial_params`.
 Every sampler then allocates its working arrays on the GPU, and your functions receive `CuArray`s.
-Write them with whole-array operations and broadcasting, because indexing a `CuArray` one element at a time will error.
+It is important to write them with whole-array operations and broadcasting, because indexing a `CuArray` one element at a time will error.
 
 ### Hand-written derivatives
 
-Hand-written derivatives are the most reliable choice on the GPU, since no AD backend is involved.
-Move the data to the GPU and write every function, including the batched ones, with array operations:
+Hand-written derivatives are the most reliable choice on the GPU, since no AD backend is involved, and will generally also be faster.
+Just be sure your hand-written functions follow Julia and GPU best practices.
 
 ```julia
 using CUDA
@@ -89,8 +97,10 @@ sampler = ParallelMALASampler(0.005f0; T=16)
 chain = sample(model, sampler, 1_600; initial_params=CUDA.zeros(Float32, D))
 ```
 
-Declaring `X` and `y` as `const` keeps the functions that capture them type-stable.
-The batched functions matter most on the GPU: with them, each DEER iteration makes a few large calls on $D \times T$ matrices instead of $T$ small ones.
+There are a few things worth pointing out here.
+We declare `X` and `y` as `const` so that the functions that capture them stay type-stable.
+We also write batched versions of every function, which matters most on the GPU: with them, each DEER iteration makes a few large calls on $D \times T$ matrices instead of $T$ small ones.
+All three batched functions start by computing $X B$, so if you want to compute it only once, see [Value, gradient, and HVP in one call](@ref).
 
 To check the fit, compare the posterior mean with the coefficients that generated the data:
 
@@ -99,33 +109,6 @@ using LinearAlgebra, Statistics
 β_post = mean(chain[:x])
 norm(β_post - β_true) / norm(β_true)
 ```
-
-### Value, gradient, and HVP in one call
-
-Each DEER iteration evaluates the log-density, gradient and HVP at the current states and at the proposals.
-With separate functions, each of those six calls recomputes $X\beta$.
-`value_grad_hvp_batch` takes one function that returns all three, so the shared work runs once per state:
-
-```julia
-function value_grad_hvp_batch(B, V)
-    Z  = X * B
-    S  = sigmoid.(Z)
-    lp = vec(sum(y .* Z .- softplus.(Z); dims=1)) .- vec(sum(abs2, B; dims=1)) ./ 2
-    G  = X' * (y .- S) .- B
-    Hv = -(X' * (S .* (1 .- S) .* (X * V))) .- V
-    return lp, G, Hv
-end
-
-model = DensityModel(logp, gradlogp, D;
-                     hvp=hvp,
-                     logdensity_batch=logp_batch,
-                     value_grad_hvp_batch=value_grad_hvp_batch)
-```
-
-It replaces `grad_logdensity_batch` and `hvp_batch`, so the model cannot have those as well.
-`hvp` and `logdensity_batch` are still needed.
-The sampler copies the three results before its next call, so the function may return buffers that it reuses.
-With `jacobian=:diag`, DEER takes the unbatched path and does not call it.
 
 ### HVPs from an AD backend
 
@@ -152,20 +135,18 @@ We ran this model with each backend on an RTX 5090, with CUDA.jl 6.5 on Julia 1.
 
 With all three working backends, the samples matched those from the hand-written HVPs to `Float32` rounding.
 
-Getting the gradient itself from AD on the GPU is harder.
-Of these backends, only Zygote computed both the gradient and the HVP on `CuArray`s, and its first `sample` call took about 100 s.
-With `AutoMooncake()` as the gradient, the HVP failed with a scalar indexing error, although the gradient alone works for [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref).
-`AutoForwardDiff()` and `AutoEnzyme()` failed on the gradient.
-If you want AD gradients for parallel MALA on the GPU, use Reactant.
+Getting the gradient itself from AD (without Reactant) on the GPU is harder.
+Zygote was the only backend that managed both the gradient and the HVP, and its first `sample` call took about 100 s.
+Mooncake's gradient works fine for [`MALASampler`](@ref) and [`AdaptiveMALASampler`](@ref), but its HVP hit a scalar indexing error, and ForwardDiff and Enzyme failed on the gradient itself.
+As AD support for `CuArray`s improves, this will hopefully become less of an issue.
+Until then, use Reactant.
 
 ### Enzyme
 
-On Julia 1.13, Enzyme could not compile the broadcast kernels of `CuArray` code, and its error message points to the calling convention that changed in Julia 1.12.
-On Julia 1.11, it can compute HVPs from a hand-written gradient if the gradient avoids Julia's own matrix products and you turn on runtime activity.
-
-Replace `*` with `pmcmc_matmul` in the gradient functions.
-ParallelMCMC also exports `pmcmc_dot` for `dot` and `pmcmc_dotsum` for `sum(A .* B)`.
-These wrappers have their own Enzyme rules, so Enzyme does not try to differentiate the cuBLAS calls inside them:
+On Julia 1.11, Enzyme can compute HVPs from a hand-written gradient, but only with two changes.
+First, the gradient has to use `pmcmc_matmul` instead of `*`.
+This wrapper, along with `pmcmc_dot` for `dot` and `pmcmc_dotsum` for `sum(A .* B)`, has its own Enzyme rule, so Enzyme does not try to differentiate the cuBLAS call inside it.
+Second, runtime activity has to be on, or the model fails with an `EnzymeRuntimeActivityError`:
 
 ```julia
 using ADTypes, Enzyme
@@ -180,15 +161,14 @@ mode = Enzyme.set_runtime_activity(Enzyme.Forward)
 sampler = ParallelMALASampler(0.005f0; T=16, backend=AutoEnzyme(; mode=mode))
 ```
 
-Without runtime activity, this model fails with an `EnzymeRuntimeActivityError`.
 With `*` instead of `pmcmc_matmul`, it fails even with runtime activity.
 CPU code and the other backends should keep the ordinary operators.
 
 ## With Reactant
 
-Reactant needs Linux for GPU support.
-On Windows, install Julia inside WSL and run everything from there.
-Then load Reactant and use `AutoReactant()` as the gradient:
+Using Reactant is as simple as loading it and passing `AutoReactant()` as the gradient (you can also pass a hand-written gradient and `AutoReactant()` as the HVP).
+We also give the model a `logdensity_batch`, which lets the sampler compile each whole DEER iteration into one XLA program.
+Without it, the sampler calls a compiled gradient and HVP once per state, and in our test that was about 15 times slower.
 
 ```julia
 using ParallelMCMC, Reactant, ADTypes
@@ -204,36 +184,34 @@ sampler = ParallelMALASampler(0.005f0; T=16)
 chain = sample(model, sampler, 1_600; initial_params=zeros(Float32, D))
 ```
 
-There is no CUDA.jl here.
-The data and `initial_params` are ordinary arrays, and Reactant moves the work to the GPU whenever it finds one.
-Keep them that way: a `CuArray` as `initial_params` fails, because the sampler also calls `logp` directly, and Reactant cannot compile functions that capture `CuArray`s.
+It is important that the data and `initial_params` stay regular arrays.
+A `CuArray` as `initial_params` fails, because the sampler also calls `logp` directly, and Reactant cannot compile functions that capture `CuArray`s.
 
-With an `AutoReactant()` gradient, ParallelMCMC traces your log-density and differentiates it with Enzyme inside Reactant, so the gradient and the HVP both come from `logp` and `logp_batch`.
-You can pass `backend=AutoReactant()` to the sampler, but it already uses Reactant for the HVP.
-The log-density must be traceable by Reactant, which rules out, for example, branches on the values of `β`.
+Notice that we never wrote a gradient or an HVP.
+ParallelMCMC traces your log-density and differentiates it with Enzyme inside Reactant, so both come from `logp` and `logp_batch`.
+For the same reason the sampler needs no `backend`; you can pass `backend=AutoReactant()`, but it already uses Reactant for the HVP.
+The catch is that the log-density must be traceable by Reactant, which rules out, for example, branches on the values of `β`.
 
-### What gets compiled
+### Compile time
 
-Because the model has `logdensity_batch`, the sampler compiles each DEER iteration, from the Hutchinson probes and the batched MALA step to the scan and the convergence test, into one XLA program.
-The trajectory stays on the GPU for the whole block.
-
-Without `logdensity_batch`, the sampler calls a compiled gradient and HVP once per state instead.
-In our test that was about 15 times slower.
-`jacobian=:diag`, or a hand-written `grad_logdensity_batch`, `hvp_batch` or `value_grad_hvp_batch`, also keeps the uncompiled DEER loop.
-
-Every `sample` call compiles the iteration again, and the chains of one `MCMCThreads` or `MCMCSerial` call share it.
-In a new Julia session the first call also compiles Reactant's own tracing code.
+Compilation happens more often than you might expect.
+Every `sample` call compiles the DEER iteration again, although the chains of one `MCMCThreads` or `MCMCSerial` call share it.
+The first call in a new Julia session also has to compile Reactant's own tracing code.
 For a logistic regression the size of the German Credit data ($N = 1000$, $D = 25$) on an RTX 5090, the first `sample` call took about 50 s, and later calls spent about 2 s compiling.
-
-The Hutchinson probes come from Reactant's random number generator, seeded once per block from `rng`.
-The DEER solution does not depend on the probes, so the first block matches the uncompiled loop up to the DEER tolerance.
-Drawing the seed changes what `rng` produces afterwards, so later blocks differ.
 
 ### Limitations
 
 Use `AutoReactant()` for both the gradient and the HVP, or for neither.
 The one exception is a hand-written gradient with `backend=AutoReactant()`, which works but keeps the uncompiled DEER loop.
 `AutoReactant()` cannot appear inside a `SecondOrder`, and only its default mode is supported.
+
+Some settings also turn off the compiled iteration, even when the model has `logdensity_batch`: `jacobian=:diag`, or a hand-written `grad_logdensity_batch`, `hvp_batch`, or `value_grad_hvp_batch`.
+Any of these sends the sampler back to the uncompiled DEER loop.
+
+A compiled run does not exactly reproduce an uncompiled one with the same `rng`.
+The Hutchinson probes come from Reactant's random number generator, seeded once per block from `rng`.
+The DEER solution does not depend on the probes, so the first block matches the uncompiled loop up to the DEER tolerance.
+Drawing the seed changes what `rng` produces afterwards, so later blocks differ.
 
 !!! warning "Captured arrays become constants"
     Reactant compiles arrays that your functions capture, such as `X_cpu` above, into the program as constants.

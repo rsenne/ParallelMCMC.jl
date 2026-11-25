@@ -11,7 +11,7 @@ CurrentModule = ParallelMCMC
 ```
 
 ParallelMCMC.jl parallelizes Markov chain Monte Carlo (MCMC) *within* a single chain.
-Its main sampler, [`ParallelMALASampler`](@ref), draws the random numbers for a block of MALA transitions in advance (making the algorithm deterministic).
+Its main sampler, [`ParallelMALASampler`](@ref), draws the random numbers for a block of MALA transitions in advance (so the block becomes a deterministic recursion).
 It then solves for all states in the block at once with DEER, a Newton method whose linear solves are parallel scans.
 Running several chains at once also works, but it is experimental (see [Run several chains](10-getting-started.md#Run-several-chains)).
 
@@ -46,7 +46,7 @@ ParallelMCMC supports Julia 1.10 and later.
 pkg> add ParallelMCMC
 ```
 
-ParallelMCMC does not hard depend on any AD or GPU package, so you only need to load the ones your model needs, if any at all.
+ParallelMCMC has no hard dependency on any AD or GPU package, so you only need to load the ones your model needs, if any at all.
 The example below writes its derivatives by hand and needs only ParallelMCMC.
 
 ## A complete first run
