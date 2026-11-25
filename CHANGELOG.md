@@ -96,8 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `chain_type=Any` for the raw transition vector, or `chain_type=SymChain`
   for `Symbol` keys.
 - CUDA compat widened to `5.11, 6`.
-- Enzyme compat raised to `0.13.221`, the release the Enzyme setup in the GPU
-  guide was tested with.
+- Enzyme compat raised to `0.13.220`, the newest release that installs alongside
+  Reactant: Enzyme 0.13.221 needs LLVM.jl 10, and Reactant 0.2 needs LLVM.jl 9.
+  The Enzyme setup in the GPU guide was tested with 0.13.220 and 0.13.221.
 - On `CuArray`s, each DEER iteration launches far fewer kernels. The affine scan
   is a three-kernel chunked scan instead of about four kernels per doubling
   level, the convergence test is one reduction, and the Hutchinson probes are
@@ -111,8 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The AD-HVP fallback now respects the backend's `hvp_mode`, so
   `AutoEnzyme(mode=Enzyme.Reverse)` uses reverse-on-grad (#38).
 - Reverse-on-grad HVPs call `dot` and `sum(G .* V)` directly instead of
-  `pmcmc_dot` and `pmcmc_dotsum`. With Enzyme 0.13.221, reverse-mode Enzyme
-  differentiates `*` on `CuArray`s, so
+  `pmcmc_dot` and `pmcmc_dotsum`. With Enzyme 0.13.220 and later, reverse-mode
+  Enzyme differentiates `*` on `CuArray`s, so
   `AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse))` works with a
   gradient written with `*`. Forward mode still needs `pmcmc_matmul`.
 - Deriving a batched gradient applies AD to `logdensity_batch`. Supply
