@@ -16,7 +16,7 @@ It then solves for all states in the block at once with DEER, a Newton method wh
 Running several chains at once also works, but it is experimental (see [Run several chains](10-getting-started.md#Run-several-chains)).
 
 Parallel MALA does more total work than sequential MALA, so it finishes sooner only when the hardware can run that work in parallel.
-In practice that means a GPU (e.g., L40S, H100, etc.).
+In practice that means using a GPU such as an L40S or H100.
 On the CPU, the DEER solve runs on a single thread, so expect speedups there only if a batched log density hands most of the work to multithreaded BLAS.
 The speedup depends on the target, the block length `T`, the AD backend, and the hardware.
 
@@ -25,7 +25,7 @@ The speedup depends on the target, the block length `T`, the AD backend, and the
   <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
 </p>
 <p align="center">
-  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+  <em>DEER on a synthetic posterior shaped like the Julia logo. The orange points are DEER's guess for every state in a block of MALA transitions. Over the iterations they settle onto the faint path, which sequential MALA produces from the same random numbers.</em>
 </p>
 ```
 
@@ -52,7 +52,11 @@ The example below writes its derivatives by hand and needs only ParallelMCMC.
 ## A complete first run
 
 The target is a two-dimensional standard normal, $\log p(x) = -\tfrac{1}{2}\|x\|^2$.
-Its gradient is $-x$ and its Hessian-vector product is $-v$.
+MALA uses its gradient, $\nabla \log p(x) = -x$, to propose each move.
+DEER also needs the derivative of each MALA transition, which involves the Hessian $\nabla^2 \log p(x)$.
+It never builds the Hessian, though, and only multiplies it by probe vectors.
+So instead of a Hessian, the model takes a Hessian-vector product (HVP) `hvp(x, v)`, which returns $\nabla^2 \log p(x)\, v$ for whatever vector $v$ the sampler passes in.
+The Hessian of a standard normal is $-I$ at every $x$, so the HVP is just $-v$.
 
 ```@example index
 using ParallelMCMC, Random
@@ -62,12 +66,20 @@ gradient(x) = -x
 hvp(x, v) = -v
 
 model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
-sampler = ParallelMALASampler(0.1; T=64)
+sampler = ParallelMALASampler(0.5; T=64)
 chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
 
-`T=64` makes DEER solve 64 transitions at a time.
-It does not change the length of the chain: `sample` still returns 1,000 samples.
+`0.5` is the MALA step size, and `T=64` makes DEER solve 64 transitions at a time.
+`T` does not change the length of the chain: `sample` still returns 1,000 samples.
+The draws should have a mean near 0 and a standard deviation near 1:
+
+```@example index
+using Statistics
+mean(chain[:x1]), std(chain[:x1])
+```
+
+When the derivatives are tedious to write by hand, an AD backend can compute the gradient and the HVP instead; see [Defining models](12-models.md).
 
 ## Where to go next
 

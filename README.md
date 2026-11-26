@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <em>DEER iterates on a synthetic Julia-logo-shaped posterior: orange trajectory estimates move toward the taped MALA path over repeated trajectory solves.</em>
+  <em>DEER on a synthetic posterior shaped like the Julia logo. The orange points are DEER's guess for every state in a block of MALA transitions. Over the iterations they settle onto the faint path, which sequential MALA produces from the same random numbers.</em>
 </p>
 
 ## What this package does
@@ -60,9 +60,12 @@ gradient(x) = -x
 hvp(x, v) = -v
 
 model = DensityModel(logdensity, gradient, 2; hvp=hvp, param_names=[:x1, :x2])
-sampler = ParallelMALASampler(0.1; T=64)
+sampler = ParallelMALASampler(0.5; T=64)
 chain = sample(MersenneTwister(42), model, sampler, 1_000; initial_params=zeros(2))
 ```
+
+`hvp(x, v)` returns $\nabla^2 \log p(x)\, v$, which DEER uses to linearize each MALA transition.
+The Hessian of a standard normal is $-I$, so here it is just `-v`.
 
 The [documentation](https://rsenne.github.io/ParallelMCMC.jl/dev/) covers step-size tuning, AD backends, GPU execution, and how DEER works.
 
