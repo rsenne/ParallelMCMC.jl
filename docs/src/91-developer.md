@@ -63,7 +63,7 @@ pre-commit run -a
 We use `lychee` for link checking in CI. You can run it locally to avoid waiting for CI. First, [install lychee](https://github.com/lycheeverse/lychee?tab=readme-ov-file#installation), then run against the repository root using the project config:
 
 ```bash
-lychee --no-progress --config lychee.toml .
+lychee --no-progress --config .lychee.toml .
 ```
 
 ## Testing
@@ -205,6 +205,12 @@ If you update the landing-page animation, regenerate it with:
 ```bash
 julia docs/src/assets/make_julia_deer_gif.jl
 ```
+
+## Documentation previews
+
+Pull requests from branches of this repository get a preview of the built docs at `https://rsenne.github.io/ParallelMCMC.jl/previews/PR<number>/`.
+The docs workflow comments the link on the pull request, and the preview is deleted when the pull request closes.
+Pull requests from forks are built but not deployed.
 
 ## Making a new release
 

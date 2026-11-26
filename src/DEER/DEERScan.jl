@@ -9,11 +9,11 @@ export AffineScanWorkspace,
     affine_scan_residual
 
 """
-Reusable workspace for the diagonal affine scan.
+    AffineScanWorkspace(A_template::AbstractMatrix)
 
-Buffers are allocated with the same array type / device placement as the template
-matrix used to construct the workspace, so this works on GPU arrays and CPU
-arrays alike.
+Reusable workspace for `solve_affine_scan_diag!`.
+
+Buffers have the same size, array type, and device as `A_template`.
 """
 struct AffineScanWorkspace{M}
     alpha::M
@@ -45,8 +45,7 @@ Inputs:
 - `s0 :: length-D`
 - `S :: D×T` output buffer
 
-This is the ground-truth implementation to compare against the parallel scan path.
-It is intentionally simple and should be used in tests.
+Use this sequential implementation to check the parallel scan in tests.
 """
 function solve_affine_seq!(
     S::AbstractMatrix, A::AbstractMatrix, B::AbstractMatrix, s0::AbstractVector
