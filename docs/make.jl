@@ -33,4 +33,4 @@ makedocs(;
     pages=pages,
 )
 
-deploydocs(; repo="github.com/rsenne/ParallelMCMC.jl", devbranch="main")
+deploydocs(; repo="github.com/rsenne/ParallelMCMC.jl", devbranch="main", push_preview=true)

@@ -206,6 +206,12 @@ If you update the landing-page animation, regenerate it with:
 julia docs/src/assets/make_julia_deer_gif.jl
 ```
 
+## Documentation previews
+
+Pull requests from branches of this repository get a preview of the built docs at `https://rsenne.github.io/ParallelMCMC.jl/previews/PR<number>/`.
+The docs workflow comments the link on the pull request, and the preview is deleted when the pull request closes.
+Pull requests from forks are built but not deployed.
+
 ## Making a new release
 
 To create a new release:
