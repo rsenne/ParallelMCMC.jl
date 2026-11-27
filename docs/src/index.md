@@ -22,10 +22,10 @@ The speedup depends on the target, the block length `T`, the AD backend, and the
 
 ```@raw html
 <p align="center">
-  <img src="assets/julia_deer_posterior.gif" alt="DEER trajectory estimates improving on a Julia-logo-shaped posterior" width="620">
+  <img src="assets/deer_iterations.gif" alt="DEER iterations converging to a sequential MALA chain on a three-mode posterior shaped like the Julia logo" width="100%">
 </p>
 <p align="center">
-  <em>DEER on a synthetic posterior shaped like the Julia logo. The orange points are DEER's guess for every state in a block of MALA transitions. Over the iterations they settle onto the faint path, which sequential MALA produces from the same random numbers.</em>
+  <em>DEER on a 2,000-step MALA chain targeting a mixture of three Gaussians placed like the Julia logo. The grey sequential chain and the blue parallel iterate share the same random numbers, and the bottom panel shows the distance between them at every step.</em>
 </p>
 ```
 

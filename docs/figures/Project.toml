@@ -1,0 +1,7 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+ParallelMCMC = "1a970f40-4406-51c9-a967-cb3143c111e8"
+
+[sources]
+ParallelMCMC = {path = "../.."}

@@ -30,3 +30,6 @@ CODEX.md
 # random scripts for debugging
 /scripts
 /dev
+
+# cluster job output
+/logs
