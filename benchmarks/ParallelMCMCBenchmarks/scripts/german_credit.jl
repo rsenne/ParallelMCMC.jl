@@ -4,7 +4,7 @@ Zoltowski et al. (2025).
 
 We follow the setup of their Appendix B.1. The covariates are whitened, an intercept
 is added, and the prior is N(0, I), so the posterior has 25 dimensions. The chain starts
-from a prior draw moved by three MALA steps, and ε = 0.0015 gives about 80% acceptance.
+from a prior draw moved by three MALA steps, and ε = 0.0015 gives about 85% acceptance.
 The parallel sampler solves the whole chain as one block (`T = L`) to an absolute
 tolerance of 5e-4 in at most `50 + 5L/10⁴` iterations.
 
