@@ -31,9 +31,9 @@ else
       logp(β) = -0.5 (||β||^2 + ||Xβ||^2 / N)
     True mean = 0; we'll check the posterior mean is near zero.
 
-    Calls go through `pmcmc_matmul` so Enzyme dispatches to the rule in
-    `ext/EnzymeExt.jl`, which keeps the op off Enzyme's reverse path and
-    away from the gc-transition abort documented there.
+    `AutoEnzyme()` runs forward mode over the gradient, which cannot
+    differentiate cuBLAS calls on CuArrays, so the matmuls go through
+    `pmcmc_matmul` and its rule in `ext/EnzymeExt.jl`.
     =#
     function _logp_single(β, X)
         Xβ = pmcmc_matmul(X, β)
@@ -65,6 +65,14 @@ else
         Y = Y .+ B
         return -Y
     end
+
+    #=
+    Reverse-mode Enzyme differentiates `*` on CuArrays itself, so this gradient
+    uses plain `*`. Pass `Xs = X / sqrt(N)` so that it matches `_logp_single`:
+    a broadcast of an active CuArray with a scalar, such as `Y ./ N`, fails in
+    reverse mode (EnzymeAD/Enzyme.jl#3451). Works for vectors and matrices.
+    =#
+    _gradlogp_star(β, Xs) = .-(transpose(Xs) * (Xs * β) .+ β)
 
     @testset "GPU AD-HVP: ParallelMALASampler runs without analytical HVP" begin
         D = 20
@@ -111,6 +119,53 @@ else
         Gaussian target → posterior mean is zero. Loose tolerance accounts for MC
         variance with N_eff ~ 100-200; an actual divergence would blow past this.
         =#
+        @test maximum(abs, β_post) < 0.4
+    end
+
+    # The reverse-mode setup that docs/src/15-gpu.md recommends.
+    @testset "GPU AD-HVP: ParallelMALASampler runs without analytical HVP (Enzyme reverse)" begin
+        D = 20
+        N_data = 64
+        rng = MersenneTwister(20251231)
+        X_cpu = randn(rng, Float32, N_data, D)
+        X_gpu = CUDA.CuMatrix(X_cpu)
+        Xs_gpu = CUDA.CuMatrix(X_cpu ./ sqrt(Float32(N_data)))
+
+        model = DensityModel(
+            β -> _logp_single(β, X_gpu),
+            β -> _gradlogp_star(β, Xs_gpu),
+            D;
+            logdensity_batch=B -> _logp_batch(B, X_gpu),
+            grad_logdensity_batch=B -> _gradlogp_star(B, Xs_gpu),
+        )
+
+        sampler = ParallelMALASampler(
+            0.05f0;
+            T=16,
+            maxiter=200,
+            tol_abs=1.0f-3,
+            tol_rel=1.0f-2,
+            backend=ADTypes.AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)),
+        )
+
+        n_samples, n_burn = 1600, 400
+        x0 = CUDA.zeros(Float32, D)
+
+        raw = sample(
+            MersenneTwister(42),
+            model,
+            sampler,
+            n_samples;
+            chain_type=Any,
+            initial_params=x0,
+            progress=false,
+        )
+        β_post = vec(
+            mean(reduce(hcat, [Array(s.x) for s in raw[(n_burn + 1):end]]); dims=2)
+        )
+
+        @test all(isfinite, β_post)
+        # Same Gaussian target as the forward-mode test; same tolerance.
         @test maximum(abs, β_post) < 0.4
     end
 

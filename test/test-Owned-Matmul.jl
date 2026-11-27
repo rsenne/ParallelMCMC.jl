@@ -9,15 +9,14 @@ import ParallelMCMC.DEER as DEER
 const DI = DEER.DI
 
 #=
-Tests for the owned wrappers `pmcmc_matmul`, `pmcmc_dot`, `pmcmc_dotsum` and
-the native Enzyme rules in `ext/EnzymeExt.jl`. We check:
-  1. function values match the Base counterparts
+Tests for the owned wrapper `pmcmc_matmul` and its native Enzyme rules in
+`ext/EnzymeExt.jl`. We check:
+  1. function values match `Base.*`
   2. forward-mode JVPs match the analytical formulas
   3. reverse-mode pullbacks (gradients) match the analytical formulas
 
-The reverse cases are critical: they're what makes the GPU AD-HVP path work
-without hitting the `cuMemcpyDtoHAsync_v2` gc-transition abort (see
-`ext/EnzymeExt.jl`).
+The forward cases are why the rules exist: forward-mode Enzyme cannot
+differentiate `*` on CuArrays (see `ext/EnzymeExt.jl`).
 =#
 
 const _AD_FWD = ADTypes.AutoEnzyme(; mode=Enzyme.Forward)
@@ -81,7 +80,7 @@ end
     b = randn(rng, K)
     w = randn(rng, M)
 
-    f = ((A_, b_),) -> pmcmc_dot(pmcmc_matmul(A_, b_), w)
+    f = ((A_, b_),) -> dot(pmcmc_matmul(A_, b_), w)
     prep = DI.prepare_gradient(f, _AD_REV, (A, b))
     g = DI.gradient(f, prep, _AD_REV, (A, b))
 
@@ -89,90 +88,6 @@ end
     db_expected = A' * w
     @test g[1] ≈ dA_expected rtol = 1e-12 atol = 1e-12
     @test g[2] ≈ db_expected rtol = 1e-12 atol = 1e-12
-end
-
-# ============================================================
-# pmcmc_dot
-# ============================================================
-
-@testset "pmcmc_dot value matches LinearAlgebra.dot" begin
-    rng = MersenneTwister(10)
-    a = randn(rng, 7)
-    b = randn(rng, 7)
-    @test pmcmc_dot(a, b) ≈ dot(a, b)
-end
-
-@testset "Enzyme reverse pullback on pmcmc_dot" begin
-    # f(a, b) = pmcmc_dot(a, b);  da = b, db = a
-    rng = MersenneTwister(11)
-    a = randn(rng, 6)
-    b = randn(rng, 6)
-
-    f = ((a_, b_),) -> pmcmc_dot(a_, b_)
-    prep = DI.prepare_gradient(f, _AD_REV, (a, b))
-    g = DI.gradient(f, prep, _AD_REV, (a, b))
-
-    @test g[1] ≈ b rtol = 1e-12 atol = 1e-12
-    @test g[2] ≈ a rtol = 1e-12 atol = 1e-12
-end
-
-@testset "Enzyme forward JVP on pmcmc_dot matches analytical" begin
-    # d/dt pmcmc_dot(a + t*da, b + t*db)|t=0 = dot(da, b) + dot(a, db)
-    rng = MersenneTwister(12)
-    a = randn(rng, 6)
-    b = randn(rng, 6)
-    da = randn(rng, 6)
-    db = randn(rng, 6)
-
-    dval_expected = dot(da, b) + dot(a, db)
-
-    f1 = ((a_, b_),) -> pmcmc_dot(a_, b_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (a, b), ((da, db),))
-    dval = first(DI.pushforward(f1, prep, _AD_FWD, (a, b), ((da, db),)))
-
-    @test dval ≈ dval_expected rtol = 1e-12 atol = 1e-12
-end
-
-# ============================================================
-# pmcmc_dotsum
-# ============================================================
-
-@testset "pmcmc_dotsum value matches sum(A .* B)" begin
-    rng = MersenneTwister(20)
-    A = randn(rng, 3, 4)
-    B = randn(rng, 3, 4)
-    @test pmcmc_dotsum(A, B) ≈ sum(A .* B)
-end
-
-@testset "Enzyme reverse pullback on pmcmc_dotsum" begin
-    # f(A, B) = pmcmc_dotsum(A, B);  dA = B, dB = A
-    rng = MersenneTwister(21)
-    A = randn(rng, 4, 3)
-    B = randn(rng, 4, 3)
-
-    f = ((A_, B_),) -> pmcmc_dotsum(A_, B_)
-    prep = DI.prepare_gradient(f, _AD_REV, (A, B))
-    g = DI.gradient(f, prep, _AD_REV, (A, B))
-
-    @test g[1] ≈ B rtol = 1e-12 atol = 1e-12
-    @test g[2] ≈ A rtol = 1e-12 atol = 1e-12
-end
-
-@testset "Enzyme forward JVP on pmcmc_dotsum matches analytical" begin
-    # d/dt pmcmc_dotsum(A + t*dA, B + t*dB)|t=0 = sum(dA .* B) + sum(A .* dB)
-    rng = MersenneTwister(22)
-    A = randn(rng, 4, 3)
-    B = randn(rng, 4, 3)
-    dA = randn(rng, 4, 3)
-    dB = randn(rng, 4, 3)
-
-    dval_expected = sum(dA .* B) + sum(A .* dB)
-
-    f1 = ((A_, B_),) -> pmcmc_dotsum(A_, B_)
-    prep = DI.prepare_pushforward(f1, _AD_FWD, (A, B), ((dA, dB),))
-    dval = first(DI.pushforward(f1, prep, _AD_FWD, (A, B), ((dA, dB),)))
-
-    @test dval ≈ dval_expected rtol = 1e-12 atol = 1e-12
 end
 
 @testset "Enzyme Const-arg forward JVP — pmcmc_matmul" begin
@@ -211,7 +126,7 @@ end
 end
 
 @testset "Enzyme Const-arg reverse pullback — pmcmc_matmul" begin
-    # f(A, B) = pmcmc_dot(pmcmc_matmul(A, B), w);  dA = w * B', dB = A' * w
+    # f(A, B) = dot(pmcmc_matmul(A, B), w);  dA = w * B', dB = A' * w
     rng = MersenneTwister(101)
     M, K = 5, 4
     A = randn(rng, M, K)
@@ -222,7 +137,7 @@ end
     db_buf = zero(b)
     Enzyme.autodiff(
         Enzyme.Reverse,
-        (A_, B_, w_) -> pmcmc_dot(pmcmc_matmul(A_, B_), w_),
+        (A_, B_, w_) -> dot(pmcmc_matmul(A_, B_), w_),
         Enzyme.Active,
         Enzyme.Const(A),
         Enzyme.Duplicated(b, db_buf),
@@ -234,125 +149,11 @@ end
     dA_buf = zero(A)
     Enzyme.autodiff(
         Enzyme.Reverse,
-        (A_, B_, w_) -> pmcmc_dot(pmcmc_matmul(A_, B_), w_),
+        (A_, B_, w_) -> dot(pmcmc_matmul(A_, B_), w_),
         Enzyme.Active,
         Enzyme.Duplicated(A, dA_buf),
         Enzyme.Const(b),
         Enzyme.Const(w),
     )
     @test dA_buf ≈ w * b' rtol = 1e-12 atol = 1e-12
-end
-
-@testset "Enzyme Const-arg forward JVP — pmcmc_dot" begin
-    rng = MersenneTwister(110)
-    a = randn(rng, 6)
-    b = randn(rng, 6)
-    da = randn(rng, 6)
-    db = randn(rng, 6)
-
-    (dv1,) = Enzyme.autodiff(
-        Enzyme.Forward,
-        pmcmc_dot,
-        Enzyme.Duplicated,
-        Enzyme.Const(a),
-        Enzyme.Duplicated(b, db),
-    )
-    @test dv1 ≈ dot(a, db) rtol = 1e-12 atol = 1e-12
-
-    (dv2,) = Enzyme.autodiff(
-        Enzyme.Forward,
-        pmcmc_dot,
-        Enzyme.Duplicated,
-        Enzyme.Duplicated(a, da),
-        Enzyme.Const(b),
-    )
-    @test dv2 ≈ dot(da, b) rtol = 1e-12 atol = 1e-12
-
-    (dv0,) = Enzyme.autodiff(
-        Enzyme.Forward, pmcmc_dot, Enzyme.Duplicated, Enzyme.Const(a), Enzyme.Const(b)
-    )
-    @test dv0 == 0
-end
-
-@testset "Enzyme Const-arg reverse pullback — pmcmc_dot" begin
-    rng = MersenneTwister(111)
-    a = randn(rng, 6)
-    b = randn(rng, 6)
-
-    da_buf = zero(a)
-    Enzyme.autodiff(
-        Enzyme.Reverse,
-        pmcmc_dot,
-        Enzyme.Active,
-        Enzyme.Duplicated(a, da_buf),
-        Enzyme.Const(b),
-    )
-    @test da_buf ≈ b rtol = 1e-12 atol = 1e-12
-
-    db_buf = zero(b)
-    Enzyme.autodiff(
-        Enzyme.Reverse,
-        pmcmc_dot,
-        Enzyme.Active,
-        Enzyme.Const(a),
-        Enzyme.Duplicated(b, db_buf),
-    )
-    @test db_buf ≈ a rtol = 1e-12 atol = 1e-12
-end
-
-@testset "Enzyme Const-arg forward JVP — pmcmc_dotsum" begin
-    rng = MersenneTwister(120)
-    A = randn(rng, 4, 3)
-    B = randn(rng, 4, 3)
-    dA = randn(rng, 4, 3)
-    dB = randn(rng, 4, 3)
-
-    (dv1,) = Enzyme.autodiff(
-        Enzyme.Forward,
-        pmcmc_dotsum,
-        Enzyme.Duplicated,
-        Enzyme.Const(A),
-        Enzyme.Duplicated(B, dB),
-    )
-    @test dv1 ≈ sum(A .* dB) rtol = 1e-12 atol = 1e-12
-
-    (dv2,) = Enzyme.autodiff(
-        Enzyme.Forward,
-        pmcmc_dotsum,
-        Enzyme.Duplicated,
-        Enzyme.Duplicated(A, dA),
-        Enzyme.Const(B),
-    )
-    @test dv2 ≈ sum(dA .* B) rtol = 1e-12 atol = 1e-12
-
-    (dv0,) = Enzyme.autodiff(
-        Enzyme.Forward, pmcmc_dotsum, Enzyme.Duplicated, Enzyme.Const(A), Enzyme.Const(B)
-    )
-    @test dv0 == 0
-end
-
-@testset "Enzyme Const-arg reverse pullback — pmcmc_dotsum" begin
-    rng = MersenneTwister(121)
-    A = randn(rng, 4, 3)
-    B = randn(rng, 4, 3)
-
-    dA_buf = zero(A)
-    Enzyme.autodiff(
-        Enzyme.Reverse,
-        pmcmc_dotsum,
-        Enzyme.Active,
-        Enzyme.Duplicated(A, dA_buf),
-        Enzyme.Const(B),
-    )
-    @test dA_buf ≈ B rtol = 1e-12 atol = 1e-12
-
-    dB_buf = zero(B)
-    Enzyme.autodiff(
-        Enzyme.Reverse,
-        pmcmc_dotsum,
-        Enzyme.Active,
-        Enzyme.Const(A),
-        Enzyme.Duplicated(B, dB_buf),
-    )
-    @test dB_buf ≈ A rtol = 1e-12 atol = 1e-12
 end

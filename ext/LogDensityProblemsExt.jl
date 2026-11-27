@@ -22,32 +22,14 @@ The optional `param_names` keyword accepts a collection of parameter names that 
 for the columns of the returned `FlexiChain` object. If omitted, a single vector-valued
 parameter named `:x` will be chosen, unless you also pass `param_names` to `sample(...)`.
 
-`hvp` and the batched slots are forwarded to `DensityModel`. A backend in `hvp`
+`hvp` and the batched functions are forwarded to `DensityModel`. These models
+have no default HVP, so parallel MALA needs `hvp` or a sampler `backend`. A
+backend in `hvp`
 differentiates `logdensity_and_gradient`, so that function must be differentiable by the
 backend. If it is not (for example, it calls AD internally), pass an explicit
 `DifferentiationInterface.SecondOrder`, which differentiates `logdensity` twice instead.
 `AutoReactant()` is unsupported. Batched derivatives require a hand-written
 `logdensity_batch`.
-
-# Example
-```julia
-using LogDensityProblems, ParallelMCMC, FlexiChains
-
-struct NormalPosterior
-    y::Float64
-end
-LogDensityProblems.capabilities(::Type{NormalPosterior}) =
-    LogDensityProblems.LogDensityOrder{1}()
-LogDensityProblems.dimension(::NormalPosterior) = 1
-LogDensityProblems.logdensity(ld::NormalPosterior, x) = -0.5 * x[1]^2 - 2 * (ld.y - x[1])^2
-function LogDensityProblems.logdensity_and_gradient(ld::NormalPosterior, x)
-    return LogDensityProblems.logdensity(ld, x), [-x[1] + 4 * (ld.y - x[1])]
-end
-
-model = DensityModel(NormalPosterior(1.5); param_names=[:μ])
-chain = sample(model, AdaptiveMALASampler(0.3; n_warmup=500), 2_000;
-               chain_type=VNChain, discard_warmup=true, progress=true)
-```
 """
 function ParallelMCMC.DensityModel(
     ld;

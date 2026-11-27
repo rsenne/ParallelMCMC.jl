@@ -1,0 +1,40 @@
+name: Docs preview cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+# Two cleanups pushing to gh-pages at once would make one push fail.
+concurrency:
+  group: docs-preview-cleanup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete documentation preview
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+
+      - name: Delete previews/PR<number> from gh-pages
+        run: |
+          if [ -d "$PREVIEW_DIR" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm -rf --quiet "$PREVIEW_DIR"
+            git commit -m "Delete documentation preview for PR $PR"
+            git push origin gh-pages
+          fi
+        env:
+          PR: ${{ github.event.number }}
+          PREVIEW_DIR: previews/PR${{ github.event.number }}
